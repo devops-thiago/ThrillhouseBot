@@ -342,6 +342,27 @@ public interface GitHubReviewClient {
         });
   }
 
+  /** One HTTP attempt at reading one review. Callers want {@link #getReview} instead. */
+  @GET
+  @Path("/repos/{owner}/{repo}/pulls/{pullNumber}/reviews/{reviewId}")
+  @Produces(MediaType.APPLICATION_JSON)
+  ReviewResponse getReviewOnce(
+      @HeaderParam("Authorization") String auth,
+      @HeaderParam("Accept") String accept,
+      @PathParam("owner") String owner,
+      @PathParam("repo") String repo,
+      @PathParam("pullNumber") int pullNumber,
+      @PathParam("reviewId") long reviewId);
+
+  /** Reads one review, healing a rejected credential once (#626). */
+  default ReviewResponse getReview(
+      String auth, String accept, String owner, String repo, int pullNumber, long reviewId) {
+    return GitHubTokenRefresh.SHARED.retrying(
+        "review " + reviewId + " on " + owner + "/" + repo + "#" + pullNumber,
+        auth,
+        credential -> getReviewOnce(credential, accept, owner, repo, pullNumber, reviewId));
+  }
+
   /**
    * One HTTP attempt at submitting a pending review. Callers want {@link #submitReview} instead.
    * GitHub's REST reference documents this route as {@code POST
@@ -393,8 +414,9 @@ public interface GitHubReviewClient {
   }
 
   /**
-   * Creates a review left in {@code PENDING} state so inline comments can attach before it is
-   * submitted (#1434).
+   * Creates a review left in {@code PENDING} state so inline threads can attach before it is
+   * submitted (#1434). The response's {@code node_id} is what {@code
+   * ReviewThreadService#addPendingReviewThread} attaches each thread to.
    */
   default ReviewResponse createPendingReview(
       String auth, String accept, String owner, String repo, int pullNumber, String commitId) {
@@ -447,8 +469,7 @@ public interface GitHubReviewClient {
       String side,
       @JsonProperty("start_line") Integer startLine,
       @JsonProperty("start_side") String startSide,
-      @JsonProperty("subject_type") String subjectType,
-      @JsonProperty("pull_request_review_id") Long pullRequestReviewId) {
+      @JsonProperty("subject_type") String subjectType) {
     public CreatePullRequestCommentRequest {
       body = CommentBodyLimit.cap(body);
     }
@@ -462,24 +483,19 @@ public interface GitHubReviewClient {
         String side,
         Integer startLine,
         String startSide) {
-      this(commitId, body, path, line, side, startLine, startSide, null, null);
+      this(commitId, body, path, line, side, startLine, startSide, null);
     }
 
     /** A thread on the file as a whole: no line, no side, no range — only the path. */
     public static CreatePullRequestCommentRequest onFile(
         String commitId, String body, String path) {
       return new CreatePullRequestCommentRequest(
-          commitId, body, path, null, null, null, null, SUBJECT_TYPE_FILE, null);
+          commitId, body, path, null, null, null, null, SUBJECT_TYPE_FILE);
     }
 
-    /**
-     * Same comment bound to a pending review, so the round can submit once (#1434). GitHub's <a
-     * href="https://docs.github.com/en/rest/pulls/comments#create-a-review-comment-for-a-pull-request"
-     * >create review comment</a> REST route accepts {@code pull_request_review_id}.
-     */
-    public CreatePullRequestCommentRequest withPullRequestReviewId(long reviewId) {
-      return new CreatePullRequestCommentRequest(
-          commitId, body, path, line, side, startLine, startSide, subjectType, reviewId);
+    /** Whether this is a thread on the file as a whole rather than on a line. */
+    public boolean fileLevel() {
+      return SUBJECT_TYPE_FILE.equals(subjectType);
     }
   }
 
@@ -564,12 +580,22 @@ public interface GitHubReviewClient {
     }
   }
 
+  /**
+   * A pull request review. {@code nodeId} is the review's GraphQL node id, which the batched path
+   * hands to {@code addPullRequestReviewThread} to attach a thread to a pending review (#1434).
+   */
   record ReviewResponse(
       long id,
       String body,
-      String state, // APPROVED, CHANGES_REQUESTED, COMMENTED
+      String state, // PENDING, APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED
       @JsonProperty("commit_id") String commitId,
-      User user) {
+      User user,
+      @JsonProperty("node_id") String nodeId) {
     public record User(String login) {}
+
+    /** A review whose node id is not known. */
+    public ReviewResponse(long id, String body, String state, String commitId, User user) {
+      this(id, body, state, commitId, user, null);
+    }
   }
 }

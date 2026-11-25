@@ -24,14 +24,17 @@ There are no new GitHub App permissions.
   (default off), a round opens one pending pull request review, attaches each inline comment to
   it and submits it once, instead of posting each comment on its own. A round with nothing to
   post inline opens none. A pending review the bot left behind is deleted before a new one is
-  opened, and when GitHub refuses the submit, the round posts a review without the inline
-  comments and says so in its body.
+  opened. When GitHub refuses the submit, or it fails without an answer and the review is still
+  pending, the round deletes the pending review and posts a review that lists its findings by
+  file and line. Threads are attached with the GraphQL `addPullRequestReviewThread` mutation, and
+  a reply in a finding's thread waits for the pending review to close, for at most two minutes.
 - **The summary comment carries a machine-readable list of the open findings** (#1433): a hidden
   `<!-- thrillhousebot:findings v=1 [...] -->` line after the summary's markers lists each open
-  finding's key, file, line, risk, confidence, whether it has an inline thread or is listed under
-  "Things to double-check", whether it has a suggestion, and whether it was carried from an earlier
-  review. It holds no model-written text, lists at most 200 entries (`omitted=N` counts the rest),
-  and is `[]` when nothing is open.
+  finding's key, file, line, risk, confidence, whether the review opens an inline thread for it
+  (it posts inline, on a file the pull request changes, within the comment cap), whether it has a
+  suggestion, and whether it was carried from an earlier review. It holds no model-written text,
+  lists at most 100 entries or 16,000 characters (`omitted=N` counts the rest), and is `[]` when
+  nothing is open.
 
 ### Changed
 

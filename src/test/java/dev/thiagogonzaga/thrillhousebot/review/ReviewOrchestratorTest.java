@@ -198,7 +198,8 @@ class ReviewOrchestratorTest {
             followUpAnalyzer,
             labeler,
             config,
-            BOT_ID);
+            BOT_ID,
+            new PendingReviewGuard());
     verdictBuilder =
         new VerdictBuilder(summaryGenerator, followUpAnalyzer, BOT_ID, BlockingStrictness.BALANCED);
     var budgetPlanner =

@@ -531,9 +531,11 @@ a committable suggestion where the range resolves. A comment GitHub refuses is r
 suggestion, then as a file-level comment. Low-confidence medium and low findings go to the
 summary's "Things to double-check" list instead. At most `thrillhousebot.review.max-review-comments` (default 50)
 findings are posted inline. With `REVIEW_BATCHED_INLINE_REVIEW_ENABLED` (off by default), the round
-opens one pending review, attaches every inline comment to it and submits it once with the
-verdict; a refused submit falls back to a review whose body says the inline comments were not
-published. With `REVIEW_AGENT_PROMPT_ENABLED`, each inline finding comment ends with a collapsed
+opens one pending review, attaches every inline comment to it (GraphQL `addPullRequestReviewThread`)
+and submits it once with the verdict. When the submit is refused, or fails without an answer and
+the review is still pending, the pending review is deleted and a separate review lists every finding
+it held. A maintainer-reply thread write waits, for at most two minutes, until the pending review is
+submitted or deleted. With `REVIEW_AGENT_PROMPT_ENABLED`, each inline finding comment ends with a collapsed
 "Agent prompt" block built from the finding already posted, with no model call.
 
 ## Context sections

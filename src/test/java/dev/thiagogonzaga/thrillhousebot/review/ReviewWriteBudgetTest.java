@@ -83,7 +83,8 @@ class ReviewWriteBudgetTest {
         mock(FollowUpAnalyzer.class),
         mock(PrLabeler.class),
         config,
-        BotIdentity.of("thrillhousebot[bot]"));
+        BotIdentity.of("thrillhousebot[bot]"),
+        new PendingReviewGuard());
   }
 
   /**
@@ -299,6 +300,12 @@ class ReviewWriteBudgetTest {
         int pullNumber,
         long reviewId,
         SubmitReviewRequest request) {
+      throw new UnsupportedOperationException("not part of this seam");
+    }
+
+    @Override
+    public ReviewResponse getReviewOnce(
+        String auth, String accept, String owner, String repo, int pullNumber, long reviewId) {
       throw new UnsupportedOperationException("not part of this seam");
     }
 

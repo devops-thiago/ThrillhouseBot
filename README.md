@@ -350,10 +350,15 @@ its own. The summary states how many findings went unverified.
 `REVIEW_AGENT_PROMPT_ENABLED=true` adds a collapsed **Agent prompt** block to each
 **inline** finding comment, built from the title, description and suggestion
 already there. It makes no model call. File-level threads do not get the block.
+The description is repeated up to 1,000 characters, and a comment the block
+would push past GitHub's size limit is posted without it.
 
 `REVIEW_BATCHED_INLINE_REVIEW_ENABLED=true` opens one pending pull request review
 per round, attaches each inline finding to it and submits it once, instead of
-posting each inline comment on its own.
+posting each inline comment on its own. If GitHub does not take the submit, the
+pending review is deleted and a separate review lists its findings by file and
+line. A reply in a finding's thread waits until the pending review is submitted
+or deleted, for at most two minutes.
 
 `REVIEW_SUMMARY_VERIFICATION_ENABLED=true` adds one call after the summary call.
 The summary call does not see the diff, so it can describe something the change
@@ -627,11 +632,15 @@ a definite review refusal preserves the same outcome as a regular comment.
 The comment also carries one hidden, machine-readable line listing the open
 findings: `<!-- thrillhousebot:findings v=1 [...] -->`. Each entry gives the
 finding's `key` (the one in its thread marker), `file`, `line`, `risk`,
-`confidence`, `status` (`open`), `thread` (`false` when it is listed under
-"Things to double-check" instead of an inline thread), `hasSuggestion` and
-`carried` (open since an earlier review), most severe first. An empty list is
-`[]`. The list stops at 200 entries or 40,000 characters, and `omitted=N` after
-`v=1` counts the entries left out. It contains no model-written text.
+`confidence`, `status` (`open`), `thread`, `hasSuggestion` and `carried` (open
+since an earlier review), most severe first. `thread` is `true` when the review
+is set to open an inline thread for the finding: it posts inline, its file is
+part of the pull request and it is within the per-run comment cap. It is
+`false` for a finding listed under "Things to double-check", on a file outside
+the pull request, or past the cap. The summary is written before the review
+posts, so a thread GitHub then refuses still reads `true`; the review body lists
+that finding. An empty list is `[]`. The list stops at 100 entries or 16,000
+characters, and `omitted=N` after `v=1` counts the entries left out. It contains no model-written text.
 
 The risk counts, Key Findings and "Things to double-check" cover the round's
 new findings and every earlier finding still open, each listed once and marked
