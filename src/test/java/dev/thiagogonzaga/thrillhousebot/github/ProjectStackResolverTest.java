@@ -245,7 +245,7 @@ class ProjectStackResolverTest {
   }
 
   @Test
-  void shouldReturnEmptyWhenNoManifestFound() throws Exception {
+  void shouldReturnEmptyWhenNoManifestFound() {
     assertEquals("", resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID));
   }
 
@@ -351,7 +351,7 @@ class ProjectStackResolverTest {
   }
 
   @Test
-  void sweepShouldEvictExpiredEntriesAboveThreshold() throws Exception {
+  void sweepShouldEvictExpiredEntriesAboveThreshold() {
     for (var i = 0; i < ProjectStackResolver.CACHE_SWEEP_THRESHOLD; i++) {
       resolver.resolve(OWNER, "repo-" + i, DEFAULT_BRANCH, INSTALLATION_ID);
     }
@@ -378,7 +378,7 @@ class ProjectStackResolverTest {
   }
 
   @Test
-  void sweepShouldNotRunBelowThreshold() throws Exception {
+  void sweepShouldNotRunBelowThreshold() {
     resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
     currentTimeMs.addAndGet(ProjectStackResolver.CACHE_TTL_MS + 1);
 

@@ -66,22 +66,22 @@ class ManualReviewAuthorizerTest {
 
   @Test
   void aMaintainerMayRequestAReviewAndATriagerMayNot() throws Exception {
-    doReturn(GHPermissionType.WRITE).when(repository).getPermission(eq("keeper"));
-    doReturn(GHPermissionType.READ).when(repository).getPermission(eq("sorter"));
+    doReturn(GHPermissionType.WRITE).when(repository).getPermission("keeper");
+    doReturn(GHPermissionType.READ).when(repository).getPermission("sorter");
 
     assertTrue(authorizer.isAuthorized("o", "r", 1L, "keeper", "MEMBER"));
     assertFalse(authorizer.isAuthorized("o", "r", 1L, "sorter", "MEMBER"));
   }
 
   @Test
-  void shouldRejectBlankOrNullLogin() throws Exception {
+  void shouldRejectBlankOrNullLogin() {
     assertFalse(authorizer.isAuthorized("o", "r", 1L, null, "OWNER"));
     assertFalse(authorizer.isAuthorized("o", "r", 1L, "   ", "OWNER"));
     verifyNoInteractions(clientProvider);
   }
 
   @Test
-  void shouldAllowAllowlistedLoginWithoutApiCall() throws Exception {
+  void shouldAllowAllowlistedLoginWithoutApiCall() {
     when(reviewConfig.manualTriggerAllowedLogins()).thenReturn(Optional.of(List.of("Trusted-Bot")));
 
     // Allowlist match is case-insensitive and short-circuits before any GitHub call.
@@ -90,7 +90,7 @@ class ManualReviewAuthorizerTest {
   }
 
   @Test
-  void shouldNotMatchDifferentAllowlistedLogin() throws Exception {
+  void shouldNotMatchDifferentAllowlistedLogin() {
     when(reviewConfig.manualTriggerAllowedLogins())
         .thenReturn(Optional.of(List.of("someone-else")));
 
@@ -101,7 +101,7 @@ class ManualReviewAuthorizerTest {
   }
 
   @Test
-  void shouldRejectNonWriteCapableAssociationWithoutApiCall() throws Exception {
+  void shouldRejectNonWriteCapableAssociationWithoutApiCall() {
     assertFalse(authorizer.isAuthorized("o", "r", 1L, "stranger", "NONE"));
     assertFalse(authorizer.isAuthorized("o", "r", 1L, "drive-by", "CONTRIBUTOR"));
     assertFalse(authorizer.isAuthorized("o", "r", 1L, "newcomer", "FIRST_TIME_CONTRIBUTOR"));
@@ -135,9 +135,9 @@ class ManualReviewAuthorizerTest {
     // A mixed-case association still passes the pre-filter, and OWNER is confirmed via the API
     // rather than trusted on the association alone.
     assertTrue(authorizer.isAuthorized("acme", "widgets", 7L, "boss", "owner"));
-    verify(clientProvider).getInstallationClient(eq(7L));
-    verify(gitHub).getRepository(eq("acme/widgets"));
-    verify(repository).getPermission(eq("boss"));
+    verify(clientProvider).getInstallationClient(7L);
+    verify(gitHub).getRepository("acme/widgets");
+    verify(repository).getPermission("boss");
   }
 
   @Test
@@ -223,7 +223,7 @@ class ManualReviewAuthorizerTest {
   }
 
   @Test
-  void shutdownStopsTheAuthCheckExecutor() throws Exception {
+  void shutdownStopsTheAuthCheckExecutor() {
     // @PreDestroy must release the background executor without throwing.
     assertDoesNotThrow(() -> authorizer.shutdown());
   }
