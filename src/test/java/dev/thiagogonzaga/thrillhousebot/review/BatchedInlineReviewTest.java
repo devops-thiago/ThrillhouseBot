@@ -50,6 +50,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.LongStream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -566,6 +567,34 @@ class BatchedInlineReviewTest {
     verify(reviewClient, never())
         .listReviewsPage(anyString(), any(), any(), any(), anyInt(), anyInt(), anyInt());
     verify(reviewClient, never()).listReviews(any(), any(), any(), any(), anyInt());
+  }
+
+  // #1434 review: the listing the orchestrator dismisses from walks pages, so a stranded shell
+  // past the first full page is still deleted.
+  @Test
+  void aStrandedBotPendingReviewPastTheFirstListedPageIsDeleted() {
+    var bot = new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]");
+    var other = new GitHubReviewClient.ReviewResponse.User("someone");
+    var firstPage =
+        LongStream.range(0, GitHubReviewClient.REVIEWS_PER_PAGE)
+            .mapToObj(
+                id -> new GitHubReviewClient.ReviewResponse(id, "", "COMMENTED", "sha", other))
+            .toList();
+    when(reviewClient.listReviews(any(), any(), any(), any(), anyInt())).thenCallRealMethod();
+    when(reviewClient.listReviewsPage(
+            any(), any(), any(), any(), eq(7), eq(GitHubReviewClient.REVIEWS_PER_PAGE), eq(1)))
+        .thenReturn(firstPage);
+    when(reviewClient.listReviewsPage(
+            any(), any(), any(), any(), eq(7), eq(GitHubReviewClient.REVIEWS_PER_PAGE), eq(2)))
+        .thenReturn(
+            List.of(new GitHubReviewClient.ReviewResponse(230L, "", "PENDING", "sha", bot)));
+    var listed = reviewClient.listReviews("Bearer tok", "json", "owner", "repo", 7);
+
+    publisher.dismissPendingBotReviews("Bearer tok", "owner", "repo", 7, listed);
+
+    verify(reviewClient).deletePendingReview(any(), any(), any(), any(), eq(7), eq(230L));
+    verify(reviewClient, times(1))
+        .deletePendingReview(any(), any(), any(), any(), anyInt(), anyLong());
   }
 
   @Test
