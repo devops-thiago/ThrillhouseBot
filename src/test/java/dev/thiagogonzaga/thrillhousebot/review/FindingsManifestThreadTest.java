@@ -65,7 +65,8 @@ class FindingsManifestThreadTest {
             mock(FollowUpAnalyzer.class),
             mock(PrLabeler.class),
             config,
-            BotIdentity.of("thrillhousebot"));
+            BotIdentity.of("thrillhousebot"),
+            new PendingReviewGuard());
   }
 
   private static Finding finding(RiskLevel risk, Confidence confidence, String file, int line) {

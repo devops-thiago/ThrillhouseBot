@@ -83,7 +83,8 @@ class RescuedReviewBodyLostWriteTest {
             mock(FollowUpAnalyzer.class),
             mock(PrLabeler.class),
             mock(ThrillhouseConfig.class),
-            BotIdentity.of("thrillhousebot[bot]"));
+            BotIdentity.of("thrillhousebot[bot]"),
+            new PendingReviewGuard());
   }
 
   private static WebApplicationException throttled() {

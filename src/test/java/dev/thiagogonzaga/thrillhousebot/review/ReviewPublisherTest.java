@@ -73,7 +73,8 @@ class ReviewPublisherTest {
           mock(FollowUpAnalyzer.class),
           mock(PrLabeler.class),
           config,
-          BotIdentity.of("thrillhousebot"));
+          BotIdentity.of("thrillhousebot"),
+          new PendingReviewGuard());
 
   private void followUpSummaryEnabled(boolean enabled) {
     when(config.review()).thenReturn(reviewConfig);

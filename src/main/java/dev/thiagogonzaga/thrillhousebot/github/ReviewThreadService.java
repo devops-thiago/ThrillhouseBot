@@ -163,10 +163,10 @@ public class ReviewThreadService {
                     "a pending review thread on " + owner + "/" + repo + " #" + prNumber,
                     auth,
                     credential -> graphQLClient.executeOnce(credential, request)));
-    var threadId =
+    var created =
         response.path("data").path("addPullRequestReviewThread").path("thread").path("id");
-    if (threadId.isTextual()) {
-      return threadId.asText();
+    if (created.isTextual()) {
+      return created.asText();
     }
     throw GitHubGraphQLException.from(response.path("errors"));
   }

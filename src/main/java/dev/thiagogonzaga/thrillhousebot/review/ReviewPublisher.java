@@ -53,6 +53,7 @@ public class ReviewPublisher {
   private static final String EVENT_APPROVE = "APPROVE";
   private static final String EVENT_COMMENT = "COMMENT";
   private static final String CI_PENDING = "pending";
+  private static final String REVIEW_PENDING = "PENDING";
 
   private final GitHubReviewClient reviewClient;
   private final GitHubCommentClient commentClient;
@@ -63,28 +64,6 @@ public class ReviewPublisher {
   private final ThrillhouseConfig config;
   private final BotIdentity botIdentity;
   private final PendingReviewGuard pendingReviewGuard;
-
-  /** A publisher with a guard of its own, for callers that share none with a reply service. */
-  public ReviewPublisher(
-      GitHubReviewClient reviewClient,
-      GitHubCommentClient commentClient,
-      ReviewThreadService reviewThreadService,
-      SuggestionFormatter suggestionFormatter,
-      FollowUpAnalyzer followUpAnalyzer,
-      PrLabeler labeler,
-      ThrillhouseConfig config,
-      BotIdentity botIdentity) {
-    this(
-        reviewClient,
-        commentClient,
-        reviewThreadService,
-        suggestionFormatter,
-        followUpAnalyzer,
-        labeler,
-        config,
-        botIdentity,
-        new PendingReviewGuard());
-  }
 
   @Inject
   public ReviewPublisher(
@@ -670,7 +649,7 @@ public class ReviewPublisher {
     for (var review : priorReviews) {
       if (review.user() != null
           && botIdentity.matches(review.user().login())
-          && !"PENDING".equals(review.state())) {
+          && !REVIEW_PENDING.equals(review.state())) {
         latest = review;
       }
     }
@@ -1659,7 +1638,7 @@ public class ReviewPublisher {
     try {
       for (var review : priorReviews) {
         // A review from a since-deleted account serializes as user:null.
-        if ("PENDING".equals(review.state())
+        if (REVIEW_PENDING.equals(review.state())
             && review.user() != null
             && botIdentity.matches(review.user().login())) {
           reviewClient.deletePendingReview(auth, ACCEPT, owner, repo, prNumber, review.id());
@@ -1849,7 +1828,7 @@ public class ReviewPublisher {
       failure.addSuppressed(readFailure);
       throw failure;
     }
-    var landed = review != null && !"PENDING".equals(review.state());
+    var landed = review != null && !REVIEW_PENDING.equals(review.state());
     if (landed) {
       Log.infof(
           "Pending review %d on %s/%s #%d reads as %s after the submit failed — treating it as"

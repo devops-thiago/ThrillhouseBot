@@ -78,7 +78,8 @@ class ReviewPublisherAgentPromptTest {
             mock(FollowUpAnalyzer.class),
             mock(PrLabeler.class),
             config,
-            BotIdentity.of("thrillhousebot[bot]"));
+            BotIdentity.of("thrillhousebot[bot]"),
+            new PendingReviewGuard());
   }
 
   @Test
@@ -178,7 +179,8 @@ class ReviewPublisherAgentPromptTest {
             mock(FollowUpAnalyzer.class),
             mock(PrLabeler.class),
             config,
-            BotIdentity.of("thrillhousebot[bot]"));
+            BotIdentity.of("thrillhousebot[bot]"),
+            new PendingReviewGuard());
     when(reviewClient.createPullRequestComment(any(), any(), any(), any(), eq(9), any()))
         .thenReturn(new GitHubReviewClient.PullRequestCommentResponse(1L, "c", FILE, 1));
 
