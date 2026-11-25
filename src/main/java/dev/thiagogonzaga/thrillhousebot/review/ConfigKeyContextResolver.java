@@ -533,20 +533,20 @@ public class ConfigKeyContextResolver {
   }
 
   /**
-   * "test", "tests" or "spec" before an extension as a word of its own in the lowercased name: at
-   * its start or after a separator ({@code tests.py}, {@code app_tests.rs}, {@code foo_test.go},
-   * {@code config.spec.ts}), so {@code contests.go}, {@code latest.go} and {@code respec.go} are
-   * not tests.
+   * "test", "tests", "spec" or "specs" before an extension as a word of its own in the lowercased
+   * name: at its start or after a separator ({@code tests.py}, {@code app_tests.rs}, {@code
+   * foo_test.go}, {@code config.spec.ts}, {@code config.specs.js}), so {@code contests.go}, {@code
+   * latest.go} and {@code respec.go} are not tests.
    */
-  private static final Pattern SEPARATED_TESTS = Pattern.compile("(?:^|[._-])(?:tests?|spec)\\.");
+  private static final Pattern SEPARATED_TESTS = Pattern.compile("(?:^|[._-])(?:tests?|specs?)\\.");
 
   /**
-   * "Test", "Tests" or "Spec" before an extension as a capitalized word in the name as written,
-   * after any letter or digit ({@code AppConfigTest.java}, {@code UITests.cs}, {@code
-   * Api2Tests.cs}, {@code ConfigSpec.scala}).
+   * "Test", "Tests", "Spec" or "Specs" before an extension as a capitalized word in the name as
+   * written, after any letter or digit ({@code AppConfigTest.java}, {@code UITests.cs}, {@code
+   * Api2Tests.cs}, {@code ConfigSpec.scala}, {@code FooSpecs.swift}).
    */
   private static final Pattern CAPITALIZED_TESTS =
-      Pattern.compile("(?<=[\\p{L}\\d])(?:Tests?|Spec)\\.");
+      Pattern.compile("(?<=[\\p{L}\\d])(?:Tests?|Specs?)\\.");
 
   private static String basename(String path) {
     var slash = path.lastIndexOf('/');

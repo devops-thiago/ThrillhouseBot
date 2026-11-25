@@ -462,7 +462,15 @@ class ConfigKeyContextResolverTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"pkg/config_test.go", "test.py", "conftest.py", "src/ConfigSpec.scala"})
+    @ValueSource(
+        strings = {
+          "pkg/config_test.go",
+          "test.py",
+          "conftest.py",
+          "src/ConfigSpec.scala",
+          "src/FooSpecs.swift",
+          "pkg/config.specs.ts"
+        })
     void shouldRecognizeTestAndSpecAsWordsOfTheirOwn(String path) {
       assertTrue(ConfigKeyContextResolver.isTestPath(path));
     }
@@ -474,7 +482,8 @@ class ConfigKeyContextResolverTest {
           "src/contest.py",
           "pkg/attest.go",
           "src/Latest.java",
-          "lib/respec.rb"
+          "lib/respec.rb",
+          "lib/respecs.rb"
         })
     void shouldNotTakeANameEndingInTestOrSpecForATest(String path) {
       assertFalse(ConfigKeyContextResolver.isTestPath(path));

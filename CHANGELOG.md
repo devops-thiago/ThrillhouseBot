@@ -68,8 +68,9 @@ There are no new GitHub App permissions.
 - **A source file whose name ends in "test" or "spec" is no longer taken for a test**: the config
   key lookup skipped any file whose name contained `test.` or `spec.`, so `latest.go`,
   `contest.py` or `attest.go` was never read for key definitions. A name now counts as a test only
-  when `test`, `tests` or `spec` is a word of its own before the extension (`foo_test.go`,
-  `config.spec.ts`, `AppConfigTest.java`), or when it is `conftest.py`.
+  when `test`, `tests`, `spec` or `specs` is a word of its own before the extension
+  (`foo_test.go`, `config.spec.ts`, `AppConfigTest.java`, `FooSpecs.swift`), or when it is
+  `conftest.py`.
 - **A carried-gap label after a possessive or "the" no longer reads "the a previously listed
   gap"** (#1398): the summary rewrote an echoed label such as "G1" to "a previously listed gap"
   wherever it stood, so "the earlier summary's G1" became "the earlier summary's a previously
