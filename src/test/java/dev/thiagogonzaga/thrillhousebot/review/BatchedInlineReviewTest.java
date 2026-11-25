@@ -181,14 +181,10 @@ class BatchedInlineReviewTest {
   @Test
   void withoutAPendingReviewInlineCommentsGoOverRest() {
     publisher.postInlineComments(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
+        new ReviewPublisher.CommentTarget(
+            "Bearer tok", "owner", "repo", 7, "sha", Optional.empty()),
         result(ReviewState.REQUEST_CHANGES, finding(1, "Bug")),
-        new DiffLineResolver(Map.of(FILE, PATCH)),
-        Optional.empty());
+        new DiffLineResolver(Map.of(FILE, PATCH)));
 
     verify(reviewClient).createPullRequestComment(any(), any(), any(), any(), eq(7), any());
     verify(threadService, never())
@@ -601,14 +597,15 @@ class BatchedInlineReviewTest {
   void theInlineResultCountsTheThreadedFindings() {
     var inline =
         publisher.postInlineComments(
-            "Bearer tok",
-            "owner",
-            "repo",
-            7,
-            "sha",
+            new ReviewPublisher.CommentTarget(
+                "Bearer tok",
+                "owner",
+                "repo",
+                7,
+                "sha",
+                Optional.of(new ReviewPublisher.PendingReview(99L, NODE_ID))),
             result(ReviewState.REQUEST_CHANGES, finding(1, "Bug")),
-            new DiffLineResolver(Map.of(FILE, PATCH)),
-            Optional.of(new ReviewPublisher.PendingReview(99L, NODE_ID)));
+            new DiffLineResolver(Map.of(FILE, PATCH)));
 
     assertEquals(1, inline.posted());
     assertEquals("Bug", inline.threaded().get(0).title());

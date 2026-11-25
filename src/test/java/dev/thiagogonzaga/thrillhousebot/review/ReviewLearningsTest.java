@@ -462,7 +462,7 @@ class ReviewLearningsTest {
 
   @Test
   void anUnresolvableRepositoryIsTreatedAsNoAccess() throws Exception {
-    doThrow(new java.io.IOException("not found")).when(gitHub).getRepository(eq("o/r"));
+    doThrow(new java.io.IOException("not found")).when(gitHub).getRepository("o/r");
 
     assertEquals(
         0,
@@ -636,8 +636,8 @@ class ReviewLearningsTest {
   void aJoinedReasonIsStoredOnlyWhenEveryContributorHoldsWriteAccess() throws Exception {
     var comments = new java.util.ArrayList<>(thread(NESTED, 500L, FLAT_THREADS));
     comments.add(comment(502L, 500L, NESTED_FILE, "See the REST docs.", "member", "MEMBER"));
-    doReturn(GHPermissionType.WRITE).when(repository).getPermission(eq("maintainer"));
-    doReturn(GHPermissionType.READ).when(repository).getPermission(eq("member"));
+    doReturn(GHPermissionType.WRITE).when(repository).getPermission("maintainer");
+    doReturn(GHPermissionType.READ).when(repository).getPermission("member");
 
     assertEquals(
         0, enabled().captureSurvivingDeclines(capture(NESTED, "justified", comments, PLAIN_DIFF)));

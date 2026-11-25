@@ -576,7 +576,9 @@ public class ReviewPublisher {
     var commitSha = post.commitSha();
     var inline =
         postInlineComments(
-            auth, owner, repo, prNumber, commitSha, result, post.lineResolver(), pending);
+            new CommentTarget(auth, owner, repo, prNumber, commitSha, pending),
+            result,
+            post.lineResolver());
     var event =
         result.reviewState() == ReviewState.REQUEST_CHANGES ? EVENT_REQUEST_CHANGES : EVENT_COMMENT;
 
@@ -1082,19 +1084,13 @@ public class ReviewPublisher {
       ReviewResult result,
       DiffLineResolver lineResolver) {
     return postInlineComments(
-        auth, owner, repo, prNumber, commitSha, result, lineResolver, Optional.empty());
+        new CommentTarget(auth, owner, repo, prNumber, commitSha, Optional.empty()),
+        result,
+        lineResolver);
   }
 
   InlineCommentResult postInlineComments(
-      String auth,
-      String owner,
-      String repo,
-      int prNumber,
-      String commitSha,
-      ReviewResult result,
-      DiffLineResolver lineResolver,
-      Optional<PendingReview> pendingReview) {
-    var target = new CommentTarget(auth, owner, repo, prNumber, commitSha, pendingReview);
+      CommentTarget target, ReviewResult result, DiffLineResolver lineResolver) {
     var threaded = new ArrayList<Finding>();
     var unanchored = new ArrayList<Finding>();
     var capSkipped = new ArrayList<Finding>();
@@ -1238,7 +1234,7 @@ public class ReviewPublisher {
   }
 
   /** PR coordinates shared by every inline comment of one review. */
-  private record CommentTarget(
+  record CommentTarget(
       String auth,
       String owner,
       String repo,

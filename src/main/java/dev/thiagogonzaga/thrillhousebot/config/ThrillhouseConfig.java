@@ -380,8 +380,8 @@ public interface ThrillhouseConfig {
      * Add a collapsed "Agent prompt" block to each inline finding, built from the title,
      * description and suggestion already on the comment (#1432). Default off.
      *
-     * <p>When the comment body would exceed GitHub's limit, the whole body is capped like any other
-     * comment — trimming the agent block first is not implemented yet.
+     * <p>When adding the block would push the comment past GitHub's limit, the block is left out
+     * and the comment posts without it, so a long comment never ends in an unclosed block.
      */
     @WithDefault("false")
     @WithName("agent-prompt-enabled")

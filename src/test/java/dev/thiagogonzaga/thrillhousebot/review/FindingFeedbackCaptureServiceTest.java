@@ -116,8 +116,8 @@ class FindingFeedbackCaptureServiceTest {
   @Test
   void captureOnReviewReplyRejectsUnrecognizedPermission() throws Exception {
     when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
-    doReturn(GHPermissionType.UNKNOWN).when(repository).getPermission(eq("null-response"));
-    doReturn(GHPermissionType.UNKNOWN).when(repository).getPermission(eq("null-level"));
+    doReturn(GHPermissionType.UNKNOWN).when(repository).getPermission("null-response");
+    doReturn(GHPermissionType.UNKNOWN).when(repository).getPermission("null-level");
 
     capture.captureOnReviewReply(
         new RepoScope(9L, TestScopes.REPOSITORY_ID),
@@ -140,7 +140,7 @@ class FindingFeedbackCaptureServiceTest {
   @Test
   void captureOnReviewReplyIgnoresPermissionApiException() throws Exception {
     when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
-    doThrow(new RuntimeException("api down")).when(repository).getPermission(eq("octocat"));
+    doThrow(new RuntimeException("api down")).when(repository).getPermission("octocat");
 
     assertDoesNotThrow(
         () ->
@@ -158,7 +158,7 @@ class FindingFeedbackCaptureServiceTest {
   @Test
   void captureOnReviewReplyIgnoresUnresolvableRepository() throws Exception {
     when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
-    doThrow(new java.io.IOException("not found")).when(gitHub).getRepository(eq("owner/repo"));
+    doThrow(new java.io.IOException("not found")).when(gitHub).getRepository("owner/repo");
 
     assertDoesNotThrow(
         () ->
@@ -246,7 +246,7 @@ class FindingFeedbackCaptureServiceTest {
 
   @Test
   void captureReactionsIgnoresUnresolvableRepository() throws Exception {
-    doThrow(new java.io.IOException("not found")).when(gitHub).getRepository(eq("owner/repo"));
+    doThrow(new java.io.IOException("not found")).when(gitHub).getRepository("owner/repo");
     var body = "finding\n" + SuggestionFormatter.findingMarker(2);
 
     assertDoesNotThrow(
@@ -317,7 +317,7 @@ class FindingFeedbackCaptureServiceTest {
 
   @Test
   void captureReactionsIgnoresReadOnlyCollaborators() throws Exception {
-    doReturn(GHPermissionType.READ).when(repository).getPermission(eq("octocat"));
+    doReturn(GHPermissionType.READ).when(repository).getPermission("octocat");
     when(reactionClient.listReviewCommentReactions(
             anyString(), anyString(), eq("owner"), eq("repo"), eq(99L), eq("+1"), eq(100), eq(1)))
         .thenReturn(
@@ -356,7 +356,7 @@ class FindingFeedbackCaptureServiceTest {
   @Test
   void captureOnReviewReplyRejectsReadOnlyCollaboratorBeforeFetchingRoot() throws Exception {
     when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
-    doReturn(GHPermissionType.READ).when(repository).getPermission(eq("octocat"));
+    doReturn(GHPermissionType.READ).when(repository).getPermission("octocat");
 
     capture.captureOnReviewReply(
         new RepoScope(9L, TestScopes.REPOSITORY_ID),
@@ -450,7 +450,7 @@ class FindingFeedbackCaptureServiceTest {
 
   @Test
   void captureOnPriorFindingsIgnoresUnresolvableRepository() throws Exception {
-    doThrow(new java.io.IOException("not found")).when(gitHub).getRepository(eq("owner/repo"));
+    doThrow(new java.io.IOException("not found")).when(gitHub).getRepository("owner/repo");
     var comments =
         java.util.List.of(
             new GitHubReviewClient.PullRequestComment(
