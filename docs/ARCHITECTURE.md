@@ -701,7 +701,8 @@ when held CI turns green send nothing.
 
 Traces, token counts and cost come from OpenTelemetry. Every exported span, metric and log record
 carries `service.instance.id` (`HOSTNAME`, else a random id per start; `OTEL_RESOURCE_ATTRIBUTES`
-can set it), so instances exporting to one backend keep separate series. Security reports follow
+can set it, as comma-separated `key=value` pairs), so instances exporting to one backend keep
+separate series. Security reports follow
 [SECURITY.md](https://github.com/devops-thiago/ThrillhouseBot/blob/main/SECURITY.md).
 
 ## Conversational replies

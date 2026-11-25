@@ -69,7 +69,7 @@ same diff.
 | `github/` | REST and GraphQL clients (plus hub4j through the Quarkiverse `GitHubClientProvider` for permission, membership, issue and file reads), app auth, write pacing and retry (`GitHubWritePacer`, `GitHubWriteRetry`), instructions and repo-settings resolution |
 | `dashboard/` | OAuth sessions, the WebSocket broadcaster, `ReviewSession` persistence, finding-feedback aggregates |
 | `notification/` | The opt-in outgoing review-outcome webhook |
-| `observability/` | The Prometheus endpoint, review-outcome metrics, and the OpenTelemetry resource's `service.instance.id` (`ServiceInstanceResource`: `HOSTNAME`, else a random id per start; `OTEL_RESOURCE_ATTRIBUTES` overrides it) |
+| `observability/` | The Prometheus endpoint, review-outcome metrics, and the OpenTelemetry resource's `service.instance.id` (`ServiceInstanceResource`: `HOSTNAME`, else a random id per start; `OTEL_RESOURCE_ATTRIBUTES`, comma-separated `key=value` pairs, overrides it) |
 | `config/` | `ThrillhouseConfig` (typed config), `StartupConfigValidator`, the review executor, HTTP client, `ActiveModelSettings`, `BotIdentity` |
 | root | `LogSafe` (log sanitizing) |
 
