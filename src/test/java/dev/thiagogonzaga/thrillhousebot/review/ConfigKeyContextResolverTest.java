@@ -36,6 +36,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * Unit tests for {@link ConfigKeyContextResolver} — extracting config-key tokens from the doc/.env
@@ -460,6 +461,25 @@ class ConfigKeyContextResolverTest {
           ConfigKeyContextResolver.environmentReaders(List.of(swift, scala, php)));
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"pkg/config_test.go", "test.py", "conftest.py", "src/ConfigSpec.scala"})
+    void shouldRecognizeTestAndSpecAsWordsOfTheirOwn(String path) {
+      assertTrue(ConfigKeyContextResolver.isTestPath(path));
+    }
+
+    @ParameterizedTest
+    @ValueSource(
+        strings = {
+          "cmd/latest.go",
+          "src/contest.py",
+          "pkg/attest.go",
+          "src/Latest.java",
+          "lib/respec.rb"
+        })
+    void shouldNotTakeANameEndingInTestOrSpecForATest(String path) {
+      assertFalse(ConfigKeyContextResolver.isTestPath(path));
+    }
+
     @Test
     void shouldRecognizeTestPathsInEveryLayout() {
       assertTrue(ConfigKeyContextResolver.isTestPath("src/test/java/AppConfigTest.java"));
@@ -472,15 +492,6 @@ class ConfigKeyContextResolverTest {
       assertTrue(ConfigKeyContextResolver.isTestPath("src/AppSettingsTests.cs"));
       assertTrue(ConfigKeyContextResolver.isTestPath("src/Api2Tests.cs"));
       assertTrue(ConfigKeyContextResolver.isTestPath("src/UITests.cs"));
-      assertTrue(ConfigKeyContextResolver.isTestPath("pkg/config_test.go"));
-      assertTrue(ConfigKeyContextResolver.isTestPath("test.py"));
-      assertTrue(ConfigKeyContextResolver.isTestPath("conftest.py"));
-      assertTrue(ConfigKeyContextResolver.isTestPath("src/ConfigSpec.scala"));
-      assertFalse(ConfigKeyContextResolver.isTestPath("cmd/latest.go"));
-      assertFalse(ConfigKeyContextResolver.isTestPath("src/contest.py"));
-      assertFalse(ConfigKeyContextResolver.isTestPath("pkg/attest.go"));
-      assertFalse(ConfigKeyContextResolver.isTestPath("src/Latest.java"));
-      assertFalse(ConfigKeyContextResolver.isTestPath("lib/respec.rb"));
       assertTrue(ConfigKeyContextResolver.isTestPath("src/APITests.cs"));
       assertTrue(ConfigKeyContextResolver.isTestPath("tests.py"));
       assertTrue(ConfigKeyContextResolver.isTestPath("src/app_tests.rs"));

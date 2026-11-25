@@ -340,7 +340,7 @@ class BatchedInlineReviewTest {
   }
 
   @Test
-  void aGraphQLRefusalOfTheSuggestionRetriesTheThreadWithoutIt() throws Exception {
+  void aGraphQLRefusalOfTheSuggestionRetriesTheThreadWithoutIt() {
     var attempts = new AtomicInteger();
     when(threadService.addPendingReviewThread(any(), any(), any(), anyInt(), any(), any()))
         .thenAnswer(
@@ -476,10 +476,8 @@ class BatchedInlineReviewTest {
     when(reviewClient.getReview(any(), any(), any(), any(), eq(7), eq(99L)))
         .thenThrow(new RuntimeException("read timeout"));
 
-    var failure =
-        assertThrows(
-            ReviewPostException.class,
-            () -> post(result(ReviewState.REQUEST_CHANGES, finding(1, "Bug"))));
+    var round = result(ReviewState.REQUEST_CHANGES, finding(1, "Bug"));
+    var failure = assertThrows(ReviewPostException.class, () -> post(round));
 
     assertEquals("timeout", failure.getCause().getMessage());
     assertEquals("read timeout", failure.getSuppressed()[0].getMessage());

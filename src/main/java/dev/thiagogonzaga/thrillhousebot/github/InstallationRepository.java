@@ -43,7 +43,7 @@ public final class InstallationRepository {
     try {
       return Optional.of(
           clientProvider.getInstallationClient(installationId).getRepository(owner + "/" + repo));
-    } catch (InterruptedIOException e) {
+    } catch (InterruptedIOException _) {
       Thread.currentThread().interrupt();
     } catch (IOException | RuntimeException e) {
       onFailure.accept(e);
@@ -56,7 +56,7 @@ public final class InstallationRepository {
       GHRepository repository, String login, Consumer<Exception> onFailure) {
     try {
       return RepositoryPermissions.canAct(repository.getPermission(login));
-    } catch (InterruptedIOException e) {
+    } catch (InterruptedIOException _) {
       Thread.currentThread().interrupt();
     } catch (IOException | RuntimeException e) {
       onFailure.accept(e);

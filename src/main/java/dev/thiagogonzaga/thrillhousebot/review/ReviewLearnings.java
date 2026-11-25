@@ -403,10 +403,8 @@ public class ReviewLearnings {
     var repository = resolved.get();
     var permissionCache = new HashMap<String, Boolean>();
     var stored = 0;
-    for (var decline : surviving) {
-      if (Thread.currentThread().isInterrupted()) {
-        break;
-      }
+    for (var i = 0; i < surviving.size() && !Thread.currentThread().isInterrupted(); i++) {
+      var decline = surviving.get(i);
       // Every login whose words are stored must hold write access, not only the first.
       if (!decline.contributors().stream()
           .allMatch(login -> hasWriteAccess(repository, login, permissionCache))) {

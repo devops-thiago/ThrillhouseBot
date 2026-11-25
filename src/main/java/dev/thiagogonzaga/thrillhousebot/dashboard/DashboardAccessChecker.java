@@ -435,7 +435,7 @@ public class DashboardAccessChecker {
               .getOrganization(account.login())
               .getMembership(login);
       return membership != null && membership.getState() == GHMembership.State.ACTIVE;
-    } catch (InterruptedIOException e) {
+    } catch (InterruptedIOException _) {
       Thread.currentThread().interrupt();
       return false;
     } catch (IOException e) {

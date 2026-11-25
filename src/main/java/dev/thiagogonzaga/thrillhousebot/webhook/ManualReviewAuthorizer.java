@@ -153,9 +153,7 @@ public class ManualReviewAuthorizer {
   private boolean writeAccessConfirmed(
       String owner, String repo, long installationId, String login) {
     Consumer<Exception> failed =
-        e ->
-            log.warn(
-                "Permission check failed for {}/{} user {}: {}", owner, repo, login, e.toString());
+        e -> log.warn("Permission check failed for {}/{} user {}: {}", owner, repo, login, e);
     return InstallationRepository.resolve(clientProvider, installationId, owner, repo, failed)
         .map(repository -> InstallationRepository.mayAct(repository, login, failed))
         .orElse(false);

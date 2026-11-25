@@ -16,7 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.github;
 
 import io.quarkiverse.githubapp.GitHubCustomizer;
-import jakarta.inject.Singleton;
+import jakarta.enterprise.context.ApplicationScoped;
 import org.kohsuke.github.GitHubAbuseLimitHandler;
 import org.kohsuke.github.GitHubBuilder;
 import org.kohsuke.github.GitHubRateLimitHandler;
@@ -26,7 +26,7 @@ import org.kohsuke.github.GitHubRateLimitHandler;
  * hub4j's default handlers sleep until the limit resets, up to an hour, which would hold a review
  * or a dashboard request open; every caller already treats a failed read as unavailable.
  */
-@Singleton
+@ApplicationScoped
 public class FailFastGitHubCustomizer implements GitHubCustomizer {
 
   @Override

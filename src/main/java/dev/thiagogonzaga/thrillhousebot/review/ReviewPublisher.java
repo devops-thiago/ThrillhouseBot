@@ -48,6 +48,7 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
 @ApplicationScoped
 public class ReviewPublisher {
 
+  private static final String FOUND_PREFIX = "ThrillhouseBot found ";
   private static final String ACCEPT = "application/vnd.github+json";
   private static final String EVENT_REQUEST_CHANGES = "REQUEST_CHANGES";
   private static final String EVENT_APPROVE = "APPROVE";
@@ -149,6 +150,24 @@ public class ReviewPublisher {
    * which findings {@link #postReview} will open a thread for (#1433); {@code null} falls back to
    * {@link Finding#postsInline}.
    */
+  /** {@link #publishSummary(SummaryRequest)} for a review request and its diff. */
+  boolean publishSummary(
+      String auth,
+      ReviewOrchestrator.ReviewRequest req,
+      ReviewResult result,
+      DiffLineResolver lineResolver) {
+    return publishSummary(
+        new SummaryRequest(
+            auth,
+            req.owner(),
+            req.repo(),
+            req.prNumber(),
+            result,
+            req.forceSummary(),
+            PromptSections.prContext(req.prTitle(), req.prDescription()),
+            lineResolver));
+  }
+
   record SummaryRequest(
       String auth,
       String owner,
@@ -739,7 +758,7 @@ public class ReviewPublisher {
     var findings = inline.unanchored();
     var throttled = inline.throttled();
     var sb = new StringBuilder();
-    sb.append("ThrillhouseBot found ")
+    sb.append(FOUND_PREFIX)
         .append(findings.size())
         .append(" issue(s) GitHub accepted no review thread for");
     GitHubWriteBudget.exhausted()
@@ -798,7 +817,7 @@ public class ReviewPublisher {
    */
   private static String unpublishedFindingsBody(List<Finding> findings) {
     var sb = new StringBuilder();
-    sb.append("ThrillhouseBot found ")
+    sb.append(FOUND_PREFIX)
         .append(findings.size())
         .append(
             """
@@ -812,7 +831,7 @@ public class ReviewPublisher {
 
   private static String capSkippedFindingsBody(List<Finding> findings) {
     var sb = new StringBuilder();
-    sb.append("ThrillhouseBot found ")
+    sb.append(FOUND_PREFIX)
         .append(findings.size())
         .append(
             """
