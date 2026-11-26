@@ -25,6 +25,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -39,6 +40,7 @@ import jakarta.ws.rs.WebApplicationException;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
@@ -64,6 +66,9 @@ class ReviewPublisherTest {
   private final ThrillhouseConfig.FollowUpSummaryConfig followUpSummaryConfig =
       mock(ThrillhouseConfig.FollowUpSummaryConfig.class);
 
+  private final ThrillhouseConfig.AgentNextStepsConfig agentNextStepsConfig =
+      mock(ThrillhouseConfig.AgentNextStepsConfig.class);
+
   private final ReviewPublisher publisher =
       new ReviewPublisher(
           reviewClient,
@@ -76,12 +81,23 @@ class ReviewPublisherTest {
           BotIdentity.of("thrillhousebot"),
           new PendingReviewGuard());
 
+  @BeforeEach
+  void stubReviewConfig() {
+    reviewStubs();
+    when(followUpSummaryConfig.enabled()).thenReturn(false);
+  }
+
   private void followUpSummaryEnabled(boolean enabled) {
+    when(followUpSummaryConfig.enabled()).thenReturn(enabled);
+  }
+
+  private void reviewStubs() {
     when(config.review()).thenReturn(reviewConfig);
     when(config.github()).thenReturn(githubConfig);
     when(githubConfig.writeRetryBudget()).thenReturn(Duration.ofMinutes(5));
     when(reviewConfig.followUpSummary()).thenReturn(followUpSummaryConfig);
-    when(followUpSummaryConfig.enabled()).thenReturn(enabled);
+    when(reviewConfig.agentNextSteps()).thenReturn(agentNextStepsConfig);
+    when(agentNextStepsConfig.enabled()).thenReturn(false);
   }
 
   private static ReviewResult followUpResult(List<ReviewResult.PreviousFindingStatus> statuses) {
@@ -172,6 +188,217 @@ class ReviewPublisherTest {
   }
 
   private static final String EMPTY_MANIFEST = "<!-- thrillhousebot:findings v=1 [] -->";
+
+  @Test
+  void publishSummaryWithPartialConfigTreatsAgentNextStepsAsOff() {
+    var partial =
+        new ReviewPublisher(
+            reviewClient,
+            commentClient,
+            reviewThreadService,
+            mock(SuggestionFormatter.class),
+            mock(FollowUpAnalyzer.class),
+            mock(PrLabeler.class),
+            configWithGithubOnly(),
+            BotIdentity.of("thrillhousebot"),
+            new PendingReviewGuard());
+    var firstReview =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.APPROVE,
+            true,
+            PrSummaryGenerator.SUMMARY_HEADING,
+            List.of(),
+            List.of(),
+            0);
+
+    assertTrue(partial.publishSummary("auth", "o", "r", 1, firstReview, false));
+
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .createComment(anyString(), anyString(), eq("o"), eq("r"), eq(1), body.capture());
+    assertFalse(body.getValue().body().contains(AgentNextSteps.SECTION_HEADING));
+  }
+
+  private static ThrillhouseConfig configWithGithubOnly() {
+    var config = mock(ThrillhouseConfig.class);
+    var github = mock(ThrillhouseConfig.GitHubConfig.class);
+    when(config.github()).thenReturn(github);
+    when(github.writeRetryBudget()).thenReturn(Duration.ofMinutes(5));
+    return config;
+  }
+
+  @Test
+  void agentNextStepsAddsHeadMarkerSectionAndProseWhenEnabled() {
+    when(agentNextStepsConfig.enabled()).thenReturn(true);
+    var head = "abcdef1234567890abcdef1234567890abcdef12";
+    var summary = PrSummaryGenerator.SUMMARY_HEADING + "\n\nOverview sentence.";
+    var firstReview =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.APPROVE,
+            true,
+            summary,
+            List.of(),
+            List.of(),
+            0);
+
+    publisher.publishSummary("auth", "o", "r", 1, firstReview, false, null, head);
+
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .createComment(anyString(), anyString(), eq("o"), eq("r"), eq(1), body.capture());
+    var text = body.getValue().body();
+    assertTrue(text.contains(AgentNextSteps.headMarker(head)));
+    assertTrue(text.contains(AgentNextSteps.SECTION_HEADING));
+    assertTrue(text.contains("Overview sentence."));
+    assertTrue(text.indexOf(AgentNextSteps.SECTION_HEADING) < text.indexOf("Overview sentence."));
+  }
+
+  @Test
+  void agentNextStepsOnTheReviewRequestPathNamesTheHeadAndKeepsCommandHintsVerbatim() {
+    when(agentNextStepsConfig.enabled()).thenReturn(true);
+    var req =
+        new ReviewOrchestrator.ReviewRequest(
+            "o",
+            "r",
+            1,
+            "abcdef1234567890abcdef1234567890abcdef12",
+            "t",
+            "",
+            "base",
+            "main",
+            9L,
+            TestScopes.REPOSITORY_ID,
+            false);
+    var doubleCheck =
+        new Finding(RiskLevel.LOW, Confidence.LOW, "src/B.java", 9, "Check me", "d", null, null);
+    var result =
+        new ReviewResult(
+            List.of(doubleCheck),
+            0,
+            0,
+            0,
+            1,
+            RiskLevel.LOW,
+            ReviewState.COMMENT,
+            true,
+            PrSummaryGenerator.SUMMARY_HEADING + "\n\nOverview sentence.",
+            List.of(),
+            List.of(),
+            0);
+
+    publisher.publishSummary("auth", req, result, null);
+
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .createComment(anyString(), anyString(), eq("o"), eq("r"), eq(1), body.capture());
+    var text = body.getValue().body();
+    assertTrue(text.contains("**Head:** `abcdef1`"), text);
+    assertTrue(text.contains("- @thrillhousebot resolved `src/B.java:9` — Check me\n"), text);
+    assertTrue(text.contains("- `/review` or @thrillhousebot review — "), text);
+    assertTrue(
+        text.contains("- `@thrillhousebot resolved <path>:<line> — <title>` — mark a finding"),
+        text);
+  }
+
+  @Test
+  void agentNextStepsReadsPriorHeadFromTheLatestSummaryAmongManyComments() {
+    when(agentNextStepsConfig.enabled()).thenReturn(true);
+    var priorHead = "aaaabbbbccccddddeeeeaaaabbbbccccddddeeeeaaaa0001";
+    var newHead = "aaaabbbbccccddddeeeeaaaabbbbccccddddeeeeaaaa0002";
+    var priorSummary =
+        PrSummaryGenerator.SUMMARY_MARKER
+            + "\n"
+            + AgentNextSteps.headMarker(priorHead)
+            + "\n"
+            + EMPTY_MANIFEST
+            + "\n"
+            + PrSummaryGenerator.SUMMARY_HEADING;
+    var comments = new java.util.ArrayList<GitHubCommentClient.IssueComment>();
+    for (int i = 0; i < 50; i++) {
+      comments.add(new GitHubCommentClient.IssueComment(i, "noise " + i, null));
+    }
+    comments.add(new GitHubCommentClient.IssueComment(99L, priorSummary, BOT));
+    when(commentClient.listComments(anyString(), anyString(), anyString(), anyString(), anyInt()))
+        .thenReturn(comments);
+
+    var followUp =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.APPROVE,
+            false,
+            PrSummaryGenerator.SUMMARY_HEADING + "\n\nAfter.",
+            List.of(),
+            List.of(),
+            0);
+
+    publisher.publishSummary("auth", "o", "r", 1, followUp, false, null, newHead);
+
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .updateComment(anyString(), anyString(), anyString(), anyString(), eq(99L), body.capture());
+    assertTrue(body.getValue().body().contains("new since last summary"));
+    verify(commentClient, times(1)).listComments(anyString(), anyString(), eq("o"), eq("r"), eq(1));
+    verify(commentClient, never())
+        .listCommentsPageOnce(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt());
+  }
+
+  @Test
+  void agentNextStepsKeepsThePriorHeadWhenForceSummaryReposts() {
+    when(agentNextStepsConfig.enabled()).thenReturn(true);
+    var priorHead = "aaaabbbbccccddddeeeeaaaabbbbccccddddeeeeaaaa0001";
+    var newHead = "aaaabbbbccccddddeeeeaaaabbbbccccddddeeeeaaaa0002";
+    var priorSummary =
+        PrSummaryGenerator.SUMMARY_MARKER
+            + "\n"
+            + AgentNextSteps.headMarker(priorHead)
+            + "\n"
+            + EMPTY_MANIFEST
+            + "\n"
+            + PrSummaryGenerator.SUMMARY_HEADING;
+    when(commentClient.listComments(anyString(), anyString(), anyString(), anyString(), anyInt()))
+        .thenReturn(List.of(new GitHubCommentClient.IssueComment(99L, priorSummary, BOT)));
+
+    var followUp =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.APPROVE,
+            false,
+            PrSummaryGenerator.SUMMARY_HEADING + "\n\nAfter.",
+            List.of(),
+            List.of(),
+            0);
+
+    publisher.publishSummary("auth", "o", "r", 1, followUp, true, null, newHead);
+
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .createComment(anyString(), anyString(), eq("o"), eq("r"), eq(1), body.capture());
+    assertTrue(body.getValue().body().contains("new since last summary"));
+    verify(commentClient, times(1)).listComments(anyString(), anyString(), eq("o"), eq("r"), eq(1));
+  }
 
   @Test
   void theSummaryCarriesTheOpenFindingsManifestBetweenTheMarkerAndTheProse() {

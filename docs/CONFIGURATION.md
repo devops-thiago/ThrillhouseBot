@@ -181,6 +181,12 @@ Prices used for cost tracking, keyed by model name (the `AI_MODEL` value) like t
 | `REVIEW_TRIAGE_ENABLED`<br>`thrillhousebot.review.triage-enabled` | Pack a large pull request's files into batches by review priority (#666): build manifests, then files matching `AI_ROUTING_HIGH_RISK_PATHS`, then the rest, then files matching `AI_ROUTING_LOW_RISK_PATHS`, the larger change first within each. When the call cap leaves files out, the low-risk ones go first. Off, the order is build manifests then size. | boolean | `false` |
 | `REVIEW_VERIFIER_ENABLED`<br>`thrillhousebot.review.verifier-enabled` | Run a second, skeptical pass that re-checks each finding against the diff and drops or downgrades what it cannot confirm. See [AI call budget](https://github.com/devops-thiago/ThrillhouseBot#ai-call-budget). | boolean | `true` |
 
+## `thrillhousebot.review.agent-next-steps`
+
+| Variable | Description | Type | Default |
+|---|---|---|---|
+| `REVIEW_AGENT_NEXT_STEPS_ENABLED`<br>`thrillhousebot.review.agent-next-steps.enabled` | Add the Agent next steps subsection under the summary heading. | boolean | `false` |
+
 ## `thrillhousebot.review.ci-context`
 
 | Variable | Description | Type | Default |

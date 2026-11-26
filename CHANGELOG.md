@@ -4,6 +4,15 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Added
+
+- **Opt-in Agent next steps in the PR summary** (#1442): when `REVIEW_AGENT_NEXT_STEPS_ENABLED` is on,
+  the summary comment gains a deterministic subsection under its heading with the reviewed head,
+  open-finding count, names of pending or failing required checks and maintainer command hints, so
+  agents need not infer next work from several sections. A hidden `thrillhousebot:head` line
+  fingerprints the head between edits; a fixed command cheat sheet makes the summary
+  self-sufficient for agents without the repository's AGENTS.md. No extra model call.
+
 ## [0.9.3] - 2026-11-26
 
 Follow-up rounds re-check older findings whenever a fix could stand and stop closing the same

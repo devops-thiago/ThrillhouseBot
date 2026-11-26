@@ -623,6 +623,13 @@ public interface ThrillhouseConfig {
     @WithName("follow-up-summary")
     FollowUpSummaryConfig followUpSummary();
 
+    /**
+     * Deterministic "Agent next steps" subsection at the top of the PR summary (#1442): head
+     * fingerprint, open-finding count, CI names and maintainer command hints. No model call.
+     */
+    @WithName("agent-next-steps")
+    AgentNextStepsConfig agentNextSteps();
+
     @WithName("large-pr-nudge")
     LargePrNudgeConfig largePrNudge();
 
@@ -947,6 +954,16 @@ public interface ThrillhouseConfig {
      * findings once. No separate delta comment; nothing is added when no finding is raised or
      * closed.
      */
+    @WithDefault("false")
+    boolean enabled();
+  }
+
+  /**
+   * Opt-in procedural block for agents at the top of the summary comment (#1442). Defaults off so
+   * existing summaries stay unchanged until an operator turns it on.
+   */
+  interface AgentNextStepsConfig {
+    /** Add the Agent next steps subsection under the summary heading. */
     @WithDefault("false")
     boolean enabled();
   }
