@@ -86,6 +86,17 @@ final class FindingsManifest {
    * thread}.
    */
   static String render(PrSummaryGenerator.CurrentState state, Predicate<Finding> thread) {
+    return line(collect(state, thread));
+  }
+
+  /** The manifest line carrying {@code open}. */
+  static String line(OpenFindings open) {
+    var header = open.omitted() == 0 ? MARKER_PREFIX : MARKER_PREFIX + " omitted=" + open.omitted();
+    return header + " " + open.entries() + MARKER_SUFFIX;
+  }
+
+  /** The entries the manifest lists for {@code state}, within its two limits. */
+  static OpenFindings collect(PrSummaryGenerator.CurrentState state, Predicate<Finding> thread) {
     var carried = state.carried();
     var ordered = state.result().findings().stream().sorted(MOST_SEVERE_FIRST).toList();
     var kept = new ArrayList<String>();
@@ -99,9 +110,7 @@ final class FindingsManifest {
       kept.add(rendered);
       chars += cost;
     }
-    var omitted = ordered.size() - kept.size();
-    var header = omitted == 0 ? MARKER_PREFIX : MARKER_PREFIX + " omitted=" + omitted;
-    return header + " " + "[" + String.join(",", kept) + "]" + MARKER_SUFFIX;
+    return new OpenFindings("[" + String.join(",", kept) + "]", ordered.size() - kept.size());
   }
 
   private static String entry(Finding finding, boolean carried, boolean thread) {

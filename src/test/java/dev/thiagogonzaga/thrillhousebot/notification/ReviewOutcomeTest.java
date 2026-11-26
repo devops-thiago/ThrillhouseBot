@@ -65,12 +65,12 @@ class ReviewOutcomeTest {
     assertThatThrownBy(
             () ->
                 new ReviewOutcome(
-                    ReviewOutcome.Event.COMPLETED, "o", "r", 1, "s", "t", "u", null, null))
+                    ReviewOutcome.Event.COMPLETED, "o", "r", 1, "s", "t", "u", null, null, null))
         .isInstanceOf(IllegalArgumentException.class);
     assertThatThrownBy(
             () ->
                 new ReviewOutcome(
-                    ReviewOutcome.Event.FAILED, "o", "r", 1, "s", "t", "u", CLEAN, null))
+                    ReviewOutcome.Event.FAILED, "o", "r", 1, "s", "t", "u", CLEAN, null, null))
         .isInstanceOf(IllegalArgumentException.class);
     assertThatThrownBy(
             () ->
@@ -83,14 +83,15 @@ class ReviewOutcomeTest {
                     "t",
                     "u",
                     CLEAN,
-                    FailureCategory.INTERNAL))
+                    FailureCategory.INTERNAL,
+                    null))
         .isInstanceOf(IllegalArgumentException.class);
     assertThatThrownBy(
             () ->
                 new ReviewOutcome(
-                    ReviewOutcome.Event.FAILED, "o", "r", 1, "s", "t", "u", null, null))
+                    ReviewOutcome.Event.FAILED, "o", "r", 1, "s", "t", "u", null, null, null))
         .isInstanceOf(IllegalArgumentException.class);
-    assertThatThrownBy(() -> new ReviewOutcome(null, "o", "r", 1, "s", "t", "u", null, null))
+    assertThatThrownBy(() -> new ReviewOutcome(null, "o", "r", 1, "s", "t", "u", null, null, null))
         .isInstanceOf(NullPointerException.class);
   }
 

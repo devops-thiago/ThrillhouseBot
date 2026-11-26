@@ -53,6 +53,7 @@ class NotificationDefaultsTest {
     assertThat(webhook.secret()).isEmpty();
     assertThat(webhook.events()).containsExactly("completed", "failed");
     assertThat(webhook.includeContent()).isFalse();
+    assertThat(webhook.includeOpenFindings()).isFalse();
     assertThat(webhook.allowHttp()).isFalse();
     assertThat(webhook.timeout()).isEqualTo(Duration.ofSeconds(10));
     assertThat(webhook.maxAttempts()).isEqualTo(3);

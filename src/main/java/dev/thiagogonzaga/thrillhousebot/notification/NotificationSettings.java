@@ -39,6 +39,7 @@ import java.util.Set;
  * @param secret the HMAC-SHA256 key, or empty for unsigned requests
  * @param events the outcomes that are sent
  * @param includeContent whether the PR title and finding titles are sent
+ * @param includeOpenFindings whether the open findings manifest entries are sent
  * @param timeout the per-attempt request timeout
  * @param maxAttempts attempts per notification, the first included
  */
@@ -48,6 +49,7 @@ public record NotificationSettings(
     Optional<String> secret,
     Set<ReviewOutcome.Event> events,
     boolean includeContent,
+    boolean includeOpenFindings,
     Duration timeout,
     int maxAttempts) {
 
@@ -72,6 +74,7 @@ public record NotificationSettings(
             config.secret().filter(s -> !s.isBlank()),
             parseEvents(config.events()),
             config.includeContent(),
+            config.includeOpenFindings(),
             config.timeout(),
             config.maxAttempts()));
   }
@@ -206,6 +209,8 @@ public record NotificationSettings(
         + events
         + ", includeContent="
         + includeContent
+        + ", includeOpenFindings="
+        + includeOpenFindings
         + ", timeout="
         + timeout
         + ", maxAttempts="
