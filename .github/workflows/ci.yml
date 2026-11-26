@@ -91,7 +91,7 @@ jobs:
       - run: ./mvnw clean compile spotbugs:check spotless:check -q
       # Pull requests only restore: a pom change on a branch would otherwise store another copy
       # of the repository per job and push the base branch's caches out of the 10 GB limit.
-      - if: ${{ !cancelled() && github.event_name != 'pull_request' && steps.m2.outputs.cache-hit != 'true' }}
+      - if: ${{ success() && github.event_name != 'pull_request' && steps.m2.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.m2
@@ -170,7 +170,7 @@ jobs:
         run: ./mvnw sonar:sonar
       # Pull requests only restore: a pom change on a branch would otherwise store another copy
       # of the repository per job and push the base branch's caches out of the 10 GB limit.
-      - if: ${{ !cancelled() && github.event_name != 'pull_request' && steps.m2.outputs.cache-hit != 'true' }}
+      - if: ${{ success() && github.event_name != 'pull_request' && steps.m2.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.m2
@@ -325,7 +325,7 @@ jobs:
           path: target/*-runner
       # Pull requests only restore: a pom change on a branch would otherwise store another copy
       # of the repository per job and push the base branch's caches out of the 10 GB limit.
-      - if: ${{ !cancelled() && github.event_name != 'pull_request' && steps.m2.outputs.cache-hit != 'true' }}
+      - if: ${{ success() && github.event_name != 'pull_request' && steps.m2.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.m2
@@ -421,6 +421,14 @@ jobs:
       # the POM set Trivy's SBOM pass actually reads — see trivy.dev troubleshooting / Maven 429.
       - name: Populate local Maven repository
         run: ./mvnw -q -B dependency:resolve
+      # Pull requests only restore: a pom change on a branch would otherwise store another copy
+      # of the repository per job and push the base branch's caches out of the 10 GB limit. Saved
+      # before the scan: a finding fails the job but leaves the repository complete.
+      - if: ${{ success() && github.event_name != 'pull_request' && steps.m2.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2
+          key: ${{ steps.m2.outputs.cache-primary-key }}
       - uses: ./.github/actions/trivy-scan
         with:
           scan-type: fs
@@ -429,13 +437,6 @@ jobs:
           exit-code: "1"
           category: trivy-fs
           upload: ${{ github.event_name == 'push' }}
-      # Pull requests only restore: a pom change on a branch would otherwise store another copy
-      # of the repository per job and push the base branch's caches out of the 10 GB limit.
-      - if: ${{ !cancelled() && github.event_name != 'pull_request' && steps.m2.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.m2
-          key: ${{ steps.m2.outputs.cache-primary-key }}
 
   trivy-image:
     needs: [docker]

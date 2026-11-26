@@ -127,7 +127,7 @@ jobs:
           name: test-native-${{ matrix.arch }}
           path: target/*-runner
           retention-days: 1
-      - if: ${{ !cancelled() && steps.m2.outputs.cache-hit != 'true' }}
+      - if: ${{ success() && steps.m2.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.m2
@@ -253,7 +253,7 @@ jobs:
         run: ./mvnw -B package -DskipTests -Dquarkus.package.jar.type=mutable-jar
 
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        if: ${{ !cancelled() && inputs.variant == 'jvm' && steps.m2.outputs.cache-hit != 'true' }}
+        if: ${{ success() && inputs.variant == 'jvm' && steps.m2.outputs.cache-hit != 'true' }}
         with:
           path: ~/.m2
           key: ${{ steps.m2.outputs.cache-primary-key }}

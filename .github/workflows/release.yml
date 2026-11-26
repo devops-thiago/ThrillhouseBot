@@ -86,7 +86,7 @@ jobs:
               exit 1
             fi
           done
-      - if: ${{ !cancelled() && steps.m2.outputs.cache-hit != 'true' }}
+      - if: ${{ success() && steps.m2.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.m2
@@ -500,7 +500,7 @@ jobs:
             echo "::error::Failed to open bump PR: ${out}"
             exit 1
           fi
-      - if: ${{ !cancelled() && steps.m2.outputs.cache-hit != 'true' }}
+      - if: ${{ success() && steps.m2.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.m2
