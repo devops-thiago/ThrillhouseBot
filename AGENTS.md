@@ -34,6 +34,13 @@ same diff.
   `CONTRIBUTING.md` or `docs/ARCHITECTURE.md`, which the site includes):
   `cd website && npm ci && npm run build`. Links inside the included regions are absolute GitHub
   URLs because the site renders them out of repo context.
+- Installer pages: `install.html` (offline, reads `manifest.json`), `website/public/install.html`
+  (hosted, takes a typed bot host) and `src/main/resources/META-INF/resources/install.html`
+  (served by the bot, uses its own origin, and takes its default GitHub address from `GET
+  /api/install/github`). Each stays self-contained, so the `github-fields` markup and the
+  `github-target` script, which build the form action from user input, are copied byte for byte
+  into all three; change them together. `node --test scripts/installer/install.test.mjs` (a step
+  of the `frontend` CI job) fails when the copies differ.
 - CI also runs Dependency Review, Trivy, SonarCloud (new issues fail the `test` job's scan step)
   and, when `pom.xml`, `src/main/**`, the native integration tests or the CI workflow change,
   the GraalVM native build followed by the `*IT` suite against the built binary (#671).
@@ -273,6 +280,10 @@ same diff.
   first. It runs for the commands' batching too. Off, the sort is the #935 manifest-first one,
   unchanged. Batches still run in parallel, so the order decides what the cap leaves out, not which
   call starts first.
+- **Keeping a test with its source moves files, never drops one** (#1472).
+  `DiffBudgetPlanner.keepTestsWithSources` runs after first-fit has decided what is omitted, and
+  keeps a `TestSourcePairs` link only while the same files still fit in no more batches than
+  first-fit used.
 - **Live activity events are a view, never a source** (#66). `review.phase` steps come from the
   orchestrator (`context`, `review`, `publish`) and `AiReviewService` (`verify` after the single
   review call, `summarize` at the summary call); a batched review has no `verify` step.

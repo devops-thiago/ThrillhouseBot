@@ -1039,7 +1039,8 @@ public class FindingPipeline {
               + " files as not reviewed rather than failing the whole review",
           index + 1,
           batches.size());
-      plan.recordUncoveredFiles(filenamesOf(batches.get(index).files()));
+      plan.recordUncoveredFiles(
+          filenamesOf(batches.get(index).files()), CallFailureCause.describe(e));
     }
   }
 
@@ -1080,7 +1081,8 @@ public class FindingPipeline {
                   + " (an identical request would be rejected identically) and disclosing its"
                   + " files as not reviewed",
               i + 1, batches.size());
-          plan.recordUncoveredFiles(filenamesOf(batches.get(i).files()));
+          plan.recordUncoveredFiles(
+              filenamesOf(batches.get(i).files()), CallFailureCause.CONTEXT_WINDOW);
         } else if (AiFailures.isSpendCeilingBlocked(e)) {
           // Deterministic like a truncation: the ledger is monotonic within a review, so a retry
           // would be refused identically. Degrade like the budgeter — disclose, with the ceiling
@@ -1173,7 +1175,7 @@ public class FindingPipeline {
           "Batch %d/%d hit the model's response-length cap and nothing could be salvaged from the"
               + " partial response; not retrying and disclosing its files as not reviewed",
           index + 1, batches.size());
-      plan.recordUncoveredFiles(filenamesOf(batch.files()));
+      plan.recordUncoveredFiles(filenamesOf(batch.files()), CallFailureCause.RESPONSE_CUT);
       return null;
     }
     Log.warnf(

@@ -10,6 +10,8 @@
     pre { padding: 0.75rem 1rem; overflow-x: auto; }
     button { font-size: 1rem; padding: 0.6rem 1.2rem; cursor: pointer; }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
+    input[type="text"] { font-size: 1rem; padding: 0.5rem 0.75rem; width: 100%; box-sizing: border-box; }
+    #registration-target { word-break: break-all; }
     .error { color: #b00020; }
     .preview { background: #f9f9f9; border: 1px solid #ddd; border-radius: 6px; padding: 1rem; margin: 1rem 0; }
     .preview dt { font-weight: 600; margin-top: 0.5rem; }
@@ -50,6 +52,28 @@
     first install, since the bot needs to be running already.
   </p>
 
+  <div id="github-fields">
+    <p>
+      <label for="github-address">GitHub address (optional)</label><br />
+      <input type="text" id="github-address" inputmode="url" placeholder="https://github.com" autocomplete="off" spellcheck="false" aria-describedby="github-address-note" /><br />
+      <small id="github-address-note">
+        Leave empty to use the address shown in the field. The bot's support for addresses other than
+        <code>github.com</code> is still in progress and has not been tested on a real instance
+        (<a href="https://github.com/devops-thiago/ThrillhouseBot/issues/1487">see #1487</a>).
+      </small>
+    </p>
+    <p>
+      <label for="github-organization">Organization (optional)</label><br />
+      <input type="text" id="github-organization" placeholder="your-org" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="github-organization-note" /><br />
+      <small id="github-organization-note">
+        Registers the app under this organization, which works on <code>github.com</code> today.
+        Leave empty to register it under your personal account.
+      </small>
+    </p>
+    <p id="github-error" class="error" role="alert"></p>
+    <p>Registration page: <code id="registration-target"></code></p>
+  </div>
+
   <form id="manifest-form" action="https://github.com/settings/apps/new" method="post">
     <input type="hidden" name="manifest" id="manifest" />
     <input type="hidden" name="state" value="thrillhousebot-setup" />
@@ -59,9 +83,65 @@
   </form>
   <p id="status" class="error"></p>
 
+  <script id="github-target">
+    const manifestForm = document.getElementById("manifest-form");
+    const submitBtn = document.getElementById("submit-btn");
+    const addressInput = document.getElementById("github-address");
+    const organizationInput = document.getElementById("github-organization");
+    const targetPreview = document.getElementById("registration-target");
+    const targetError = document.getElementById("github-error");
+    let defaultGitHubBase = "https://github.com";
+    let manifestReady = false;
+
+    function githubOrigin(address) {
+      if (!/^https:\/\/[^\s\/\\?#@]+\/?$/i.test(address)) return null;
+      try {
+        return new URL(address).origin;
+      } catch {
+        return null;
+      }
+    }
+
+    function registrationTarget(rawAddress, rawOrganization) {
+      const address = rawAddress.trim();
+      const githubBase = address ? githubOrigin(address) : defaultGitHubBase;
+      if (!githubBase) {
+        return { error: "Enter the GitHub address as https://host, with no user name, password, path, query or fragment." };
+      }
+      const organization = rawOrganization.trim();
+      if (organization && !/^(?=.{1,39}$)[a-z\d]+(?:-[a-z\d]+)*$/i.test(organization)) {
+        return { error: "Enter a valid organization name: up to 39 letters, digits and single hyphens, not starting or ending with a hyphen." };
+      }
+      const owner = organization ? "/organizations/" + organization : "";
+      return { action: githubBase + owner + "/settings/apps/new" };
+    }
+
+    function refreshSubmit() {
+      const target = registrationTarget(addressInput.value, organizationInput.value);
+      if (target.action) manifestForm.action = target.action;
+      targetPreview.textContent = target.action || "-";
+      targetError.textContent = target.error || "";
+      submitBtn.disabled = !manifestReady || !target.action;
+    }
+
+    function setManifestReady(ready) {
+      manifestReady = ready;
+      refreshSubmit();
+    }
+
+    function setDefaultGitHubBase(base) {
+      defaultGitHubBase = base;
+      addressInput.placeholder = base;
+      refreshSubmit();
+    }
+
+    addressInput.addEventListener("input", refreshSubmit);
+    organizationInput.addEventListener("input", refreshSubmit);
+    refreshSubmit();
+  </script>
+
   <script>
     const status = document.getElementById("status");
-    const submitBtn = document.getElementById("submit-btn");
     const manifestInput = document.getElementById("manifest");
 
     fetch("manifest.json")
@@ -77,7 +157,7 @@
           return;
         }
         manifestInput.value = serialized;
-        submitBtn.disabled = false;
+        setManifestReady(true);
         status.textContent = "";
       })
       .catch(() => {

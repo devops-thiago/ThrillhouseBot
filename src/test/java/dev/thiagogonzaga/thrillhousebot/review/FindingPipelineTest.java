@@ -846,6 +846,7 @@ class FindingPipelineTest {
     assertEquals(1, result.findings().size());
     assertEquals("B", result.findings().get(0).title());
     assertEquals(List.of("a.java"), plan.runtimeUncoveredFiles());
+    assertEquals(Map.of("a.java", CallFailureCause.CONTEXT_WINDOW), plan.callFailureCauses());
     assertTrue(captor.getValue().changedFiles().contains("a.java (not reviewed"));
   }
 
@@ -934,6 +935,7 @@ class FindingPipelineTest {
     assertEquals(1, result.findings().size());
     assertEquals("B", result.findings().get(0).title());
     assertEquals(List.of("a.java"), plan.runtimeUncoveredFiles());
+    assertEquals(Map.of("a.java", CallFailureCause.TIMED_OUT), plan.callFailureCauses());
     assertTrue(captor.getValue().changedFiles().contains("a.java (not reviewed"));
   }
 
@@ -1041,6 +1043,7 @@ class FindingPipelineTest {
     verify(aiReviewService, times(1)).reviewBatch(eq(session), any(), eq(1), anyInt());
     assertEquals(1, result.findings().size());
     assertEquals(List.of("a.java"), plan.runtimeUncoveredFiles());
+    assertEquals(Map.of("a.java", CallFailureCause.RESPONSE_CUT), plan.callFailureCauses());
     assertTrue(plan.responseCutFiles().isEmpty());
     assertTrue(captor.getValue().changedFiles().contains("a.java (not reviewed"));
   }

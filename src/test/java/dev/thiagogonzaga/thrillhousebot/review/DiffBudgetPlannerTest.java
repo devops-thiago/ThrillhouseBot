@@ -113,6 +113,82 @@ class DiffBudgetPlannerTest {
     assertFalse(plan.truncated());
   }
 
+  private static List<List<String>> batchNames(DiffBudgetPlanner.BudgetPlan plan) {
+    return plan.batches().stream()
+        .map(b -> b.files().stream().map(FileDiff::filename).sorted().toList())
+        .toList();
+  }
+
+  @Test
+  void aTestSharesABatchWithItsSource() {
+    var alpha = file("src/main/java/Alpha.java", 40, patch(40));
+    var bravo = file("src/main/java/Bravo.java", 39, patch(40));
+    var alphaTest = file("src/test/java/AlphaTest.java", 30, patch(30));
+    var bravoTest = file("src/test/java/BravoTest.java", 29, patch(30));
+    var budget = sectionTokens(alpha) + sectionTokens(bravo) + 20;
+
+    var plan = planner.plan(List.of(alpha, bravo, alphaTest, bravoTest), budget, 3);
+
+    assertEquals(
+        List.of(
+            List.of("src/main/java/Alpha.java", "src/test/java/AlphaTest.java"),
+            List.of("src/main/java/Bravo.java", "src/test/java/BravoTest.java")),
+        batchNames(plan));
+    assertFalse(plan.truncated());
+  }
+
+  @Test
+  void aPairThatDoesNotFitOneBatchStaysApart() {
+    var source = file("src/main/java/Alpha.java", 40, patch(40));
+    var test = file("src/test/java/AlphaTest.java", 39, patch(40));
+    var budget = sectionTokens(source) + 20;
+
+    var plan = planner.plan(List.of(source, test), budget, 3);
+
+    assertEquals(
+        List.of(List.of("src/main/java/Alpha.java"), List.of("src/test/java/AlphaTest.java")),
+        batchNames(plan));
+  }
+
+  @Test
+  void keepingAPairTogetherNeverAddsABatch() {
+    var alpha = file("src/main/java/Alpha.java", 100, patch(50));
+    var bravo = file("src/main/java/Bravo.java", 90, patch(50));
+    var charlie = file("src/main/java/Charlie.java", 80, patch(60));
+    var alphaTest = file("src/test/java/AlphaTest.java", 70, patch(40));
+    var budget =
+        Math.max(
+                sectionTokens(alpha) + sectionTokens(bravo),
+                sectionTokens(charlie) + sectionTokens(alphaTest))
+            + 5;
+
+    var plan = planner.plan(List.of(alpha, bravo, charlie, alphaTest), budget, 3);
+
+    assertEquals(
+        List.of(
+            List.of("src/main/java/Alpha.java", "src/main/java/Bravo.java"),
+            List.of("src/main/java/Charlie.java", "src/test/java/AlphaTest.java")),
+        batchNames(plan));
+    assertFalse(plan.truncated());
+  }
+
+  @Test
+  void keepingAPairTogetherNeverChangesWhatIsOmitted() {
+    var alpha = file("src/main/java/Alpha.java", 40, patch(40));
+    var bravo = file("src/main/java/Bravo.java", 39, patch(40));
+    var alphaTest = file("src/test/java/AlphaTest.java", 30, patch(30));
+    var bravoTest = file("src/test/java/BravoTest.java", 29, patch(30));
+    var budget = sectionTokens(alpha) + sectionTokens(bravo) + 20;
+
+    var plan = planner.plan(List.of(alpha, bravo, alphaTest, bravoTest), budget, 1);
+
+    assertEquals(
+        List.of(List.of("src/main/java/Alpha.java", "src/main/java/Bravo.java")), batchNames(plan));
+    assertEquals(
+        List.of("src/test/java/AlphaTest.java", "src/test/java/BravoTest.java"),
+        plan.omittedFiles());
+  }
+
   @Test
   void zeroBudgetPutsEveryReviewableFileInOneBatch() {
     var files =

@@ -27,9 +27,15 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.regex.Pattern;
 
@@ -135,7 +141,8 @@ public class DiffBudgetPlanner {
       List<String> responseCutFiles,
       java.util.concurrent.atomic.AtomicReference<SummaryDegradation> summaryDegradationRef,
       java.util.concurrent.atomic.AtomicReference<VerificationCoverage> verificationCoverageRef,
-      java.util.concurrent.atomic.AtomicReference<ReasoningStepDown> reasoningStepDownRef) {
+      java.util.concurrent.atomic.AtomicReference<ReasoningStepDown> reasoningStepDownRef,
+      Map<String, String> callFailureCauses) {
     public BudgetPlan {
       batches = List.copyOf(batches);
       omittedFiles = List.copyOf(omittedFiles);
@@ -162,6 +169,40 @@ public class DiffBudgetPlanner {
           reasoningStepDownRef == null
               ? new java.util.concurrent.atomic.AtomicReference<>(ReasoningStepDown.NONE)
               : reasoningStepDownRef;
+      callFailureCauses = callFailureCauses == null ? new ConcurrentHashMap<>() : callFailureCauses;
+    }
+
+    /**
+     * Convenience constructor for plans built before failure causes were recorded (the planner and
+     * tests): no call has failed yet, so the map starts empty and is filled through {@link
+     * #recordUncoveredFiles(List, String)}.
+     */
+    @SuppressWarnings("java:S107")
+    public BudgetPlan(
+        List<DiffBatch> batches,
+        List<String> omittedFiles,
+        List<String> clippedFiles,
+        List<String> patchlessFiles,
+        boolean budgeted,
+        List<String> runtimeUncoveredFiles,
+        List<String> spendCeilingSkippedFiles,
+        List<String> responseCutFiles,
+        java.util.concurrent.atomic.AtomicReference<SummaryDegradation> summaryDegradationRef,
+        java.util.concurrent.atomic.AtomicReference<VerificationCoverage> verificationCoverageRef,
+        java.util.concurrent.atomic.AtomicReference<ReasoningStepDown> reasoningStepDownRef) {
+      this(
+          batches,
+          omittedFiles,
+          clippedFiles,
+          patchlessFiles,
+          budgeted,
+          runtimeUncoveredFiles,
+          spendCeilingSkippedFiles,
+          responseCutFiles,
+          summaryDegradationRef,
+          verificationCoverageRef,
+          reasoningStepDownRef,
+          null);
     }
 
     /**
@@ -344,6 +385,20 @@ public class DiffBudgetPlanner {
     @Override
     public java.util.concurrent.atomic.AtomicReference<SummaryDegradation> summaryDegradationRef() {
       return new java.util.concurrent.atomic.AtomicReference<>(summaryDegradationRef.get());
+    }
+
+    /** Why each file a failed call left unreviewed was not covered, by filename. */
+    @Override
+    public Map<String, String> callFailureCauses() {
+      return Map.copyOf(callFailureCauses);
+    }
+
+    /** Records files a failed call left unreviewed, with why it failed (#1472). */
+    void recordUncoveredFiles(List<String> filenames, String cause) {
+      recordUncoveredFiles(filenames);
+      filenames.stream()
+          .filter(Objects::nonNull)
+          .forEach(name -> callFailureCauses.putIfAbsent(name, cause));
     }
 
     /** Records files a batch left unreviewed at runtime, ignoring nulls and duplicates. */
@@ -944,6 +999,7 @@ public class DiffBudgetPlanner {
     var binSections = new ArrayList<List<Sized>>();
     var binTokens = new ArrayList<Integer>();
     var omitted = new ArrayList<>(rendered.unclippable());
+    var packed = new ArrayList<Sized>();
 
     for (var s : rendered.sized()) {
       int target = firstFit(binTokens, s.tokens(), diffBudgetTokens);
@@ -958,15 +1014,88 @@ public class DiffBudgetPlanner {
       }
       binSections.get(target).add(s);
       binTokens.set(target, binTokens.get(target) + s.tokens());
+      packed.add(s);
     }
 
-    var batches = binSections.stream().map(DiffBudgetPlanner::toBatch).toList();
+    var batches =
+        keepTestsWithSources(packed, binSections, diffBudgetTokens).stream()
+            .map(DiffBudgetPlanner::toBatch)
+            .toList();
     // A clipped file can still overflow every bin and end up omitted; each file must land in
     // exactly one class or the disclosure would list it twice and the verdict double-count it.
     var omittedSet = new HashSet<>(omitted);
     var clipped = rendered.clipped().stream().filter(n -> !omittedSet.contains(n)).toList();
     return new BudgetPlan(
         batches, omitted, clipped, rendered.patchless(), true, null, null, null, null, null);
+  }
+
+  /**
+   * Test-source pairs tried per plan, in priority order. Each try re-packs every file, so an
+   * uncapped diff would cost the square of its file count.
+   */
+  private static final int MAX_REGROUPED_PAIRS = 200;
+
+  /**
+   * Regroups the files that already made it into a batch so a test shares one with its source
+   * (#1472). Links are tried one at a time in priority order, and one is kept only while every file
+   * still fits in no more bins than {@code bins} has, so neither what is reviewed nor how many
+   * calls it takes changes.
+   */
+  private static List<List<Sized>> keepTestsWithSources(
+      List<Sized> packed, List<List<Sized>> bins, int diffBudgetTokens) {
+    if (bins.size() < 2) {
+      return bins;
+    }
+    var links = TestSourcePairs.link(packed.stream().map(s -> s.file().filename()).toList());
+    var testsBySource = new HashMap<Integer, List<Integer>>();
+    var result = bins;
+    for (var link : links.entrySet().stream().limit(MAX_REGROUPED_PAIRS).toList()) {
+      var tests = testsBySource.computeIfAbsent(link.getValue(), k -> new ArrayList<>());
+      tests.add(link.getKey());
+      var regrouped = packGroups(packed, testsBySource, diffBudgetTokens, bins.size());
+      if (regrouped.isPresent()) {
+        result = regrouped.get();
+      } else {
+        tests.removeLast();
+      }
+    }
+    return result;
+  }
+
+  /**
+   * First-fit over groups, each a source with its tests or a file on its own, ordered by the
+   * group's highest-priority member. Empty when some group has no room within {@code maxBins}.
+   */
+  private static Optional<List<List<Sized>>> packGroups(
+      List<Sized> packed,
+      Map<Integer, List<Integer>> testsBySource,
+      int diffBudgetTokens,
+      int maxBins) {
+    var sourceByTest = new HashMap<Integer, Integer>();
+    testsBySource.forEach((source, tests) -> tests.forEach(t -> sourceByTest.put(t, source)));
+    var groups = new LinkedHashMap<Integer, List<Sized>>();
+    for (var i = 0; i < packed.size(); i++) {
+      groups
+          .computeIfAbsent(sourceByTest.getOrDefault(i, i), k -> new ArrayList<>())
+          .add(packed.get(i));
+    }
+    var bins = new ArrayList<List<Sized>>();
+    var binTokens = new ArrayList<Integer>();
+    for (var group : groups.values()) {
+      var tokens = group.stream().mapToInt(Sized::tokens).sum();
+      int target = firstFit(binTokens, tokens, diffBudgetTokens);
+      if (target < 0 && bins.size() < maxBins && tokens <= diffBudgetTokens) {
+        bins.add(new ArrayList<>());
+        binTokens.add(0);
+        target = bins.size() - 1;
+      }
+      if (target < 0) {
+        return Optional.empty();
+      }
+      bins.get(target).addAll(group);
+      binTokens.set(target, binTokens.get(target) + tokens);
+    }
+    return Optional.of(bins);
   }
 
   /** Index of the first open bin with room for {@code tokens}, or -1 if none. */

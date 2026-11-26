@@ -236,6 +236,13 @@ Create the GitHub App before starting the bot; its credentials go in `.env`.
    registered at the channel root, and the smee client forwards it to the bot's
    local `/api/webhook`.
 
+   The installer also has two optional fields. **Organization** registers the
+   App under that organization instead of your personal account. **GitHub
+   address** (default `https://github.com`) takes a plain `https://host` and
+   changes where the manifest is sent. The bot's support for other addresses is
+   still in progress and untested on a real instance
+   ([#1487](https://github.com/devops-thiago/ThrillhouseBot/issues/1487)).
+
    <details>
    <summary>Offline alternative: serve the installer locally</summary>
 
@@ -264,7 +271,8 @@ Create the GitHub App before starting the bot; its credentials go in `.env`.
 
 > Once the bot is running, `install.html` on its own URL
 > (`https://<your-host>/install.html`, or `http://localhost:8080/install.html`)
-> detects the URL and builds the manifest for you.
+> detects the URL and builds the manifest for you. It has the same two optional
+> fields; left empty, its GitHub address is the one the bot is configured with.
 
 ### Option B: manual registration
 
