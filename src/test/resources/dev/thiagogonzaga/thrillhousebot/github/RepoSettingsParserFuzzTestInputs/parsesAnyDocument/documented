@@ -1,0 +1,9 @@
+review:
+  ignored-files:
+    - "docs/generated/**"
+    - "**/*.snap"
+  coverage-artifact: jacoco
+  path-instructions:
+    - path: "payments/**"
+      instructions: |
+        Money is handled in integer cents.

@@ -1,0 +1,12 @@
+diff --git a/A.java b/A.java
+index 1..2 100644
+--- a/A.java
++++ b/A.java
+@@ -3,2 +3,2 @@
+-old
++new
+ same
+diff --git a/B b/B
++loose
+@@ malformed
+-loose

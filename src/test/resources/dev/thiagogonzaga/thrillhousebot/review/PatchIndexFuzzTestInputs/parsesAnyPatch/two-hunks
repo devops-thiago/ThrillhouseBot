@@ -1,0 +1,9 @@
+@@ -1,4 +1,5 @@
+ context
+-removed
++added
++++ header-like
+\ No newline at end of file
+@@ -20 +21,2 @@ void method() {
+ unchanged
++tail

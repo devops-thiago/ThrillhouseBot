@@ -1,0 +1,1 @@
+    var x = f"{a["k"]} text ${b} #{c}" + "\(d)" /* c */ + y // tail

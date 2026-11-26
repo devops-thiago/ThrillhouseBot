@@ -63,6 +63,8 @@
         <sonar.qualitygate.wait>true</sonar.qualitygate.wait>
         <sonar.scm.provider>git</sonar.scm.provider>
         <jacoco.version>0.8.16</jacoco.version>
+        <jazzer.version>0.30.0</jazzer.version>
+        <build-helper-plugin.version>3.8.0</build-helper-plugin.version>
     </properties>
 
     <dependencyManagement>
@@ -304,6 +306,14 @@
             <artifactId>quarkus-jacoco</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- Fuzz targets under src/fuzz/java: seed-corpus regression tests in every build, coverage-guided
+             fuzzing when JAZZER_FUZZ=1 (.github/workflows/fuzz.yml) -->
+        <dependency>
+            <groupId>com.code-intelligence</groupId>
+            <artifactId>jazzer-junit</artifactId>
+            <version>${jazzer.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -330,6 +340,27 @@
                 <configuration>
                     <compilerArgs><arg>-parameters</arg></compilerArgs>
                 </configuration>
+            </plugin>
+            <!-- The fuzz targets are test sources kept outside src/test, where OpenSSF Scorecard's
+                 Fuzzing check does not look -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>build-helper-maven-plugin</artifactId>
+                <version>${build-helper-plugin.version}</version>
+                <executions>
+                    <execution>
+                        <id>add-fuzz-sources</id>
+                        <phase>generate-test-sources</phase>
+                        <goals>
+                            <goal>add-test-source</goal>
+                        </goals>
+                        <configuration>
+                            <sources>
+                                <source>src/fuzz/java</source>
+                            </sources>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
             <plugin>
                 <artifactId>maven-surefire-plugin</artifactId>
@@ -376,6 +407,11 @@
                 <version>${spotless.version}</version>
                 <configuration>
                     <java>
+                        <includes>
+                            <include>src/main/java/**/*.java</include>
+                            <include>src/test/java/**/*.java</include>
+                            <include>src/fuzz/java/**/*.java</include>
+                        </includes>
                         <removeUnusedImports />
                         <googleJavaFormat>
                             <version>${google-java-format.version}</version>

@@ -1,0 +1,11 @@
+base: &b {path: "a/**", instructions: x}
+list: &l [*b, *b]
+review:
+  ignored-files: "a,{b,c},d"
+  ignored-files: [*l, 1, ~]
+  path-instructions:
+    - <<: *b
+      path: src
+    - *b
+---
+second: doc
