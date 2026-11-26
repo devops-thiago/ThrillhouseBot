@@ -4,6 +4,11 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+**Action needed on an existing installation:** the App now asks for `Contents: Read & write`.
+Grant it under **Settings → Developer settings → GitHub Apps → your app → Permissions &
+events**, then accept the change on each installation. Without it the bot keeps reviewing but
+cannot resolve its review threads.
+
 ### Added
 
 - **Opt-in Agent next steps in the PR summary** (#1442): when `REVIEW_AGENT_NEXT_STEPS_ENABLED` is on,
@@ -36,6 +41,10 @@ All notable changes to ThrillhouseBot.
   (new, default off), a `review.completed` payload in the `json` format carries
   `review.openFindings`, the entries of the summary comment's findings manifest: file paths and
   lines, no titles. Off, nothing new leaves the process.
+- **The App asks for `Contents: Read & write`** (#1471): GitHub refuses to resolve a review
+  thread without it, so an app registered from the manifest or installer never could. The bot
+  writes no file, commit or branch.
+
 ### Fixed
 
 - **A clear or decline comment says what it matched** (#1463): the reply lists the open findings
@@ -50,6 +59,9 @@ All notable changes to ThrillhouseBot.
   `https://ghes.example.com`, `https://ghes.example.com/api/v3` and
   `https://ghes.example.com/api/graphql`), and `GITHUB_OAUTH_URL` follows `GITHUB_URL` unless set.
   The defaults are unchanged.
+- **A refused thread resolve says why** (#1471): GitHub's reason is logged instead of being
+  discarded, and a missing permission is named in the reply to a `resolved` directive and to
+  `/resolve`, which no longer answers that there is nothing to resolve.
 
 ### Security
 

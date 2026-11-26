@@ -19,6 +19,7 @@ import dev.thiagogonzaga.thrillhousebot.config.ReviewExecutor;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubGraphQLException;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
@@ -68,6 +69,13 @@ public class CommentCommandService {
   static final String CLOSED_NOTICE =
       "🔒 This pull request is closed or merged, so `/review` did nothing. "
           + "Reopen it and comment `/review` again to get a review.";
+
+  /** Posted when GitHub refuses {@code /resolve} because the App lacks the permission (#1471). */
+  static final String RESOLVE_NOT_PERMITTED_NOTICE =
+      "⚠️ GitHub does not let this App resolve review threads, so they stay open. Whoever runs the"
+          + " bot needs to grant it "
+          + ReviewThreadService.RESOLVE_PERMISSION
+          + " and accept the change on the installation.";
 
   /**
    * Posted when {@code /summary} declines because the PR already carries a bot summary. The command
@@ -456,6 +464,7 @@ public class CommentCommandService {
     var threads =
         reviewThreadService.threadsByRootComment(auth, ctx.owner(), ctx.repo(), ctx.prNumber());
     var resolved = 0;
+    var notPermitted = false;
     for (long rootCommentId : botRootCommentIds) {
       var thread = threads.get(rootCommentId);
       if (thread == null || thread.resolved()) {
@@ -467,19 +476,23 @@ public class CommentCommandService {
         }
       } catch (RuntimeException e) {
         log.warn(
-            "Failed to resolve thread {} on {} #{} (continuing)",
-            thread.id(),
-            repository(ctx),
-            num(ctx),
-            e);
+            "Failed to resolve thread {} on {} #{}", thread.id(), repository(ctx), num(ctx), e);
+        if (e instanceof GitHubGraphQLException refusal && refusal.isNotPermitted()) {
+          notPermitted = true;
+          break;
+        }
       }
     }
-    postComment(
-        auth,
-        ctx,
-        resolved > 0
-            ? "✅ Resolved " + resolved + " ThrillhouseBot finding thread(s)."
-            : "No open ThrillhouseBot finding threads to resolve.");
+    postComment(auth, ctx, resolveOutcome(resolved, notPermitted));
+  }
+
+  private static String resolveOutcome(int resolved, boolean notPermitted) {
+    if (notPermitted) {
+      return RESOLVE_NOT_PERMITTED_NOTICE;
+    }
+    return resolved > 0
+        ? "✅ Resolved " + resolved + " ThrillhouseBot finding thread(s)."
+        : "No open ThrillhouseBot finding threads to resolve.";
   }
 
   private void handlePause(CommandContext ctx, String auth) {

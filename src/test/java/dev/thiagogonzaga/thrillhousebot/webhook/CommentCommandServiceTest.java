@@ -19,9 +19,11 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubGraphQLException;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.PullRequestComment;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.ReviewResponse;
@@ -613,6 +615,55 @@ class CommentCommandServiceTest {
     service.handle(ctx(CommentCommand.RESOLVE));
 
     // The failure on T100 must not stop T102 from being resolved.
+    verify(reviewThreadService).resolve(any(), eq("T102"));
+    assertTrue(postedBody().contains("Resolved 1"));
+  }
+
+  // #1471: a refused resolve must not be reported as "nothing to resolve".
+  @Test
+  void resolveSaysTheAppIsNotPermittedAndStopsTrying() {
+    authorize(true);
+    when(reviewClient.listPullRequestComments(any(), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(
+            List.of(
+                comment(100L, null, "thrillhousebot[bot]"),
+                comment(102L, null, "thrillhousebot[bot]")));
+    when(reviewThreadService.threadsByRootComment(any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(
+            Map.of(
+                100L, new ReviewThreadService.ThreadRef("T100", false),
+                102L, new ReviewThreadService.ThreadRef("T102", false)));
+    var errors = JsonNodeFactory.instance.arrayNode();
+    errors.addObject().put("message", "Resource not accessible by integration");
+    when(reviewThreadService.resolve(any(), any())).thenThrow(GitHubGraphQLException.from(errors));
+
+    service.handle(ctx(CommentCommand.RESOLVE));
+
+    assertEquals(CommentCommandService.RESOLVE_NOT_PERMITTED_NOTICE, postedBody());
+    verify(reviewThreadService, times(1)).resolve(any(), any());
+  }
+
+  @Test
+  void resolveContinuesAfterARefusalThatIsNotAboutPermissions() {
+    authorize(true);
+    when(reviewClient.listPullRequestComments(any(), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(
+            List.of(
+                comment(100L, null, "thrillhousebot[bot]"),
+                comment(102L, null, "thrillhousebot[bot]")));
+    when(reviewThreadService.threadsByRootComment(any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(
+            Map.of(
+                100L, new ReviewThreadService.ThreadRef("T100", false),
+                102L, new ReviewThreadService.ThreadRef("T102", false)));
+    var errors = JsonNodeFactory.instance.arrayNode();
+    errors.addObject().put("message", "Could not resolve to a node");
+    when(reviewThreadService.resolve(any(), eq("T100")))
+        .thenThrow(GitHubGraphQLException.from(errors));
+    when(reviewThreadService.resolve(any(), eq("T102"))).thenReturn(true);
+
+    service.handle(ctx(CommentCommand.RESOLVE));
+
     verify(reviewThreadService).resolve(any(), eq("T102"));
     assertTrue(postedBody().contains("Resolved 1"));
   }
