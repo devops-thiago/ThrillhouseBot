@@ -22,7 +22,7 @@ COPY src /code/src
 RUN ./mvnw package -Pnative -DskipTests
 
 ## Stage 2: Minimal runtime image (includes embedded frontend from Stage 1)
-FROM quay.io/quarkus/ubi9-quarkus-micro-image@sha256:f268e0a3729d77e62ea811c43a19ed1b2689b9ba9f6cfeb1184d6a3469cf255c
+FROM quay.io/quarkus/ubi9-quarkus-micro-image@sha256:22017a2f1558f4b6e8e4418f7ea830f8dfdc4017376c905ed3427a4dc1dd42d5
 WORKDIR /work/
 COPY --from=build /code/target/*-runner /work/application
 RUN chmod 775 /work /work/application \

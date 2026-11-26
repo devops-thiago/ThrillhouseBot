@@ -15,12 +15,14 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
+import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
@@ -37,6 +39,7 @@ import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
@@ -71,6 +74,7 @@ public class MaintainerReplyService {
   private final ThrillhouseConfig config;
   private final ReviewTokenLedger tokenLedger;
   private final PendingReviewGuard pendingReviewGuard;
+  private final FindingStates findingStates;
 
   @Inject
   public MaintainerReplyService(
@@ -88,7 +92,8 @@ public class MaintainerReplyService {
       ReviewThreadService reviewThreadService,
       ThrillhouseConfig config,
       ReviewTokenLedger tokenLedger,
-      PendingReviewGuard pendingReviewGuard) {
+      PendingReviewGuard pendingReviewGuard,
+      FindingStates findingStates) {
     this.authClient = authClient;
     this.authorizer = authorizer;
     this.triggerDetector = triggerDetector;
@@ -104,6 +109,7 @@ public class MaintainerReplyService {
     this.config = config;
     this.tokenLedger = tokenLedger;
     this.pendingReviewGuard = pendingReviewGuard;
+    this.findingStates = findingStates;
   }
 
   /**
@@ -114,6 +120,7 @@ public class MaintainerReplyService {
    * @param repo repository name
    * @param prNumber pull request number
    * @param installationId GitHub App installation id
+   * @param repositoryId GitHub repository id, scoping the stored findings with the installation
    * @param commenterLogin login of the maintainer who triggered the reply
    * @param authorAssociation the commenter's {@code author_association} (for cheap auth rejection)
    * @param question the maintainer's message the bot must answer
@@ -133,6 +140,7 @@ public class MaintainerReplyService {
       String repo,
       int prNumber,
       long installationId,
+      long repositoryId,
       String commenterLogin,
       String authorAssociation,
       String question,
@@ -472,7 +480,7 @@ public class MaintainerReplyService {
               ? clearDirectiveUnauthorizedAck(botIdentity)
               : declineDirectiveUnauthorizedAck(botIdentity);
     } else if (named) {
-      ack = clear ? CLEAR_DIRECTIVE_ACK : DECLINE_DIRECTIVE_ACK;
+      ack = recordedAck(task, clear).orElse(clear ? CLEAR_DIRECTIVE_ACK : DECLINE_DIRECTIVE_ACK);
     } else if (FollowUpAnalyzer.namesOnlyAmbiguousRanges(task.question())) {
       ack = clear ? CLEAR_DIRECTIVE_AMBIGUOUS_RANGE_ACK : DECLINE_DIRECTIVE_AMBIGUOUS_RANGE_ACK;
     } else {
@@ -491,6 +499,24 @@ public class MaintainerReplyService {
     Log.infof(
         "Acknowledged a maintainer %s directive on %s/%s #%d (names a locator: %b, may act: %b)",
         clear ? "clear" : "decline", task.owner(), task.repo(), task.prNumber(), named, mayAct);
+  }
+
+  /**
+   * The acknowledgement that names what the comment matched among the stored findings (#1463).
+   * Empty when none are on record or they cannot be read, which leaves the general acknowledgement.
+   */
+  private Optional<String> recordedAck(ReplyTask task, boolean clear) {
+    try {
+      var rows =
+          findingStates.load(
+              new RepoScope(task.installationId(), task.repositoryId()), task.prNumber());
+      return DirectiveFeedback.ack(task.question(), clear, rows.values());
+    } catch (RuntimeException e) {
+      Log.warnf(
+          "Could not read the finding states of %s/%s #%d for a directive acknowledgement: %s",
+          task.owner(), task.repo(), task.prNumber(), LogSafe.oneLine(e.toString()));
+      return Optional.empty();
+    }
   }
 
   /**

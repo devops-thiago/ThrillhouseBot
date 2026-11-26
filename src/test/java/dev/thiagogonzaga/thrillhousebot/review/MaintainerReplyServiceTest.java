@@ -28,6 +28,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
+import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
@@ -59,6 +60,7 @@ class MaintainerReplyServiceTest {
   @Mock private ReplyAssistant replyAssistant;
   @Mock private RepoSettingsResolver repoSettingsResolver;
   @Mock private ReviewThreadService reviewThreadService;
+  @Mock private FindingStates findingStates;
   @Mock private ThrillhouseConfig config;
   @Mock private ThrillhouseConfig.ReviewConfig reviewConfig;
   @Mock private ThrillhouseConfig.AiPricingConfig aiConfig;
@@ -111,7 +113,8 @@ class MaintainerReplyServiceTest {
         reviewThreadService,
         config,
         tokenLedger,
-        pendingReviewGuard);
+        pendingReviewGuard,
+        findingStates);
   }
 
   private static GitHubPullRequestClient.FileDiff fileDiff(
@@ -138,6 +141,7 @@ class MaintainerReplyServiceTest {
         "repo",
         42,
         12345L,
+        67890L,
         "octocat",
         "OWNER",
         "Why is this flagged?",
@@ -157,6 +161,7 @@ class MaintainerReplyServiceTest {
         "repo",
         42,
         12345L,
+        67890L,
         "octocat",
         association,
         question,
@@ -391,6 +396,7 @@ class MaintainerReplyServiceTest {
         "repo",
         42,
         12345L,
+        67890L,
         "octocat",
         "OWNER",
         "@thrillhousebot is this safe?",
@@ -505,7 +511,8 @@ class MaintainerReplyServiceTest {
             reviewThreadService,
             config,
             tokenLedger,
-            guard);
+            guard,
+            findingStates);
     authorize();
     when(reviewClient.listPullRequestComments(
             eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
@@ -777,6 +784,7 @@ class MaintainerReplyServiceTest {
             "repo",
             42,
             12345L,
+            67890L,
             "octocat",
             "OWNER",
             "@thrillhousebot wat",
@@ -825,6 +833,7 @@ class MaintainerReplyServiceTest {
             "repo",
             42,
             12345L,
+            67890L,
             "octocat",
             "OWNER",
             "@thrillhousebot hi",
@@ -885,8 +894,8 @@ class MaintainerReplyServiceTest {
     when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn(aiOk("ok"));
     var task =
         new MaintainerReplyService.ReplyTask(
-            "owner", "repo", 42, 12345L, "octocat", "OWNER", "why?", "t", "b", true, 99L, 1000L,
-            false, null);
+            "owner", "repo", 42, 12345L, 67890L, "octocat", "OWNER", "why?", "t", "b", true, 99L,
+            1000L, false, null);
 
     service.handle(task);
 
@@ -990,6 +999,7 @@ class MaintainerReplyServiceTest {
             "repo",
             42,
             12345L,
+            67890L,
             "octocat",
             "OWNER",
             "@thrillhousebot hi",
@@ -1095,6 +1105,7 @@ class MaintainerReplyServiceTest {
         "repo",
         42,
         12345L,
+        67890L,
         "octocat",
         authorAssociation,
         question,
@@ -1119,6 +1130,132 @@ class MaintainerReplyServiceTest {
         .createComment(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), body.capture());
     assertEquals(MaintainerReplyService.CLEAR_DIRECTIVE_ACK, body.getValue().body());
     verifyNoInteractions(replyAssistant, prClient);
+  }
+
+  private static FindingLedger.Row storedFinding(
+      String file, int line, String title, String status) {
+    return new FindingLedger.Row(
+        title,
+        new FindingLedger.Subject(file, line, "medium", "high", title, null),
+        null,
+        null,
+        new FindingLedger.Status(status, null, null),
+        null);
+  }
+
+  private String ackFor(String question, FindingLedger.Row... rows) {
+    authorize();
+    var stored = new java.util.LinkedHashMap<String, FindingLedger.Row>();
+    for (var row : rows) {
+      stored.put(row.key(), row);
+    }
+    when(findingStates.load(new RepoScope(12345L, 67890L), 42)).thenReturn(stored);
+
+    service.handle(mentionTask(question));
+
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .createComment(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), body.capture());
+    return body.getValue().body();
+  }
+
+  @Test
+  void theClearAcknowledgementNamesTheFindingsTheCommentMatched() {
+    var ack =
+        ackFor(
+            "@thrillhousebot resolved `src/A.java:10` — SQL injection",
+            storedFinding("src/A.java", 10, "SQL injection", "open"));
+
+    assertTrue(ack.startsWith("The next review will close these"), ack);
+    assertTrue(ack.contains("- `src/A.java:10` — SQL injection"), ack);
+    assertTrue(ack.endsWith("Anything not matched stays open."), ack);
+  }
+
+  @Test
+  void aParaphrasedTitleIsReportedUnmatchedWithTheTitleOnRecord() {
+    var ack =
+        ackFor(
+            "@thrillhousebot resolved `src/A.java:10` — the query is built by hand",
+            storedFinding("src/A.java", 10, "SQL injection", "open"));
+
+    assertTrue(ack.startsWith("This comment names no open finding on record"), ack);
+    assertTrue(ack.contains("The title on record:\n\n- `src/A.java:10` — SQL injection"), ack);
+  }
+
+  @Test
+  void aLocatorNoStoredFindingHasAsksForTheSummaryRow() {
+    var ack =
+        ackFor(
+            "@thrillhousebot resolved src/B.java:3 — SQL injection",
+            storedFinding("src/A.java", 10, "SQL injection", "open"));
+
+    assertTrue(ack.contains("Copy both from the summary comment."), ack);
+    assertFalse(ack.contains("src/A.java"), ack);
+  }
+
+  @Test
+  void theDeclineAcknowledgementSaysTheMatchedFindingsWillBeRecordedAsDeclined() {
+    var ack =
+        ackFor(
+            "@thrillhousebot declined src/A.java:10 — SQL injection\nthe input is a constant",
+            storedFinding("src/A.java", 10, "SQL injection", "open"));
+
+    assertTrue(ack.startsWith("The next review will record these as declined"), ack);
+  }
+
+  @Test
+  void withoutAnOpenFindingOnRecordTheGeneralAcknowledgementStands() {
+    var ack =
+        ackFor(
+            "@thrillhousebot resolved src/A.java:10 — SQL injection",
+            storedFinding("src/A.java", 10, "SQL injection", "resolved"));
+
+    assertEquals(MaintainerReplyService.CLEAR_DIRECTIVE_ACK, ack);
+  }
+
+  @Test
+  void aStoredFindingWithNoFileOrTitleCannotBeNamed() {
+    var ack =
+        ackFor(
+            "@thrillhousebot resolved src/A.java:10 — SQL injection",
+            storedFinding(null, 10, "SQL injection", "open"),
+            new FindingLedger.Row(
+                "untitled",
+                new FindingLedger.Subject("src/A.java", 10, "medium", "high", null, null),
+                null,
+                null,
+                new FindingLedger.Status("open", null, null),
+                null),
+            storedFinding("src/A.java", 10, " ", "open"));
+
+    assertEquals(MaintainerReplyService.CLEAR_DIRECTIVE_ACK, ack);
+  }
+
+  @Test
+  void aLongListOfMatchedFindingsIsRolledUp() {
+    var comment = new StringBuilder("@thrillhousebot resolved");
+    var rows = new FindingLedger.Row[DirectiveFeedback.MAX_LISTED + 2];
+    for (var i = 0; i < rows.length; i++) {
+      rows[i] = storedFinding("src/A.java", 100 + i, "Finding " + i + ".", "open");
+      comment.append("\nsrc/A.java:").append(100 + i).append(" — Finding ").append(i).append('.');
+    }
+
+    var ack = ackFor(comment.toString(), rows);
+
+    assertTrue(ack.contains("\n- and 2 more"), ack);
+  }
+
+  @Test
+  void unreadableFindingStatesLeaveTheGeneralAcknowledgement() {
+    authorize();
+    when(findingStates.load(any(), anyInt())).thenThrow(new IllegalStateException("db down"));
+
+    service.handle(mentionTask("@thrillhousebot resolved src/A.java:10 — SQL injection"));
+
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .createComment(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), body.capture());
+    assertEquals(MaintainerReplyService.CLEAR_DIRECTIVE_ACK, body.getValue().body());
   }
 
   /**

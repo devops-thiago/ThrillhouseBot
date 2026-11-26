@@ -280,6 +280,10 @@ same diff.
   first. It runs for the commands' batching too. Off, the sort is the #935 manifest-first one,
   unchanged. Batches still run in parallel, so the order decides what the cap leaves out, not which
   call starts first.
+- **Keeping a test with its source moves files, never drops one** (#1472).
+  `DiffBudgetPlanner.keepTestsWithSources` runs after first-fit has decided what is omitted, and
+  keeps a `TestSourcePairs` link only while the same files still fit in no more batches than
+  first-fit used.
 - **Live activity events are a view, never a source** (#66). `review.phase` steps come from the
   orchestrator (`context`, `review`, `publish`) and `AiReviewService` (`verify` after the single
   review call, `summarize` at the summary call); a batched review has no `verify` step.

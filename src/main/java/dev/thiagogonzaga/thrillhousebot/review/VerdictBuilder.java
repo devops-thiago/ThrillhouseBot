@@ -248,7 +248,8 @@ public class VerdictBuilder {
                 responseCut,
                 callFailed,
                 plan.summaryDegradation(),
-                verificationCoverage)
+                verificationCoverage,
+                plan.callFailureCauses())
             : new ReviewResult.TruncationDetail(
                 List.of(),
                 List.of(),
@@ -673,6 +674,7 @@ public class VerdictBuilder {
       summaryMarkdown =
           ReviewResult.truncationNotice(diffStats.omittedFiles(), diffStats.truncation())
               + (carriedOverview ? ReviewResult.OVERVIEW_CARRIED_LINE : "")
+              + UncoveredFileList.section(diffStats.truncation())
               + summaryMarkdown;
     } else {
       // Summary-only degradation (no file gap): the findings are complete, so the partial-review
