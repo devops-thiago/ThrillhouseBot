@@ -1,0 +1,50 @@
+name: Released history
+
+# A released version's CHANGELOG section and its archived docs (website/src/content/docs/<v>/,
+# website/src/assets/<v>/, website/src/content/versions/<v>.json and its versions.json entry)
+# record what shipped. This check fails a pull request that edits, removes or renames any of
+# them for a version with a vX.Y.Z tag; a correction goes into the next release as an Errata
+# entry. Adding a new release section or a new archive is allowed.
+on:
+  pull_request:
+    branches: [main, develop, "release/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  released-history:
+    name: released-history
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: pr
+      # The checker runs from the base branch, so a pull request cannot loosen the rule it is
+      # checked against. Only when the base has no checker yet (the change that adds it) does the
+      # pull request's own copy run.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+          path: trusted
+          sparse-checkout: scripts/released-history
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - name: Test the checker
+        run: node --test pr/scripts/released-history/check.test.mjs
+      - name: Check released CHANGELOG sections and archived docs
+        working-directory: pr
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          checker="$GITHUB_WORKSPACE/trusted/scripts/released-history/check.mjs"
+          if [ ! -f "$checker" ]; then
+            checker="$GITHUB_WORKSPACE/pr/scripts/released-history/check.mjs"
+          fi
+          node "$checker"
