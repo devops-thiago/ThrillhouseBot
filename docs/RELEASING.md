@@ -180,10 +180,17 @@ gh workflow run docs.yml --ref vX.Y.Z
 
 ## The version bump
 
-After a release that moves `:latest`, the `bump-version` job pushes a
+After a release that moves `:latest`, the `bump-version` job creates a
 `chore/bump-<next>-SNAPSHOT` branch, where `<next>` is the next patch version,
 and opens a pull request into `main` with the default `GITHUB_TOKEN`. It skips
 the bump when `main` is already at that version or later.
+
+`main` requires signed commits, and a commit pushed with `GITHUB_TOKEN` is
+unsigned. So the job doesn't push a local commit. It makes the commit through
+the GraphQL `createCommitOnBranch` mutation, which GitHub signs as
+`github-actions[bot]`, with a DCO sign-off in the message. It then checks that
+GitHub reports the commit as verified, and fails if it doesn't. The v0.9.3 bump
+(#1477) was pushed unsigned before this change and had to be redone as #1482.
 
 Opening the pull request depends on one repository setting: Settings → Actions
 → General → Workflow permissions → "Allow GitHub Actions to create and approve
