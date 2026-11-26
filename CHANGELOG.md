@@ -19,6 +19,10 @@ All notable changes to ThrillhouseBot.
   Each page shows where the manifest will be sent and keeps the button disabled while either
   value is invalid. Support in the bot for other addresses is still in progress and untested on a
   real instance (#1487).
+- **Open findings in the review webhook** (#1443): with `NOTIFICATIONS_WEBHOOK_INCLUDE_OPEN_FINDINGS`
+  (new, default off), a `review.completed` payload in the `json` format carries
+  `review.openFindings`, the entries of the summary comment's findings manifest: file paths and
+  lines, no titles. Off, nothing new leaves the process.
 ### Fixed
 
 - **GitHub Enterprise Server can be used.** The bot called `https://api.github.com` and linked to

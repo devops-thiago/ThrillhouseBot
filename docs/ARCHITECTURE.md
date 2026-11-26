@@ -424,6 +424,7 @@ not rewritten. A new comment is posted when the old one was deleted or the edit 
 `/summary` asks for one. Under the marker, a hidden `<!-- thrillhousebot:findings v=1 [...] -->`
 line lists the open findings the summary renders (key, file, line, risk, confidence, thread,
 suggestion, carried) for other tools to read; the bot never reads it back (`FindingsManifest`).
+On its own opt-in, the outcome webhook sends the same entries (`OpenFindings`).
 
 Because the edit replaces the whole body, each round renders the PR as it stands. The risk counts,
 Key Findings and "Things to double-check" cover the round's new findings plus every earlier finding
