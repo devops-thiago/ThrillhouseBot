@@ -34,6 +34,10 @@ All notable changes to ThrillhouseBot.
   real instance (#1487).
 ### Fixed
 
+- **A clear or decline comment says what it matched** (#1463): the reply lists the open findings
+  the comment names by `path:line` and title, and gives the title on record for a `path:line` named
+  with another one, where it used to promise to close whatever was named even when nothing was. A
+  title containing a backtick, `<` or `|` now also matches as the summary's source escapes it.
 - **GitHub Enterprise Server can be used.** The bot called `https://api.github.com` and linked to
   `https://github.com` whatever the deployment: the REST and GraphQL clients, the GitHub App
   extension, dashboard sign-in and sign-out, pull request links in notifications and learnings, and

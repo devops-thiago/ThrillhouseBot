@@ -1645,7 +1645,35 @@ public class FollowUpAnalyzer {
    * the two-part naming both conversation directives require.
    */
   private static boolean namesFinding(String namingText, String locator, String anchor) {
-    return namesLocator(namingText, locator, anchor) && namingText.contains(anchor);
+    return printedForms(anchor)
+        .anyMatch(form -> namesLocator(namingText, locator, form) && namingText.contains(form));
+  }
+
+  /**
+   * The anchor as written, and as the summary's raw markdown carries it ({@link
+   * MarkdownSafe#inline}): a comment built by copying the source, as an agent reading the comment
+   * through the API does, holds the escaped form (#1463).
+   */
+  private static Stream<String> printedForms(String anchor) {
+    return Stream.of(anchor, MarkdownSafe.inline(anchor)).distinct();
+  }
+
+  /** A conversation comment's naming text, parsed once and then asked about each finding. */
+  record CommentNaming(String text) {
+
+    static CommentNaming of(String body) {
+      return new CommentNaming(namingText(body));
+    }
+
+    /** Whether the comment names the finding as a clear or decline directive requires. */
+    boolean names(String file, int line, String anchor) {
+      return namesFinding(text, file + ":" + line, anchor);
+    }
+
+    /** Whether the comment names the finding's {@code path:line}, whatever the title. */
+    boolean namesPathAndLine(String file, int line, String anchor) {
+      return printedForms(anchor).anyMatch(form -> namesLocator(text, file + ":" + line, form));
+    }
   }
 
   /**

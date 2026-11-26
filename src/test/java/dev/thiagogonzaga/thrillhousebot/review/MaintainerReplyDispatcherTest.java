@@ -37,7 +37,8 @@ class MaintainerReplyDispatcherTest {
 
   private static final MaintainerReplyService.ReplyTask TASK =
       new MaintainerReplyService.ReplyTask(
-          "owner", "repo", 42, 1L, "octocat", "OWNER", "q", "t", "b", true, 99L, 1000L, false, "h");
+          "owner", "repo", 42, 1L, 2L, "octocat", "OWNER", "q", "t", "b", true, 99L, 1000L, false,
+          "h");
 
   @Test
   void dispatchSubmitsTaskToExecutorAndReturnsTrue() {
