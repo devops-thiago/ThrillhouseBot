@@ -92,9 +92,10 @@ public class ReviewPublisher {
    * Keeps one summary comment per pull request, carrying the current round's summary (#868). The
    * first user-visible review posts it, and so does the {@code /summary} command ({@code
    * forceSummary}), which runs only after it found no summary on the pull request: both already
-   * know there is nothing to edit, so they post without listing the conversation. Every later round
-   * finds the bot's summary comment by its marker and edits it in place, posting a new one only
-   * when none is left (a maintainer deleted it) — see {@link #upsertSummaryComment}.
+   * know there is nothing to edit, so they post without listing the conversation, unless Agent next
+   * steps is on and reads the prior head from it (#1442). Every later round finds the bot's summary
+   * comment by its marker and edits it in place, posting a new one only when none is left (a
+   * maintainer deleted it) — see {@link #upsertSummaryComment}.
    *
    * <p>The edit replaces the whole body, so nothing from an earlier round survives it: the
    * disclosures (coverage and scope note, degradation and truncation banners, confidence hold,
@@ -141,8 +142,25 @@ public class ReviewPublisher {
       ReviewResult result,
       boolean forceSummary,
       String prText) {
+    return publishSummary(auth, owner, repo, prNumber, result, forceSummary, prText, null);
+  }
+
+  /**
+   * {@link #publishSummary(String, String, String, int, ReviewResult, boolean, String)}, with the
+   * reviewed head for the opt-in Agent next steps subsection (#1442).
+   */
+  boolean publishSummary(
+      String auth,
+      String owner,
+      String repo,
+      int prNumber,
+      ReviewResult result,
+      boolean forceSummary,
+      String prText,
+      String commitSha) {
     return publishSummary(
-        new SummaryRequest(auth, owner, repo, prNumber, result, forceSummary, prText, null));
+        new SummaryRequest(
+            auth, owner, repo, prNumber, result, forceSummary, prText, null, commitSha));
   }
 
   /**
@@ -164,7 +182,8 @@ public class ReviewPublisher {
             result,
             req.forceSummary(),
             PromptSections.prContext(req.prTitle(), req.prDescription()),
-            lineResolver));
+            lineResolver,
+            req.commitSha()));
   }
 
   record SummaryRequest(
@@ -175,7 +194,8 @@ public class ReviewPublisher {
       ReviewResult result,
       boolean forceSummary,
       String prText,
-      DiffLineResolver lineResolver) {}
+      DiffLineResolver lineResolver,
+      String commitSha) {}
 
   /** See {@link #publishSummary(String, String, String, int, ReviewResult, boolean, String)}. */
   boolean publishSummary(SummaryRequest summary) {
@@ -185,29 +205,87 @@ public class ReviewPublisher {
     var prNumber = summary.prNumber();
     var result = summary.result();
     var prText = summary.prText();
+    var commitSha = summary.commitSha();
     if (result.summaryMarkdown().isBlank()) {
       return false;
     }
-    var prTextLine = prText == null ? "" : DescriptionGapCarryover.prTextMarker(prText) + "\n";
     var scrubbed = PromptLabelScrubber.scrub(result);
-    var manifestLine =
-        FindingsManifest.render(
-                PrSummaryGenerator.currentState(scrubbed),
-                threadRule(scrubbed, summary.lineResolver()))
-            + "\n";
+    var state = PrSummaryGenerator.currentState(scrubbed);
+    var manifestLine = FindingsManifest.render(state, threadRule(scrubbed, summary.lineResolver()));
+    var agentEnabled = agentNextStepsEnabled();
+    var prTextLine = prText == null ? "" : DescriptionGapCarryover.prTextMarker(prText) + "\n";
+    var headLine = agentEnabled ? AgentNextSteps.headMarker(commitSha) : "";
+    var headPrefix = headLine.isBlank() ? "" : headLine + "\n";
+    var postingNew = result.isFirstReview() || summary.forceSummary();
+    var existing =
+        agentEnabled || !postingNew
+            ? latestBotSummaryComment(auth, owner, repo, prNumber)
+            : Optional.<GitHubCommentClient.IssueComment>empty();
+    var priorHead = agentEnabled ? priorHeadSha(existing) : null;
+    var prose = summaryProse(result, state, manifestLine, commitSha, priorHead, agentEnabled);
     var request =
         new GitHubCommentClient.CreateCommentRequest(
             PrSummaryGenerator.SUMMARY_MARKER
                 + "\n"
                 + prTextLine
+                + headPrefix
                 + manifestLine
-                + PromptLabelScrubber.scrubMarkdown(result.summaryMarkdown(), result.findings()));
-    if (result.isFirstReview() || summary.forceSummary()) {
+                + "\n"
+                + prose);
+    if (postingNew) {
       commentClient.createComment(auth, ACCEPT, owner, repo, prNumber, request);
       return true;
     }
-    upsertSummaryComment(auth, owner, repo, prNumber, request);
+    upsertSummaryComment(auth, owner, repo, prNumber, request, existing);
     return result.hasSupersededPrevious();
+  }
+
+  private String summaryProse(
+      ReviewResult result,
+      PrSummaryGenerator.CurrentState state,
+      String manifestLine,
+      String commitSha,
+      String priorHead,
+      boolean agentEnabled) {
+    var prose = PromptLabelScrubber.scrubMarkdown(result.summaryMarkdown(), result.findings());
+    if (!agentEnabled) {
+      return prose;
+    }
+    var section =
+        AgentNextSteps.render(result, commitSha, priorHead, state, manifestLine, botIdentity);
+    var scrubbedSection = PromptLabelScrubber.scrubMarkdown(section, result.findings());
+    return AgentNextSteps.embedAfterHeading(prose, scrubbedSection);
+  }
+
+  /**
+   * Whether the opt-in Agent next steps subsection is on ({@link
+   * ThrillhouseConfig.AgentNextStepsConfig#enabled()}). Partial config mocks in unit tests may
+   * leave {@code review()} or {@code agentNextSteps()} unset; that reads as off, matching the
+   * default.
+   */
+  private boolean agentNextStepsEnabled() {
+    var review = config.review();
+    if (review == null) {
+      return false;
+    }
+    var agentNextSteps = review.agentNextSteps();
+    return agentNextSteps != null && agentNextSteps.enabled();
+  }
+
+  private static String priorHeadSha(Optional<GitHubCommentClient.IssueComment> existingSummary) {
+    return existingSummary.map(c -> AgentNextSteps.parsePriorHead(c.body())).orElse(null);
+  }
+
+  /**
+   * The bot's newest summary comment on the pull request, if any. Uses {@link
+   * GitHubCommentClient#listComments}, which walks comment pages (not a single 30-item page).
+   */
+  private Optional<GitHubCommentClient.IssueComment> latestBotSummaryComment(
+      String auth, String owner, String repo, int prNumber) {
+    return commentClient.listComments(auth, ACCEPT, owner, repo, prNumber).stream()
+        .filter(c -> c.user() != null && botIdentity.matches(c.user().login()))
+        .filter(c -> ReviewContextLoader.isBotSummaryComment(c.body()))
+        .reduce((first, second) -> second);
   }
 
   /**
@@ -278,19 +356,16 @@ public class ReviewPublisher {
    *
    * <p>Two rounds never edit the comment at once: the dispatcher runs a pull request's reviews one
    * at a time, and a run whose head moved while it ran stands down before its first write (#806),
-   * so it cannot overwrite the summary of the run that replaces it.
+   * so it cannot overwrite the summary of the run that replaces it. The caller supplies the comment
+   * it already found for the prior-head fingerprint, so a publish reads the conversation once.
    */
   private void upsertSummaryComment(
       String auth,
       String owner,
       String repo,
       int prNumber,
-      GitHubCommentClient.CreateCommentRequest request) {
-    var existing =
-        commentClient.listComments(auth, ACCEPT, owner, repo, prNumber).stream()
-            .filter(c -> c.user() != null && botIdentity.matches(c.user().login()))
-            .filter(c -> ReviewContextLoader.isBotSummaryComment(c.body()))
-            .reduce((first, second) -> second);
+      GitHubCommentClient.CreateCommentRequest request,
+      Optional<GitHubCommentClient.IssueComment> existing) {
     if (existing.isEmpty()) {
       Log.infof("No summary comment found on %s/%s #%d — posting a new one", owner, repo, prNumber);
       commentClient.createComment(auth, ACCEPT, owner, repo, prNumber, request);

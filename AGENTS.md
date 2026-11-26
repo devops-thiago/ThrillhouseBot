@@ -502,6 +502,16 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   `MAX_ARRAY_CHARS` rendered characters (the path has no length bound) is cut with `omitted=N` in
   the header. `v=1` is a contract version (#1379, #1378): a field removed or renamed bumps it. The
   line is written outside `PromptLabelScrubber.scrubMarkdown`, so the scrub cannot rewrite it.
+- **Opt-in Agent next steps** (#1442, `REVIEW_AGENT_NEXT_STEPS_ENABLED`): when on,
+  `ReviewPublisher.publishSummary` writes a hidden `<!-- thrillhousebot:head=… -->` line after the
+  `pr-text` fingerprint, then embeds `AgentNextSteps.render` directly under
+  `PrSummaryGenerator.SUMMARY_HEADING` in the scrubbed markdown — head change vs the prior
+  summary's marker, open count, offending required-check names, situation-specific hints and a fixed
+  ThrillhouseBot command cheat sheet (self-sufficient without repo AGENTS.md); no model call and no
+  second manifest. Banners prepended above the heading stay above it, and command placeholders such
+  as `<path>` stay inside code spans, because GitHub drops them as HTML anywhere else. The scoped
+  command hints (re-review, per-finding `resolved`) render only when CI is green (#1442); otherwise
+  the only hint is to fix CI first.
 - **A run whose head moved stands down before its first write** (#704, #806) and hands its
   verified findings to the next run through `SupersededFindingsCarryover`, so two runs never edit
   the summary at once and nothing is posted against a diff that changed. This is `HeadMovedGuard`,

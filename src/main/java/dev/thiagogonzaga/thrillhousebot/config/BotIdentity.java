@@ -97,6 +97,16 @@ public record BotIdentity(Set<String> logins) {
     return mentionNames().get(0);
   }
 
+  /**
+   * A readable label for summary prose — the primary {@linkplain #primaryMention() mention name}
+   * with its first character upper-cased, so a custom App slug is what the comment shows rather
+   * than a hard-coded product name.
+   */
+  public String displayName() {
+    var mention = primaryMention();
+    return Character.toUpperCase(mention.charAt(0)) + mention.substring(1);
+  }
+
   private static String mentionName(String login) {
     return login.endsWith(BOT_LOGIN_SUFFIX)
         ? login.substring(0, login.length() - BOT_LOGIN_SUFFIX.length())

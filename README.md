@@ -616,6 +616,15 @@ both.
 
 ### Summary comment
 
+With `REVIEW_AGENT_NEXT_STEPS_ENABLED` on, the summary also carries a short
+**Agent next steps** block at the top (under the heading, above the overview): head SHA and
+whether it changed since the last edit, how many findings are still open, names of required checks
+that are not green yet, situation-specific command hints, and a fixed **on this pull request** cheat
+sheet titled from the configured bot login (`GITHUB_BOT_LOGINS`) with `@`-mentions (`/review`,
+`/summary`, `/help`, `resolved` vs `/resolve`, auto-review). It is
+deterministic and uses no extra model call, so agents need no repository AGENTS.md; when the
+manifest line lists open findings, the block points at that line instead of repeating file paths.
+
 Each PR has one summary comment. The first round posts it; every later round
 finds it by its `<!-- thrillhousebot:summary -->` marker (or, for a summary
 posted before 0.7.0, by its heading) and replaces its body, so it always

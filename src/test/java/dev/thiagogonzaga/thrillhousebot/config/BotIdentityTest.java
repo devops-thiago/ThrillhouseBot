@@ -86,6 +86,12 @@ class BotIdentityTest {
   }
 
   @Test
+  void displayNameTitleCasesThePrimaryMention() {
+    assertEquals("Thriller", BotIdentity.of("thriller[bot]").displayName());
+    assertEquals("My-review-bot", BotIdentity.of("my-review-bot[bot]").displayName());
+  }
+
+  @Test
   void mentionNamesShouldFallBackToRawLoginsWhenStrippingLeavesNothing() {
     // A login that is nothing but the suffix would otherwise yield a mention no comment contains.
     var identity = BotIdentity.of("[bot]");

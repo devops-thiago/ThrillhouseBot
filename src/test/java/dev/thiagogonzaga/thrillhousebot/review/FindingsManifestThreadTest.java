@@ -98,7 +98,8 @@ class FindingsManifestThreadTest {
   private Map<Integer, Boolean> threads(ReviewResult result, DiffLineResolver resolver)
       throws Exception {
     publisher.publishSummary(
-        new ReviewPublisher.SummaryRequest("auth", "o", "r", 1, result, false, null, resolver));
+        new ReviewPublisher.SummaryRequest(
+            "auth", "o", "r", 1, result, false, null, resolver, null));
     var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
     verify(commentClient)
         .createComment(anyString(), anyString(), eq("o"), eq("r"), eq(1), body.capture());
