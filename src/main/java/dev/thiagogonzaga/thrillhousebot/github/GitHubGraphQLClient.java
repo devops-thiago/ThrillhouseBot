@@ -20,7 +20,6 @@ import io.quarkus.runtime.annotations.RegisterForReflection;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.HeaderParam;
 import jakarta.ws.rs.POST;
-import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 import java.util.Map;
@@ -31,13 +30,12 @@ import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
  * Minimal GitHub GraphQL access for the operations the REST API does not expose — resolving review
  * threads in particular.
  */
-@RegisterRestClient(configKey = "github-api")
+@RegisterRestClient(configKey = "github-graphql")
 @RegisterProvider(GitHubErrorLogger.class)
 public interface GitHubGraphQLClient {
 
   /** One HTTP attempt at a GraphQL operation. Callers want {@link #execute} instead. */
   @POST
-  @Path("/graphql")
   @Produces(MediaType.APPLICATION_JSON)
   @Consumes(MediaType.APPLICATION_JSON)
   JsonNode executeOnce(@HeaderParam("Authorization") String auth, GraphQLRequest request);

@@ -4,6 +4,17 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Fixed
+
+- **GitHub Enterprise Server can be used.** The bot called `https://api.github.com` and linked to
+  `https://github.com` whatever the deployment: the REST and GraphQL clients, the GitHub App
+  extension, dashboard sign-in and sign-out, pull request links in notifications and learnings, and
+  the App install page were all fixed to github.com. `GITHUB_URL`, `GITHUB_API_URL` and
+  `GITHUB_GRAPHQL_URL` now set the web, REST and GraphQL endpoints (for example
+  `https://ghes.example.com`, `https://ghes.example.com/api/v3` and
+  `https://ghes.example.com/api/graphql`), and `GITHUB_OAUTH_URL` follows `GITHUB_URL` unless set.
+  The defaults are unchanged.
+
 ## [0.9.3] - 2026-11-26
 
 Follow-up rounds re-check older findings whenever a fix could stand and stop closing the same

@@ -20,6 +20,7 @@ import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubUrls;
 import dev.thiagogonzaga.thrillhousebot.github.InstallationRepository;
 import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
@@ -467,7 +468,7 @@ public class ReviewLearnings {
   }
 
   static String pullRequestUrl(String owner, String repo, int prNumber) {
-    return "https://github.com/" + owner + "/" + repo + "/pull/" + prNumber;
+    return GitHubUrls.pullRequest(owner, repo, prNumber);
   }
 
   // --- governance -----------------------------------------------------------------------------

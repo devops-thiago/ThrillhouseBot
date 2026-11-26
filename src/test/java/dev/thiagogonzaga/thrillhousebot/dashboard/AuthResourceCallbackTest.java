@@ -184,6 +184,35 @@ class AuthResourceCallbackTest {
   }
 
   @Test
+  void loginFollowsAConfiguredEnterpriseServerWhenNoOAuthUrlIsSet() {
+    when(fixtureContext.dashboardConfig.oauthUrl()).thenReturn(Optional.of(" "));
+    when(fixtureContext.config.github().webUrl()).thenReturn("https://ghe.example.com/");
+
+    var response = resource.login();
+
+    assertEquals(303, response.getStatus());
+    assertTrue(
+        response
+            .getLocation()
+            .toString()
+            .startsWith("https://ghe.example.com/login/oauth/authorize?client_id="));
+  }
+
+  @Test
+  void anExplicitOAuthUrlWinsOverTheGitHubHost() {
+    when(fixtureContext.dashboardConfig.oauthUrl())
+        .thenReturn(Optional.of("https://sso.example.com/oauth/"));
+    when(fixtureContext.config.github().webUrl()).thenReturn("https://ghe.example.com");
+
+    assertTrue(
+        resource
+            .login()
+            .getLocation()
+            .toString()
+            .startsWith("https://sso.example.com/oauth/authorize?"));
+  }
+
+  @Test
   void callbackShouldUseEmptyCredentialsWhenOptionalBlank() throws Exception {
     when(fixtureContext.dashboardConfig.clientId()).thenReturn(Optional.of("   "));
     when(fixtureContext.dashboardConfig.clientSecret()).thenReturn(Optional.of("   "));
@@ -443,6 +472,23 @@ class AuthResourceCallbackTest {
         "https://api.github.com/applications/test-client-id/token", request.uri().toString());
     assertEquals(Optional.of(Duration.ofSeconds(10)), request.timeout());
     assertTrue(request.headers().firstValue("Authorization").orElse("").startsWith("Basic "));
+  }
+
+  @Test
+  void logoutRevokesTheTokenOnAConfiguredEnterpriseServer() throws Exception {
+    when(fixtureContext.config.github().apiUrl()).thenReturn("https://ghe.example.com/api/v3/");
+    when(fixtureContext.httpClient.send(any(HttpRequest.class), any())).thenReturn(httpResponse);
+    when(httpResponse.statusCode()).thenReturn(204);
+    var sessionId =
+        fixtureContext.sessionStore.createSession("testuser", "gho_secret", "https://a.co", "Test");
+
+    resource.logout(sessionId);
+
+    var captor = ArgumentCaptor.forClass(HttpRequest.class);
+    verify(fixtureContext.httpClient).send(captor.capture(), any());
+    assertEquals(
+        "https://ghe.example.com/api/v3/applications/test-client-id/token",
+        captor.getValue().uri().toString());
   }
 
   @Test

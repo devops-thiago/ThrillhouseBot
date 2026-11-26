@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.dashboard;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubUrls;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.NewCookie;
@@ -41,7 +42,6 @@ public class AuthResource {
 
   private static final Logger log = LoggerFactory.getLogger(AuthResource.class);
 
-  private static final String GITHUB_API_URL = "https://api.github.com";
   private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
   // Cookie / path constants
@@ -125,7 +125,7 @@ public class AuthResource {
 
     var redirectUri = config.dashboard().redirectUri();
     var url =
-        config.dashboard().oauthUrl()
+        oauthUrl()
             + "/authorize"
             + "?client_id="
             + urlEncode(clientId)
@@ -188,7 +188,7 @@ public class AuthResource {
     var clientSecret = config.dashboard().clientSecret().filter(s -> !s.isBlank()).orElse("");
 
     try {
-      var tokenUrl = config.dashboard().oauthUrl() + "/access_token";
+      var tokenUrl = oauthUrl() + "/access_token";
       String body = buildTokenExchangeBody(clientId, clientSecret, code);
 
       var request =
@@ -214,7 +214,7 @@ public class AuthResource {
 
       var userRequest =
           HttpRequest.newBuilder()
-              .uri(URI.create(GITHUB_API_URL + GITHUB_PATH_USER))
+              .uri(URI.create(githubApiUrl() + GITHUB_PATH_USER))
               .header(HEADER_AUTHORIZATION, BEARER_PREFIX + accessToken)
               .header(HEADER_ACCEPT, GITHUB_ACCEPT_VALUE)
               .timeout(config.httpRequestTimeout())
@@ -392,7 +392,7 @@ public class AuthResource {
       var body = mapper.writeValueAsString(Map.of("access_token", accessToken));
       var request =
           HttpRequest.newBuilder()
-              .uri(URI.create(GITHUB_API_URL + "/applications/" + urlEncode(clientId) + "/token"))
+              .uri(URI.create(githubApiUrl() + "/applications/" + urlEncode(clientId) + "/token"))
               .header(HEADER_AUTHORIZATION, "Basic " + credentials)
               .header(HEADER_ACCEPT, GITHUB_ACCEPT_VALUE)
               .header("Content-Type", "application/json")
@@ -436,5 +436,21 @@ public class AuthResource {
         .sameSite(NewCookie.SameSite.LAX)
         .maxAge(0)
         .build();
+  }
+
+  /** The GitHub REST API base URL: api.github.com, or a GitHub Enterprise Server's /api/v3. */
+  private String githubApiUrl() {
+    return GitHubUrls.withoutTrailingSlash(config.github().apiUrl());
+  }
+
+  /** GitHub's OAuth endpoints: {@code GITHUB_OAUTH_URL}, or {@code GITHUB_URL}'s /login/oauth. */
+  private String oauthUrl() {
+    return config
+        .dashboard()
+        .oauthUrl()
+        .filter(url -> !url.isBlank())
+        .map(GitHubUrls::withoutTrailingSlash)
+        .orElseGet(
+            () -> GitHubUrls.withoutTrailingSlash(config.github().webUrl()) + "/login/oauth");
   }
 }

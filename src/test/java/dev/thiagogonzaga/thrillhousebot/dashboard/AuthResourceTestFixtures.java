@@ -63,11 +63,12 @@ final class AuthResourceTestFixtures {
     when(dashboardConfig.clientId()).thenReturn(Optional.of("test-client-id"));
     when(dashboardConfig.clientSecret()).thenReturn(Optional.of("test-secret"));
     when(dashboardConfig.redirectUri()).thenReturn("http://localhost:8080/api/auth/callback");
-    when(dashboardConfig.oauthUrl()).thenReturn("https://github.com/login/oauth");
+    when(dashboardConfig.oauthUrl()).thenReturn(Optional.of("https://github.com/login/oauth"));
     var gitHub = mock(ThrillhouseConfig.GitHubConfig.class);
     var review = mock(ThrillhouseConfig.ReviewConfig.class);
     var aiPricing = mock(ThrillhouseConfig.AiPricingConfig.class);
     when(config.github()).thenReturn(gitHub);
+    when(gitHub.apiUrl()).thenReturn("https://api.github.com");
     when(config.review()).thenReturn(review);
     when(config.ai()).thenReturn(aiPricing);
     when(config.httpRequestTimeout()).thenReturn(Duration.ofSeconds(10));
