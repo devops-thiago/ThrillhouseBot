@@ -32,6 +32,8 @@ class SourceLineCodeTest {
         "x--|x--",
         "a #[x] #{y}|a #[x] #{y}",
         "a --b|a --b",
+        "a ---b|a ---b",
+        "a -|a -",
         "a -- b|~a ~",
         "x = 1 --|~x = 1 ~",
         "v = 'a' + b|~v =    + b~",

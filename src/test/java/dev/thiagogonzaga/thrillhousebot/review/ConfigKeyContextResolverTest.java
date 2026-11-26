@@ -461,6 +461,11 @@ class ConfigKeyContextResolverTest {
           "+local v = 1 -- os.getenv(\"X\")",
           "+msg = 'use ENV[\"X\"] instead'",
           "+<p>x</p><!-- os.Getenv(\"X\") configured later -->",
+          "+x = 1 --- os.getenv(\"X\")",
+          "+x = 1 ---",
+          "+doc = \"\"\"reads from os.getenv(\"X\") at boot\"\"\"",
+          "+doc = '''reads from os.getenv(\"X\") at boot'''",
+          "+v = 1  \"\"\"Defaults to os.getenv(\"HOME\") when unset",
           "+s := \"say \\\"os.Getenv(X)\\\" here\""
         })
     void shouldNotTakeAReadNamedInACommentOrLiteralForOne(String line) {
@@ -511,6 +516,8 @@ class ConfigKeyContextResolverTest {
           "+  #define LIMIT getenv(\"LIMIT\")",
           "+url = \"http://x/#a\" + os.getenv(\"X\")",
           "+v = os.getenv(\"X\") # the limit",
+          "+v = f\"\"\"{os.environ['X']}\"\"\"",
+          "+v = \"\" + os.getenv(\"X\")",
           "+if c == '{' { v = getenv(\"X\") }"
         })
     void shouldKeepAReadInAnInterpolationOrBesideAStrayQuote(String line) {

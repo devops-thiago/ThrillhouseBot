@@ -43,16 +43,38 @@ final class SourceLineCode {
     var code = new StringBuilder(line.length());
     var i = first;
     while (i < line.length() && !(i > first && opensTrailingComment(line, i))) {
-      var end = isQuote(line.charAt(i)) ? stringEnd(line, i) : -1;
-      if (end < 0) {
-        code.append(line.charAt(i));
-        i++;
-      } else {
-        code.append(' ').append(interpolations(line, i + 1, end)).append(' ');
-        i = end + 1;
-      }
+      i = consume(line, i, code);
     }
     return code.toString();
+  }
+
+  /**
+   * Appends what starts at {@code i}, a literal's interpolations or one character of code, and
+   * returns where the next token starts. A triple-quoted literal ({@code """} or {@code '''}) left
+   * open runs past the line's end, so the rest of the line is its text.
+   */
+  private static int consume(String line, int i, StringBuilder code) {
+    var delimiter = delimiterAt(line, i);
+    var end = delimiter.isEmpty() ? -1 : stringEnd(line, i, delimiter);
+    if (end >= 0) {
+      code.append(' ').append(interpolations(line, i + delimiter.length(), end)).append(' ');
+      return end + delimiter.length();
+    }
+    if (delimiter.length() == 3) {
+      return line.length();
+    }
+    code.append(line.charAt(i));
+    return i + 1;
+  }
+
+  /** The quote that opens a literal at {@code i}: three of {@code "} or {@code '}, or one quote. */
+  private static String delimiterAt(String line, int i) {
+    var c = line.charAt(i);
+    if (!isQuote(c)) {
+      return "";
+    }
+    var triple = String.valueOf(c).repeat(3);
+    return c != '`' && line.startsWith(triple, i) ? triple : String.valueOf(c);
   }
 
   private static int firstNonBlank(String line) {
@@ -78,9 +100,9 @@ final class SourceLineCode {
   }
 
   /**
-   * A comment after code: {@code //}, {@code /*} or {@code <!--} anywhere, and a {@code #} or
-   * {@code --} that follows whitespace ({@code #[} and {@code #{} are code, as is {@code --} glued
-   * to a name).
+   * A comment after code: {@code //}, {@code /*} or {@code <!--} anywhere, and a {@code #} or a
+   * dash comment that follows whitespace ({@code #[} and {@code #{} are code, as are dashes glued to
+   * a name).
    */
   private static boolean opensTrailingComment(String line, int i) {
     if (line.startsWith("//", i) || line.startsWith("/*", i) || line.startsWith("<!--", i)) {
@@ -90,10 +112,16 @@ final class SourceLineCode {
       return false;
     }
     var hash = line.charAt(i) == '#' && !line.startsWith("#[", i) && !line.startsWith("#{", i);
-    var dashes =
-        line.startsWith("--", i)
-            && (i + 2 == line.length() || Character.isWhitespace(line.charAt(i + 2)));
-    return hash || dashes;
+    return hash || isDashComment(line, i);
+  }
+
+  /** A run of two or more dashes ending the line or followed by whitespace, as in {@code --- x}. */
+  private static boolean isDashComment(String line, int i) {
+    var end = i;
+    while (end < line.length() && line.charAt(end) == '-') {
+      end++;
+    }
+    return end - i >= 2 && (end == line.length() || Character.isWhitespace(line.charAt(end)));
   }
 
   private static boolean isQuote(char c) {
@@ -101,13 +129,13 @@ final class SourceLineCode {
   }
 
   /**
-   * The index of the quote that closes the literal opened at {@code start}, or -1 when the line has
-   * none. A quote inside an interpolation belongs to the interpolated code, not to the literal.
+   * The index of the {@code delimiter} that closes the literal it opens at {@code start}, or -1
+   * when the line has none. A quote inside an interpolation belongs to the interpolated code, not
+   * to the literal.
    */
-  private static int stringEnd(String line, int start) {
-    var quote = line.charAt(start);
+  private static int stringEnd(String line, int start, String delimiter) {
     var closers = new StringBuilder();
-    var i = start + 1;
+    var i = start + delimiter.length();
     while (i < line.length()) {
       var c = line.charAt(i);
       if (c == '\\') {
@@ -115,7 +143,7 @@ final class SourceLineCode {
           closers.append(')');
         }
         i += 2;
-      } else if (closers.isEmpty() && c == quote) {
+      } else if (closers.isEmpty() && line.startsWith(delimiter, i)) {
         return i;
       } else {
         track(closers, c);
