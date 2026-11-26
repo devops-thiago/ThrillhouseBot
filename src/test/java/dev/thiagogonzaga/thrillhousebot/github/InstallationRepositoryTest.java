@@ -25,6 +25,7 @@ import static org.mockito.Mockito.when;
 import io.quarkiverse.githubapp.GitHubClientProvider;
 import java.io.IOException;
 import java.io.InterruptedIOException;
+import java.net.SocketTimeoutException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -109,6 +110,28 @@ class InstallationRepositoryTest {
     assertFalse(InstallationRepository.mayAct(repository, "w", failures::add));
     assertFalse(InstallationRepository.mayAct(repository, "x", failures::add));
     assertEquals(List.of(refused, broken), failures);
+  }
+
+  @Test
+  void aTimedOutReadIsReportedAndLeavesTheThreadUninterrupted() throws Exception {
+    doReturn(gitHub).when(clientProvider).getInstallationClient(7L);
+    var timeout = new SocketTimeoutException("Read timed out");
+    when(gitHub.getRepository("o/r")).thenThrow(timeout);
+
+    assertTrue(
+        InstallationRepository.resolve(clientProvider, 7L, "o", "r", failures::add).isEmpty());
+    assertFalse(Thread.currentThread().isInterrupted());
+    assertEquals(List.of(timeout), failures);
+  }
+
+  @Test
+  void aTimedOutPermissionReadDeniesAndIsReported() throws Exception {
+    var timeout = new SocketTimeoutException("Read timed out");
+    when(repository.getPermission("w")).thenThrow(timeout);
+
+    assertFalse(InstallationRepository.mayAct(repository, "w", failures::add));
+    assertFalse(Thread.currentThread().isInterrupted());
+    assertEquals(List.of(timeout), failures);
   }
 
   @Test
