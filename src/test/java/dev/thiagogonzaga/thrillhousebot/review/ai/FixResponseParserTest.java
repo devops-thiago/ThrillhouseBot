@@ -100,4 +100,17 @@ class FixResponseParserTest {
             """);
     assertTrue(response.edits().stream().noneMatch(FixResponse.FileEdit::isApplicable));
   }
+
+  @Test
+  void anEditNeedsAFileAReplacementAndAKnownOperation() {
+    assertFalse(new FixResponse.FileEdit(null, "replace", "a", "b").isApplicable());
+    assertFalse(new FixResponse.FileEdit(" ", "replace", "a", "b").isApplicable());
+    assertFalse(new FixResponse.FileEdit("F.java", "replace", "a", null).isApplicable());
+    assertFalse(new FixResponse.FileEdit("F.java", "replace", null, "b").isApplicable());
+    assertFalse(new FixResponse.FileEdit("F.java", "replace", " ", "b").isApplicable());
+    assertFalse(new FixResponse.FileEdit("F.java", "rename", "a", "b").isApplicable());
+    assertFalse(new FixResponse.FileEdit("F.java", "create", null, " ").isApplicable());
+    assertTrue(new FixResponse.FileEdit("F.java", "REPLACE", "a", "b").isApplicable());
+    assertTrue(new FixResponse.FileEdit("F.java", "Create", null, "b").isApplicable());
+  }
 }

@@ -501,7 +501,7 @@ public class FixService {
       prClient.getFileContent(auth, ACCEPT, task.owner(), task.repo(), path, ref);
       return false;
     } catch (WebApplicationException e) {
-      if (e.getResponse() != null && e.getResponse().getStatus() == 404) {
+      if (e.getResponse().getStatus() == 404) {
         return true;
       }
       throw new EditApplicationException("could not check created path: " + e, PATH_CHECK_FAILED);

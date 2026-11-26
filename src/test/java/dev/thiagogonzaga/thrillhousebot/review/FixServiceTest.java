@@ -41,6 +41,7 @@ import dev.thiagogonzaga.thrillhousebot.webhook.TriggerDetector;
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Response;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -396,11 +397,6 @@ class FixServiceTest {
     assertCreateAbandoned(new RuntimeException("connection reset"));
   }
 
-  @Test
-  void abandonsACreateWhenThePathCheckFailsWithNoResponse() {
-    assertCreateAbandoned(new WebApplicationException((Response) null));
-  }
-
   /** A lookup that fails without saying "not found" must never be read as a free path. */
   private void assertCreateAbandoned(RuntimeException lookupFailure) {
     findingThreadExists();
@@ -525,6 +521,433 @@ class FixServiceTest {
 
     assertEquals(FixService.GENERATION_FAILED, threadReply());
     verifyNoGitWrites();
+  }
+
+  // ---- Pull request and thread loading ----
+
+  private void rootComment(String path, String body, String login) {
+    when(reviewClient.getPullRequestComment(
+            any(), any(), eq("owner"), eq("repo"), eq(ROOT_COMMENT_ID)))
+        .thenReturn(
+            new GitHubReviewClient.PullRequestComment(
+                ROOT_COMMENT_ID,
+                null,
+                path,
+                body,
+                new GitHubReviewClient.ReviewResponse.User(login)));
+  }
+
+  private void prWithFiles(FileDiff... files) {
+    when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(
+            new PullRequestDetails(
+                "Title", "Body", new Ref(HEAD_SHA, "feature-branch"), new Ref("basesha", "main")));
+    when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(List.of(files));
+  }
+
+  private static FileDiff modified(String path) {
+    return new FileDiff(path, "modified", 1, 1, 2, PATCH);
+  }
+
+  private static final String FOO_FIX =
+      """
+      {"summary": "Set x to 2", "edits": [
+        {"file": "src/Foo.java", "operation": "replace",
+         "search": "int x = 1;", "replace": "int x = 2;"}
+      ], "notes": ""}
+      """;
+
+  /** The {@code index}-th argument of the single generator call. */
+  private String generatorArgument(int index) {
+    var args = new ArrayList<ArgumentCaptor<String>>();
+    for (int i = 0; i < 6; i++) {
+      args.add(ArgumentCaptor.forClass(String.class));
+    }
+    verify(fixGenerator)
+        .generate(
+            args.get(0).capture(),
+            args.get(1).capture(),
+            args.get(2).capture(),
+            args.get(3).capture(),
+            args.get(4).capture(),
+            args.get(5).capture());
+    return args.get(index).getValue();
+  }
+
+  private void assertNoPrDetails(PullRequestDetails details) {
+    findingThreadExists();
+    when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7))).thenReturn(details);
+
+    service.execute(task());
+
+    assertEquals(FixService.NO_PR_DETAILS, threadReply());
+    verifyNoInteractions(fixGenerator);
+  }
+
+  @Test
+  void repliesNoPrDetailsWhenThePullRequestCannotBeRead() {
+    findingThreadExists();
+    when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenThrow(new RuntimeException("502"));
+
+    service.execute(task());
+
+    assertEquals(FixService.NO_PR_DETAILS, threadReply());
+  }
+
+  @Test
+  void repliesNoPrDetailsWhenThePullRequestHasNoHead() {
+    assertNoPrDetails(new PullRequestDetails("Title", "Body", null, new Ref("basesha", "main")));
+  }
+
+  @Test
+  void repliesNoPrDetailsWhenTheHeadHasNoSha() {
+    assertNoPrDetails(
+        new PullRequestDetails(
+            "Title", "Body", new Ref(" ", "feature-branch"), new Ref("basesha", "main")));
+  }
+
+  @Test
+  void repliesNoPrDetailsWhenTheHeadHasNoBranchName() {
+    assertNoPrDetails(
+        new PullRequestDetails("Title", "Body", new Ref(HEAD_SHA), new Ref("basesha", "main")));
+  }
+
+  @Test
+  void repliesNoThreadWhenGitHubReturnsNoRootComment() {
+    service.execute(task());
+
+    assertEquals(FixService.NO_THREAD, threadReply());
+  }
+
+  @Test
+  void repliesNoThreadWhenTheRootCommentIsBlank() {
+    rootComment("src/Foo.java", "  ", "thrillhousebot[bot]");
+
+    service.execute(task());
+
+    assertEquals(FixService.NO_THREAD, threadReply());
+  }
+
+  @Test
+  void aFailedThreadReplyIsLoggedAndNotPropagated() {
+    when(reviewClient.replyToReviewComment(any(), any(), any(), any(), anyInt(), anyLong(), any()))
+        .thenThrow(new RuntimeException("403"));
+
+    assertDoesNotThrow(() -> service.execute(task()));
+
+    verifyNoInteractions(fixGenerator);
+  }
+
+  @Test
+  void anUnexpectedFailureRepliesGenerationFailed() {
+    findingThreadExists();
+    prWithFooFile();
+    modelReturns(FOO_FIX);
+    when(reviewConfig.fix()).thenThrow(new IllegalStateException("config unavailable"));
+
+    service.execute(task());
+
+    assertEquals(FixService.GENERATION_FAILED, threadReply());
+    verifyNoGitWrites();
+  }
+
+  @Test
+  void aFailureBeforeAnyCredentialIsSwallowed() {
+    when(authClient.getAuthHeader(anyLong())).thenThrow(new RuntimeException("no token"));
+
+    assertDoesNotThrow(() -> service.execute(task()));
+
+    verifyNoInteractions(reviewClient, fixGenerator);
+  }
+
+  // ---- Fork detection ----
+
+  @Test
+  void aHeadInTheSameRepositoryIsNotAForkWhateverItsCase() {
+    findingThreadExists();
+    prWithHead(new Ref(HEAD_SHA, "feature-branch", new RefRepo("Owner/Repo")));
+    gitDataSucceeds();
+    modelReturns(FOO_FIX);
+
+    service.execute(task());
+
+    verify(prClient).createPullRequest(any(), any(), eq("owner"), eq("repo"), any());
+  }
+
+  @Test
+  void aHeadRepositoryWithNoNameIsNotTakenForAFork() {
+    findingThreadExists();
+    prWithHead(new Ref(HEAD_SHA, "feature-branch", new RefRepo(" ")));
+    gitDataSucceeds();
+    modelReturns(FOO_FIX);
+
+    service.execute(task());
+
+    verify(prClient).createPullRequest(any(), any(), eq("owner"), eq("repo"), any());
+  }
+
+  // ---- File context ----
+
+  @Test
+  void repliesNoFileContextWhenGitHubReturnsNoFile() {
+    findingThreadExists();
+    prWithFiles(modified("src/Foo.java"));
+
+    service.execute(task());
+
+    assertEquals(FixService.NO_FILE_CONTEXT, threadReply());
+    verifyNoInteractions(fixGenerator);
+  }
+
+  @Test
+  void repliesNoFileContextWhenTheFileHasNoContent() {
+    findingThreadExists();
+    prWithFiles(modified("src/Foo.java"));
+    when(prClient.getFileContent(
+            any(), any(), eq("owner"), eq("repo"), eq("src/Foo.java"), eq(HEAD_SHA)))
+        .thenReturn(new FileContent("Foo.java", "src/Foo.java", null, "base64", 0));
+
+    service.execute(task());
+
+    assertEquals(FixService.NO_FILE_CONTEXT, threadReply());
+  }
+
+  @Test
+  void repliesNoFileContextWhenTheFileReadFails() {
+    findingThreadExists();
+    prWithFiles(modified("src/Foo.java"));
+    when(prClient.getFileContent(
+            any(), any(), eq("owner"), eq("repo"), eq("src/Foo.java"), eq(HEAD_SHA)))
+        .thenThrow(new RuntimeException("502"));
+
+    service.execute(task());
+
+    assertEquals(FixService.NO_FILE_CONTEXT, threadReply());
+  }
+
+  @Test
+  void usesTheChangedFilesAndAnUnknownFileHeaderWhenTheThreadNamesNoPath() {
+    rootComment(null, "**🔴 HIGH — x should be 2**", "thrillhousebot[bot]");
+    prWithFooFile();
+    gitDataSucceeds();
+    modelReturns(FOO_FIX);
+
+    service.execute(
+        new FixService.FixTask("owner", "repo", 7, "main", 12345L, "alice", ROOT_COMMENT_ID, null));
+
+    assertTrue(generatorArgument(0).contains("File: (unknown)"));
+    assertTrue(generatorArgument(1).contains("### FILE: src/Foo.java"));
+  }
+
+  @Test
+  void fallsBackToTheCommandsPathWhenTheRootCommentHasNone() {
+    rootComment(" ", "**🔴 HIGH — x should be 2**", "thrillhousebot[bot]");
+    prWithFooFile();
+    gitDataSucceeds();
+    modelReturns(FOO_FIX);
+
+    service.execute(task());
+
+    assertTrue(generatorArgument(0).contains("File: src/Foo.java"));
+  }
+
+  @Test
+  void leavesRemovedAndOversizedFilesOutOfTheContext() {
+    findingThreadExists();
+    prWithFiles(
+        modified("src/Foo.java"),
+        new FileDiff("src/Gone.java", "removed", 0, 1, 1, PATCH),
+        modified("src/Big.java"));
+    stubFileContent("src/Foo.java", FOO_CONTENT);
+    stubFileContent("src/Big.java", "x".repeat(40_001));
+    gitDataSucceeds();
+    modelReturns(FOO_FIX);
+
+    service.execute(task());
+
+    var context = generatorArgument(1);
+    assertTrue(context.contains("### FILE: src/Foo.java"));
+    assertFalse(context.contains("src/Gone.java"));
+    assertFalse(context.contains("src/Big.java"));
+    verify(prClient, never())
+        .getFileContent(any(), any(), any(), any(), eq("src/Gone.java"), any());
+  }
+
+  @Test
+  void stopsLoadingContextAtTheFileCap() {
+    findingThreadExists();
+    var files = new ArrayList<FileDiff>();
+    files.add(modified("src/Foo.java"));
+    stubFileContent("src/Foo.java", FOO_CONTENT);
+    for (int i = 0; i < 10; i++) {
+      files.add(modified("src/F" + i + ".java"));
+      stubFileContent("src/F" + i + ".java", "class F" + i + " {}\n");
+    }
+    prWithFiles(files.toArray(FileDiff[]::new));
+    gitDataSucceeds();
+    modelReturns(FOO_FIX);
+
+    service.execute(task());
+
+    // The flagged file plus seven more: eight files in all.
+    var context = generatorArgument(1);
+    assertTrue(context.contains("### FILE: src/F6.java"));
+    assertFalse(context.contains("### FILE: src/F7.java"));
+  }
+
+  @Test
+  void stopsLoadingContextAtTheCharacterCap() {
+    findingThreadExists();
+    prWithFiles(
+        modified("src/Foo.java"),
+        modified("src/A.java"),
+        modified("src/B.java"),
+        modified("src/C.java"),
+        modified("src/D.java"));
+    stubFileContent("src/Foo.java", FOO_CONTENT);
+    for (var name : List.of("A", "B", "C")) {
+      stubFileContent("src/" + name + ".java", "y".repeat(40_000));
+    }
+    stubFileContent("src/D.java", "class D {}\n");
+    gitDataSucceeds();
+    modelReturns(FOO_FIX);
+
+    service.execute(task());
+
+    var context = generatorArgument(1);
+    assertTrue(context.contains("### FILE: src/C.java"));
+    assertFalse(context.contains("### FILE: src/D.java"));
+  }
+
+  // ---- Edits ----
+
+  private void assertEditMismatch(String json) {
+    findingThreadExists();
+    prWithFooFile();
+    modelReturns(json);
+
+    service.execute(task());
+
+    assertEquals(FixService.EDIT_MISMATCH, threadReply());
+    verifyNoGitWrites();
+  }
+
+  @Test
+  void abortsOnAnEditThatCannotBeApplied() {
+    assertEditMismatch(
+        """
+        {"summary": "s", "edits": [
+          {"file": "src/Foo.java", "operation": "replace", "search": "", "replace": "x"}
+        ], "notes": ""}
+        """);
+  }
+
+  @Test
+  void abortsWhenCreatedPathIsAbsolute() {
+    assertEditMismatch(
+        """
+        {"summary": "s", "edits": [
+          {"file": "/etc/New.java", "operation": "create", "search": "", "replace": "b"}
+        ], "notes": ""}
+        """);
+  }
+
+  @Test
+  void abortsWhenCreatedPathUsesBackslashes() {
+    assertEditMismatch(
+        """
+        {"summary": "s", "edits": [
+          {"file": "src\\\\New.java", "operation": "create", "search": "", "replace": "b"}
+        ], "notes": ""}
+        """);
+  }
+
+  @Test
+  void abortsWhenCreatedPathIsAFileTheModelWasShown() {
+    assertEditMismatch(
+        """
+        {"summary": "s", "edits": [
+          {"file": "src/Foo.java", "operation": "create", "search": "", "replace": "b"}
+        ], "notes": ""}
+        """);
+  }
+
+  @Test
+  void abortsWhenTheSamePathIsCreatedTwice() {
+    when(prClient.getFileContent(
+            any(), any(), eq("owner"), eq("repo"), eq("src/New.java"), eq(HEAD_SHA)))
+        .thenThrow(new WebApplicationException(Response.status(404).build()));
+
+    assertEditMismatch(
+        """
+        {"summary": "s", "edits": [
+          {"file": "src/New.java", "operation": "create", "search": "", "replace": "a"},
+          {"file": "src/New.java", "operation": "create", "search": "", "replace": "b"}
+        ], "notes": ""}
+        """);
+  }
+
+  @Test
+  void abortsWhenCreatedPathAlreadyExistsOnTheBranch() {
+    stubFileContent("src/Existing.java", "class Existing {}\n");
+
+    assertEditMismatch(
+        """
+        {"summary": "s", "edits": [
+          {"file": "src/Existing.java", "operation": "create", "search": "", "replace": "b"}
+        ], "notes": ""}
+        """);
+  }
+
+  // ---- Replies and titles ----
+
+  @Test
+  void declinesWithoutANotesSectionWhenTheModelGivesNone() {
+    findingThreadExists();
+    prWithFooFile();
+    modelReturns(
+        """
+        {"summary": "s", "edits": [], "notes": " "}
+        """);
+
+    service.execute(task());
+
+    assertEquals("🔧 ThrillhouseBot declined to draft a fix for this finding.", threadReply());
+  }
+
+  private String fixPrTitleFor(String summaryJson) {
+    findingThreadExists();
+    prWithFooFile();
+    gitDataSucceeds();
+    modelReturns(
+        """
+        {"summary": %s, "edits": [
+          {"file": "src/Foo.java", "operation": "replace",
+           "search": "int x = 1;", "replace": "int x = 2;"}
+        ], "notes": ""}
+        """
+            .formatted(summaryJson));
+
+    service.execute(task());
+
+    var pr = ArgumentCaptor.forClass(GitHubPullRequestClient.CreatePullRequestRequest.class);
+    verify(prClient).createPullRequest(any(), any(), eq("owner"), eq("repo"), pr.capture());
+    return pr.getValue().title();
+  }
+
+  @Test
+  void titlesTheFixPrGenericallyWhenTheModelGivesNoSummary() {
+    assertEquals("🤖 Fix: proposed fix for a review finding", fixPrTitleFor("\"\""));
+  }
+
+  @Test
+  void cutsALongSummaryToOneBoundedTitleLine() {
+    var title = fixPrTitleFor("\"" + "word ".repeat(30) + "\"");
+
+    assertTrue(title.endsWith("…"), title);
+    assertEquals("🤖 Fix: ".length() + 70, title.length());
   }
 
   @Test
