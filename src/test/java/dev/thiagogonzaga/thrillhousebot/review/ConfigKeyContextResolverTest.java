@@ -460,6 +460,7 @@ class ConfigKeyContextResolverTest {
           "+y = 2 /* getenv(\"X\") */",
           "+local v = 1 -- os.getenv(\"X\")",
           "+msg = 'use ENV[\"X\"] instead'",
+          "+<p>x</p><!-- os.Getenv(\"X\") configured later -->",
           "+s := \"say \\\"os.Getenv(X)\\\" here\""
         })
     void shouldNotTakeAReadNamedInACommentOrLiteralForOne(String line) {

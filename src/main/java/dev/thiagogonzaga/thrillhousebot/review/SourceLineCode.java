@@ -78,11 +78,12 @@ final class SourceLineCode {
   }
 
   /**
-   * A comment after code: {@code //} or {@code /*} anywhere, and a {@code #} or {@code --} that
-   * follows whitespace ({@code #[} and {@code #{} are code, as is {@code --} glued to a name).
+   * A comment after code: {@code //}, {@code /*} or {@code <!--} anywhere, and a {@code #} or
+   * {@code --} that follows whitespace ({@code #[} and {@code #{} are code, as is {@code --} glued
+   * to a name).
    */
   private static boolean opensTrailingComment(String line, int i) {
-    if (line.startsWith("//", i) || line.startsWith("/*", i)) {
+    if (line.startsWith("//", i) || line.startsWith("/*", i) || line.startsWith("<!--", i)) {
       return true;
     }
     if (!Character.isWhitespace(line.charAt(i - 1))) {
