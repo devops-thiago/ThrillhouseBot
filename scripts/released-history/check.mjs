@@ -106,7 +106,9 @@ export function check(git, baseSha, headSha) {
   const base = git.mergeBase(baseSha, headSha);
   const released = releasedVersions(git.tags());
   const changes = git.changes(base, headSha);
-  const violations = archiveViolations(changes, released, git.archivedVersions(base));
+  // Whether an archive already exists is judged at the base branch's tip, not the merge base:
+  // a branch cut before the archive landed would otherwise add to it as if it were new.
+  const violations = archiveViolations(changes, released, git.archivedVersions(baseSha));
   if (changes.some(({ path }) => path === CHANGELOG)) {
     violations.push(...changelogViolations(git.show(base, CHANGELOG) ?? '', git.show(headSha, CHANGELOG) ?? '', released));
   }

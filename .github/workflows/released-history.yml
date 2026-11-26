@@ -8,8 +8,8 @@ name: Released history
 #
 # pull_request_target, so this file and the checker always come from the base branch: under
 # pull_request a pull request runs its own copy of the workflow and could rewrite the check it is
-# held to. Nothing from the pull request is executed here: its commits are fetched as git objects
-# and only read through git diff and git show. The checker's tests, which do run the pull
+# held to. Nothing from the pull request is executed here: its test merge is fetched as git
+# objects and only read through git diff and git show. The checker's tests, which do run the pull
 # request's code, run in ci.yml under pull_request.
 on:
   pull_request_target:
@@ -28,18 +28,22 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Fetch the pull request's commits without checking them out
+      # The check reads GitHub's test merge of the pull request into its base, against that
+      # merge's first parent: exactly what merging would change, however old the branch is.
+      - name: Fetch the pull request's test merge without checking it out
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          git fetch --no-tags --quiet "https://github.com/${GITHUB_REPOSITORY}.git" "+refs/pull/${PR_NUMBER}/head:refs/remotes/pull/head"
-          test "$(git rev-parse refs/remotes/pull/head)" = "$HEAD_SHA"
+          if ! git fetch --no-tags --quiet "https://github.com/${GITHUB_REPOSITORY}.git" "+refs/pull/${PR_NUMBER}/merge:refs/remotes/pull/merge"; then
+            echo "::error::GitHub has no test merge for this pull request; resolve its conflicts with the base branch and push again."
+            exit 1
+          fi
+          {
+            echo "MERGE_SHA=$(git rev-parse refs/remotes/pull/merge)"
+            echo "MERGE_BASE_SHA=$(git rev-parse refs/remotes/pull/merge^1)"
+          } >> "$GITHUB_ENV"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
       - name: Check released CHANGELOG sections and archived docs
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: node scripts/released-history/check.mjs
+        run: BASE_SHA="$MERGE_BASE_SHA" HEAD_SHA="$MERGE_SHA" node scripts/released-history/check.mjs

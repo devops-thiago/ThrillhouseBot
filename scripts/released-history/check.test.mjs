@@ -143,3 +143,21 @@ test('a file name with spaces is read whole', () => {
     r.cleanup();
   }
 });
+
+test('a branch cut before an archive existed cannot add to it once released', () => {
+  const r = repo();
+  try {
+    r.write('README.md', 'x\n');
+    const root = r.commit('root');
+    r.write('website/src/content/docs/1.0.0/index.md', 'v1.0.0 docs\n');
+    const main = r.commit('archive 1.0.0');
+    r.git('tag', 'v1.0.0');
+    r.git('checkout', '-q', '-b', 'stale', root);
+    r.write('website/src/content/docs/1.0.0/extra.md', 'sneaked in\n');
+    const head = r.commit('add to the archive');
+    assert.deepEqual(check(new Git(r.dir), main, head),
+      ['website/src/content/docs/1.0.0/extra.md: an archived docs file of a released version was added']);
+  } finally {
+    r.cleanup();
+  }
+});
