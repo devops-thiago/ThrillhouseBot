@@ -4,7 +4,7 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
-## [0.9.3] - 2026-11-25
+## [0.9.3] - 2026-11-26
 
 Follow-up rounds re-check older findings whenever a fix could stand and stop closing the same
 finding twice, a webhook redelivered after a restart is no longer reviewed again, and `/review`
