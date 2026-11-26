@@ -441,7 +441,9 @@ class ConfigKeyContextResolverTest {
               List.of(added, context, removed, noPatch, header)));
     }
 
-    /** A line that is only a comment names an environment read without making one. */
+    /**
+     * A read named only in a comment, a trailing comment or a string literal is named, not made.
+     */
     @ParameterizedTest
     @ValueSource(
         strings = {
@@ -451,9 +453,28 @@ class ConfigKeyContextResolverTest {
           "+/* switch to process.env when we containerize */",
           "+-- ENV[\"X\"] is set by the job",
           "+<!-- import.meta.env.VITE_X -->",
-          " // context comment: os.Getenv(\"X\")"
+          " // context comment: os.Getenv(\"X\")",
+          "+fmt.Fprintln(w, \"check process.env.FOO when unset\")",
+          "+cfg = nil  # we plan to switch to os.Getenv(\"RATE_LIMIT_MAX\") in main.go",
+          "+x := 1 // os.Getenv(\"X\") later",
+          "+y = 2 /* getenv(\"X\") */",
+          "+local v = 1 -- os.getenv(\"X\")",
+          "+msg = 'use ENV[\"X\"] instead'",
+          "+<p>x</p><!-- os.Getenv(\"X\") configured later -->",
+          "+x = 1 --- os.getenv(\"X\")",
+          "+x = 1 ---",
+          "+s = \"fallback {System.getenv(\\\"HOME\\\")}\"",
+          "+const tpl = \"{ process.env.HOME }\"",
+          "+x = 1 --[[ os.getenv(\"X\") is gone ]]",
+          "+v = 1 {- os.getenv(\"X\") -}",
+          "+v = 1 /* a */ + 2 /* os.getenv(\"X\") */",
+          "+x = 1 /* os.getenv(\"X\") until the next line",
+          "+doc = \"\"\"reads from os.getenv(\"X\") at boot\"\"\"",
+          "+doc = '''reads from os.getenv(\"X\") at boot'''",
+          "+v = 1  \"\"\"Defaults to os.getenv(\"HOME\") when unset",
+          "+s := \"say \\\"os.Getenv(X)\\\" here\""
         })
-    void shouldNotTakeACommentNamingAnEnvironmentReadForOne(String line) {
+    void shouldNotTakeAReadNamedInACommentOrLiteralForOne(String line) {
       var file = new FileDiff("a.go", "modified", 1, 0, 1, "@@ -1 +1 @@\n" + line);
 
       assertTrue(ConfigKeyContextResolver.environmentReaders(List.of(file)).isEmpty());
@@ -484,6 +505,40 @@ class ConfigKeyContextResolverTest {
 
       assertEquals(
           java.util.Set.of("a.go"), ConfigKeyContextResolver.environmentReaders(List.of(file)));
+    }
+
+    /** A read inside a string interpolation, or beside a quote that opens no literal, is made. */
+    @ParameterizedTest
+    @ValueSource(
+        strings = {
+          "+val v = \"${System.getenv(\"X\")}\"",
+          "+v = \"#{ENV['X']}\"",
+          "+const v = `${process.env.X}`",
+          "+v = f\"{os.environ['X']}\"",
+          "+let v = \"\\(ProcessInfo.processInfo.environment[\"X\"] ?? \"\")\"",
+          "+var v = $\"{Environment.GetEnvironmentVariable(\"X\")}\";",
+          "+v = \"${a(b) + getenv(\"X\")}\"",
+          "+fn v(x: &'static str) -> String { env::var(x).unwrap() }",
+          "+  #define LIMIT getenv(\"LIMIT\")",
+          "+url = \"http://x/#a\" + os.getenv(\"X\")",
+          "+v = os.getenv(\"X\") # the limit",
+          "+v = f\"\"\"{os.environ['X']}\"\"\"",
+          "+v = \"\" + os.getenv(\"X\")",
+          "+x = a /*n*/ + os.getenv(\"X\")",
+          "+/* n */ x = os.getenv(\"X\")",
+          "+<!-- n --><p>{{ os.getenv(\"X\") }}</p>",
+          "+v = 1 --[[ n ]] + os.getenv(\"X\")",
+          "+v = 1 {- n -} + getenv(\"X\")",
+          "+int a[] = {-1}; char *v = getenv(\"X\");",
+          "+--count; v = getenv(\"X\")",
+          "+var v = $@\"{Environment.GetEnvironmentVariable(\"X\")}\";",
+          "+if c == '{' { v = getenv(\"X\") }"
+        })
+    void shouldKeepAReadInAnInterpolationOrBesideAStrayQuote(String line) {
+      var file = new FileDiff("a.x", "modified", 1, 0, 1, "@@ -1 +1 @@\n" + line);
+
+      assertEquals(
+          java.util.Set.of("a.x"), ConfigKeyContextResolver.environmentReaders(List.of(file)));
     }
 
     /** Swift, Scala and PHP read the environment in their own idioms. */

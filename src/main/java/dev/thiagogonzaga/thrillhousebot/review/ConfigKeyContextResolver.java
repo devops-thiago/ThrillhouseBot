@@ -439,37 +439,18 @@ public class ConfigKeyContextResolver {
 
   private static boolean readsEnvironment(String patch) {
     for (var line : patch.split("\n", -1)) {
-      // Added and context lines only: a hunk header's trailing section text is neither. A line
-      // that is only a comment names a read without making one, so it would spend a fetch slot.
+      // Added and context lines only: a hunk header's trailing section text is neither. A read
+      // named only in a comment or a string literal is not made, so it would spend a fetch slot.
       if ((line.startsWith("+") || line.startsWith(" "))
-          && !isCommentLine(line.substring(1))
-          && ENVIRONMENT_READS.stream().anyMatch(line::contains)) {
+          && readsEnvironmentIn(SourceLineCode.of(line.substring(1)))) {
         return true;
       }
     }
     return false;
   }
 
-  /**
-   * Comment openers of the languages {@link #ENVIRONMENT_READS} covers, at a line's start. A {@code
-   * *} counts only as a block comment's continuation ({@code * text}), so a pointer write such as
-   * {@code *p = getenv("X")} is still code.
-   */
-  private static final List<String> COMMENT_OPENERS = List.of("//", "/*", "--", "<!--", "* ");
-
-  private static boolean isCommentLine(String code) {
-    var trimmed = code.strip();
-    return COMMENT_OPENERS.stream().anyMatch(trimmed::startsWith) || isHashComment(trimmed);
-  }
-
-  /**
-   * A {@code #} comment (Python, Ruby, shell, YAML), but not a C preprocessor line such as {@code
-   * #define X getenv("X")} or a Rust attribute {@code #[...]}, which are code.
-   */
-  private static boolean isHashComment(String trimmed) {
-    return trimmed.startsWith("#")
-        && !trimmed.startsWith("#[")
-        && !trimmed.matches("#\\s*(define|if|ifdef|ifndef|elif|else|endif|include|undef)\\b.*");
+  private static boolean readsEnvironmentIn(String code) {
+    return ENVIRONMENT_READS.stream().anyMatch(code::contains);
   }
 
   private static int byPathDepthThenName(String left, String right) {
