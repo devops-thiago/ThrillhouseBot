@@ -21,16 +21,20 @@ import java.security.interfaces.RSAPrivateKey;
 import java.security.spec.InvalidKeySpecException;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.util.Base64;
+import java.util.Optional;
 
 /**
  * Parses a PEM-encoded PKCS#1 RSA private key (a GitHub App key) into an {@link RSAPrivateKey}.
  *
- * <p>Shared by {@code GitHubAuthClient}, which signs the App JWT, and the startup config validator,
- * which fails fast when {@code GITHUB_PRIVATE_KEY} is missing or malformed. Keeping a single parser
- * guarantees the value the validator accepts at boot is exactly the value the signer can use at
- * runtime.
+ * <p>Shared by the startup config validator, which fails fast when {@code GITHUB_PRIVATE_KEY} is
+ * missing or malformed, and {@link GitHubAppCredentialInterceptor}, which hands the extension that
+ * signs the App JWT the same key in a form it can read. One parser keeps the value the validator
+ * accepts at boot usable by the signer at runtime.
  */
 public final class RsaPrivateKeyParser {
+
+  private static final String HEADER = "-----BEGIN RSA PRIVATE KEY-----";
+  private static final String FOOTER = "-----END RSA PRIVATE KEY-----";
 
   private RsaPrivateKeyParser() {}
 
@@ -50,19 +54,33 @@ public final class RsaPrivateKeyParser {
     }
 
     try {
-      var pem =
-          key.replace("\\n", "\n")
-              .replace("-----BEGIN RSA PRIVATE KEY-----", "")
-              .replace("-----END RSA PRIVATE KEY-----", "")
-              .replaceAll("\\s", "");
-
-      var pkcs1Bytes = Base64.getDecoder().decode(pem);
-      byte[] pkcs8Bytes = pkcs1ToPkcs8(pkcs1Bytes);
+      byte[] pkcs8Bytes = pkcs1ToPkcs8(pkcs1Bytes(key));
       KeyFactory keyFactory = KeyFactory.getInstance("RSA");
       return (RSAPrivateKey) keyFactory.generatePrivate(new PKCS8EncodedKeySpec(pkcs8Bytes));
     } catch (NoSuchAlgorithmException | InvalidKeySpecException | IllegalArgumentException e) {
       throw new IllegalArgumentException("Could not parse RSA private key: " + e.getMessage(), e);
     }
+  }
+
+  /**
+   * Rewrites a key {@link #parse} accepts as an armored PEM with real line breaks.
+   *
+   * @return the canonical PEM, or empty when {@link #parse} rejects the key
+   */
+  static Optional<String> canonicalPem(String key) {
+    try {
+      parse(key);
+    } catch (IllegalArgumentException _) {
+      return Optional.empty();
+    }
+    var body = Base64.getMimeEncoder(64, new byte[] {'\n'}).encodeToString(pkcs1Bytes(key));
+    return Optional.of(HEADER + "\n" + body + "\n" + FOOTER + "\n");
+  }
+
+  private static byte[] pkcs1Bytes(String key) {
+    var base64 =
+        key.replace("\\n", "\n").replace(HEADER, "").replace(FOOTER, "").replaceAll("\\s", "");
+    return Base64.getDecoder().decode(base64);
   }
 
   /**
