@@ -441,7 +441,9 @@ class ConfigKeyContextResolverTest {
               List.of(added, context, removed, noPatch, header)));
     }
 
-    /** A line that is only a comment names an environment read without making one. */
+    /**
+     * A read named only in a comment, a trailing comment or a string literal is named, not made.
+     */
     @ParameterizedTest
     @ValueSource(
         strings = {
@@ -451,9 +453,16 @@ class ConfigKeyContextResolverTest {
           "+/* switch to process.env when we containerize */",
           "+-- ENV[\"X\"] is set by the job",
           "+<!-- import.meta.env.VITE_X -->",
-          " // context comment: os.Getenv(\"X\")"
+          " // context comment: os.Getenv(\"X\")",
+          "+fmt.Fprintln(w, \"check process.env.FOO when unset\")",
+          "+cfg = nil  # we plan to switch to os.Getenv(\"RATE_LIMIT_MAX\") in main.go",
+          "+x := 1 // os.Getenv(\"X\") later",
+          "+y = 2 /* getenv(\"X\") */",
+          "+local v = 1 -- os.getenv(\"X\")",
+          "+msg = 'use ENV[\"X\"] instead'",
+          "+s := \"say \\\"os.Getenv(X)\\\" here\""
         })
-    void shouldNotTakeACommentNamingAnEnvironmentReadForOne(String line) {
+    void shouldNotTakeAReadNamedInACommentOrLiteralForOne(String line) {
       var file = new FileDiff("a.go", "modified", 1, 0, 1, "@@ -1 +1 @@\n" + line);
 
       assertTrue(ConfigKeyContextResolver.environmentReaders(List.of(file)).isEmpty());
@@ -484,24 +493,6 @@ class ConfigKeyContextResolverTest {
 
       assertEquals(
           java.util.Set.of("a.go"), ConfigKeyContextResolver.environmentReaders(List.of(file)));
-    }
-
-    /** A read named only in a string literal or a trailing comment is not made. */
-    @ParameterizedTest
-    @ValueSource(
-        strings = {
-          "+fmt.Fprintln(w, \"check process.env.FOO when unset\")",
-          "+cfg = nil  # we plan to switch to os.Getenv(\"RATE_LIMIT_MAX\") in main.go",
-          "+x := 1 // os.Getenv(\"X\") later",
-          "+y = 2 /* getenv(\"X\") */",
-          "+local v = 1 -- os.getenv(\"X\")",
-          "+msg = 'use ENV[\"X\"] instead'",
-          "+s := \"say \\\"os.Getenv(X)\\\" here\""
-        })
-    void shouldNotTakeAReadNamedInALiteralOrTrailingCommentForOne(String line) {
-      var file = new FileDiff("a.go", "modified", 1, 0, 1, "@@ -1 +1 @@\n" + line);
-
-      assertTrue(ConfigKeyContextResolver.environmentReaders(List.of(file)).isEmpty());
     }
 
     /** A read inside a string interpolation, or beside a quote that opens no literal, is made. */
