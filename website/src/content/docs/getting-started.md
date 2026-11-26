@@ -20,6 +20,13 @@ the bot's public hostname and click **Create ThrillhouseBot GitHub App**.
 The page builds the app manifest and sends it to GitHub; you can register the
 app before starting the bot.
 
+Two fields are optional. **Organization** registers the app under that
+organization instead of your personal account. **GitHub address** (default
+`https://github.com`) takes a plain `https://host` and changes where the
+manifest is sent. The bot's support for other addresses is still in progress
+and untested on a real instance
+([#1487](https://github.com/devops-thiago/ThrillhouseBot/issues/1487)).
+
 After GitHub creates the app:
 
 1. Note the **App ID** (app settings → About).
@@ -56,7 +63,8 @@ npx smee-client -u https://smee.io/YOUR_CHANNEL -t http://localhost:8080/api/web
 
 :::note[Manual registration instead]
 To register the app manually, open
-<https://github.com/settings/apps/new> with these settings:
+<https://github.com/settings/apps/new> (for an organization,
+`https://github.com/organizations/<org>/settings/apps/new`) with these settings:
 
 | Setting | Value |
 |---|---|
@@ -78,7 +86,8 @@ redirects happen in your browser against the local bot.
 Once the bot is running, `install.html` on the bot's own URL
 (`https://<your-host>/install.html` behind a reverse proxy, or
 `http://localhost:8080/install.html` when hitting it directly) builds the
-manifest from the detected host when adding the app to another account. Smee-based dev setups should re-register through the
+manifest from the detected host when adding the app to another account. Its
+GitHub address field, left empty, uses the address the bot is configured with. Smee-based dev setups should re-register through the
 [hosted installer](/ThrillhouseBot/install.html) instead: the bot's own page
 registers the origin it's served from, without the Smee webhook-root handling.
 :::

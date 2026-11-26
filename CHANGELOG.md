@@ -25,6 +25,13 @@ All notable changes to ThrillhouseBot.
   into several batches, a test file joins the batch of the source file it names where that fits, so
   a failed call no longer drops one without the other. Which files are reviewed and the number of
   calls do not change.
+- **The installer pages take a GitHub address and an organization** (#1492): both fields are
+  optional. An organization name registers the App under that organization instead of your
+  personal account. A typed address has to be a plain `https` origin; left empty, it is
+  `https://github.com`, or on the page the bot serves, the address the bot is configured with.
+  Each page shows where the manifest will be sent and keeps the button disabled while either
+  value is invalid. Support in the bot for other addresses is still in progress and untested on a
+  real instance (#1487).
 ### Fixed
 
 - **GitHub Enterprise Server can be used.** The bot called `https://api.github.com` and linked to
