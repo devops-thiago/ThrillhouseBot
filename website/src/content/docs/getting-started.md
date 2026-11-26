@@ -27,6 +27,9 @@ manifest is sent. The bot's support for other addresses is still in progress
 and untested on a real instance
 ([#1487](https://github.com/devops-thiago/ThrillhouseBot/issues/1487)).
 
+Installing for an organization on GitHub Enterprise? Read
+[GitHub Enterprise](/ThrillhouseBot/github-enterprise/) too.
+
 After GitHub creates the app:
 
 1. Note the **App ID** (app settings → About).
