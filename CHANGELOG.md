@@ -12,6 +12,19 @@ All notable changes to ThrillhouseBot.
   agents need not infer next work from several sections. A hidden `thrillhousebot:head` line
   fingerprints the head between edits; a fixed command cheat sheet makes the summary
   self-sufficient for agents without the repository's AGENTS.md. No extra model call.
+
+### Changed
+
+- **A partial review says why the call failed and lists every file** (#1472): the notice names
+  what ended a failed batch (a timeout, the model's context window, a response cut before any
+  finding was complete, the provider's HTTP status or rate limit, or an unreadable answer). When
+  it has to roll file names up as "+N more", a collapsed list under it names every file not fully
+  reviewed, up to 200. The wording comes from the kind of failure, never from the provider's
+  error body.
+- **A test is reviewed in the same call as the source it covers** (#1472): when a review is split
+  into several batches, a test file joins the batch of the source file it names where that fits, so
+  a failed call no longer drops one without the other. Which files are reviewed and the number of
+  calls do not change.
 ### Fixed
 
 - **GitHub Enterprise Server can be used.** The bot called `https://api.github.com` and linked to

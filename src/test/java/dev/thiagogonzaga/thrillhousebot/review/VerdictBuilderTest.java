@@ -42,6 +42,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -274,6 +275,27 @@ class VerdictBuilderTest {
         summary);
     assertTrue(summary.contains("no diff content for them"), summary);
     assertTrue(summary.contains("(assets/logo.png)"), summary);
+  }
+
+  @Test
+  void aLongListOfFailedFilesNamesTheCauseAndListsEveryFileUnderTheBanner() {
+    var ctx = contextWithLineCapOmissions(0);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), true, null, null, null, null);
+    var failed = IntStream.rangeClosed(1, 12).mapToObj(i -> "failed" + i + ".java").toList();
+    plan.recordUncoveredFiles(failed, CallFailureCause.TIMED_OUT);
+
+    var summary = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan).summaryMarkdown();
+
+    assertTrue(
+        summary.contains(
+            "12 file(s) were not reviewed because the review call for them did not complete: the"
+                + " call timed out (failed1.java"),
+        summary);
+    assertTrue(summary.contains("+2 more"), summary);
+    assertTrue(summary.contains("<summary>All 12 files not fully reviewed</summary>"), summary);
+    assertTrue(summary.contains("- `failed12.java`: not reviewed, the call timed out"), summary);
   }
 
   @Test

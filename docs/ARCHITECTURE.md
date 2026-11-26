@@ -200,7 +200,9 @@ Each review call that returned findings adds a verifier call.
 Token budgeting is on whenever `REVIEW_MAX_INPUT_TOKENS` is above `0` (default `48000`).
 `DiffBudgetPlanner` then packs files into at most `REVIEW_MAX_AI_CALLS` − 1 batches (default 6
 calls) and reserves one call for the summary. At `REVIEW_MAX_AI_CALLS=1` the single-call lane skips
-the summary call and says so in the summary.
+the summary call and says so in the summary. When there is more than one batch, a test file is moved
+into the batch of the source file it names (`FooTest` with `Foo`, `foo.test.ts` with `foo.ts`) where
+that fits without adding a batch or leaving out another file.
 
 The review call (`PrReviewer`) returns findings and the status of each earlier finding, nothing
 else. The summary call (`PrSummarizer`) writes every summary field (purpose, description gaps, file
