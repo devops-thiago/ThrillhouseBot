@@ -32,6 +32,7 @@ import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Response;
 import java.io.IOException;
 import java.io.InterruptedIOException;
+import java.net.SocketTimeoutException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -389,6 +390,21 @@ class DashboardAccessCheckerTest {
       assertTrue(Thread.currentThread().isInterrupted());
     } finally {
       Thread.interrupted();
+    }
+  }
+
+  @Test
+  void aTimedOutMembershipCheckIsLoggedAndLeavesTheThreadUninterrupted() throws Exception {
+    when(organization.getMembership(anyString()))
+        .thenThrow(new SocketTimeoutException("Read timed out"));
+
+    try (var log = CapturedLog.of(DashboardAccessChecker.class)) {
+      assertFalse(
+          checker.repositoryScope("alice", TOKEN).installations().get(10L).installationWide());
+      assertFalse(Thread.currentThread().isInterrupted());
+      var warnings = log.at(Level.WARNING);
+      assertEquals(1, warnings.size(), warnings.toString());
+      assertTrue(warnings.get(0).contains("Read timed out"), warnings.get(0));
     }
   }
 
