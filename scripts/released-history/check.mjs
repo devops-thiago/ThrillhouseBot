@@ -74,9 +74,9 @@ export function archiveViolations(changes, released, archivedAtBase) {
 export function versionsViolations(base, head) {
   if (base === null) return [];
   const entries = (text) => JSON.parse(text).versions ?? [];
-  const after = head === null ? [] : entries(head);
+  const after = new Set((head === null ? [] : entries(head)).map((entry) => JSON.stringify(entry)));
   return entries(base)
-    .filter((entry) => !after.some((other) => JSON.stringify(other) === JSON.stringify(entry)))
+    .filter((entry) => !after.has(JSON.stringify(entry)))
     .map((entry) => `${VERSIONS}: the archived version entry ${JSON.stringify(entry)} was removed or changed`);
 }
 
