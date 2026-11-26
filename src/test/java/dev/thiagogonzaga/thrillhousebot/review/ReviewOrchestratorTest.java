@@ -2463,7 +2463,7 @@ class ReviewOrchestratorTest {
         verify(session, never()).setStatus(ReviewSession.STATUS_FAILED);
         assertEquals(1, lifecycleBroadcasts().size());
         // #73: the verdict is on the PR, so a failed session write still announces a completion.
-        verify(notifier).reviewCompleted(any(), anyString(), any());
+        verify(notifier).reviewCompleted(any(), anyString(), any(), any());
         verifyNoMoreInteractions(notifier);
       }
     }
@@ -2673,7 +2673,8 @@ class ReviewOrchestratorTest {
             .reviewCompleted(
                 argThat(r -> "abcdefgh".equals(r.commitSha())),
                 anyString(),
-                argThat(r -> r.reviewState() == ReviewState.APPROVE));
+                argThat(r -> r.reviewState() == ReviewState.APPROVE),
+                any());
         verifyNoMoreInteractions(notifier);
       }
     }
@@ -8574,7 +8575,8 @@ class ReviewOrchestratorTest {
             .reviewCompleted(
                 argThat(r -> r.prNumber() == 42),
                 eq(SESSION_URL),
-                argThat(ReviewResult::heldOnCiOnly));
+                argThat(ReviewResult::heldOnCiOnly),
+                any());
         verifyNoMoreInteractions(notifier);
       }
     }
