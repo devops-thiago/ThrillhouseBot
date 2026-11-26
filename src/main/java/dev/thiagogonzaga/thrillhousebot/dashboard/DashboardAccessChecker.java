@@ -18,15 +18,17 @@ package dev.thiagogonzaga.thrillhousebot.dashboard;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.AllowedAccounts;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubApiError;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubUserClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstallationChange;
+import dev.thiagogonzaga.thrillhousebot.github.InstallationRepository;
 import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
+import io.quarkiverse.githubapp.GitHubClientProvider;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.WebApplicationException;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -43,6 +45,9 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.IntFunction;
 import java.util.function.Supplier;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
+import org.kohsuke.github.GHFileNotFoundException;
+import org.kohsuke.github.GHMembership;
+import org.kohsuke.github.HttpException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -120,9 +125,8 @@ public class DashboardAccessChecker {
   static final Duration REMOVAL_LIMIT = Duration.ofMinutes(10);
 
   private final ThrillhouseConfig config;
-  private final GitHubAuthClient authClient;
-  private final GitHubInstallationClient installationClient;
   private final GitHubUserClient userClient;
+  private final GitHubClientProvider clientProvider;
   private final AllowedAccounts allowedAccounts;
   private final Supplier<Instant> clock;
   private final ConcurrentHashMap<String, CacheEntry> cache = new ConcurrentHashMap<>();
@@ -134,25 +138,22 @@ public class DashboardAccessChecker {
   @Inject
   public DashboardAccessChecker(
       ThrillhouseConfig config,
-      GitHubAuthClient authClient,
-      @RestClient GitHubInstallationClient installationClient,
       @RestClient GitHubUserClient userClient,
+      GitHubClientProvider clientProvider,
       AllowedAccounts allowedAccounts) {
-    this(config, authClient, installationClient, userClient, allowedAccounts, Instant::now);
+    this(config, userClient, clientProvider, allowedAccounts, Instant::now);
   }
 
   /** Visible for tests: allows controlling cache expiry. */
   DashboardAccessChecker(
       ThrillhouseConfig config,
-      GitHubAuthClient authClient,
-      GitHubInstallationClient installationClient,
       GitHubUserClient userClient,
+      GitHubClientProvider clientProvider,
       AllowedAccounts allowedAccounts,
       Supplier<Instant> clock) {
     this.config = config;
-    this.authClient = authClient;
-    this.installationClient = installationClient;
     this.userClient = userClient;
+    this.clientProvider = clientProvider;
     this.allowedAccounts = allowedAccounts;
     this.clock = clock;
   }
@@ -415,9 +416,9 @@ public class DashboardAccessChecker {
 
   /**
    * Whether the login may see views that span the installation: the account itself on a personal
-   * account, and a member of the organization on an organization. Membership is granted only on
-   * GitHub's 204; without the App's Organization → Members: read permission GitHub answers 403 and
-   * the views stay hidden.
+   * account, and a member of the organization on an organization. Membership is granted only on an
+   * active membership; without the App's Organization → Members: read permission GitHub answers
+   * 403, the views stay hidden and the missing permission is logged once.
    */
   private boolean installationWide(
       GitHubInstallationClient.Installation installation, String login) {
@@ -425,17 +426,31 @@ public class DashboardAccessChecker {
     if (!"Organization".equalsIgnoreCase(account.type())) {
       return account.login().equalsIgnoreCase(login);
     }
-    try (var response =
-        installationClient.checkOrgMember(
-            authClient.getAuthHeader(installation.id()), ACCEPT, account.login(), login)) {
-      var status = response.getStatus();
-      if (status == 403) {
-        warnMembersPermission(account.login());
+    try {
+      // getMembership (GET /orgs/{org}/memberships/{user}) reports GitHub's status, unlike
+      // GHOrganization.hasMember, which answers false on any error, a refusal included.
+      var membership =
+          clientProvider
+              .getInstallationClient(installation.id())
+              .getOrganization(account.login())
+              .getMembership(login);
+      return membership != null && membership.getState() == GHMembership.State.ACTIVE;
+    } catch (IOException e) {
+      if (InstallationRepository.isInterrupt(e)) {
+        Thread.currentThread().interrupt();
+        return false;
       }
-      return status == 204;
-    } catch (WebApplicationException e) {
-      if (e.getResponse().getStatus() == 403) {
-        warnMembersPermission(account.login());
+      switch (httpStatus(e)) {
+        case 404 -> {
+          // Not a member.
+        }
+        case 403 -> warnMembersPermission(account.login());
+        default ->
+            log.warn(
+                "Could not check membership of {} in {}: {}",
+                login,
+                account.login(),
+                e.getMessage());
       }
       return false;
     } catch (RuntimeException e) {
@@ -443,6 +458,17 @@ public class DashboardAccessChecker {
           "Could not check membership of {} in {}: {}", login, account.login(), e.getMessage());
       return false;
     }
+  }
+
+  /** The HTTP status hub4j failed with: 404 for a missing resource, -1 when there was none. */
+  static int httpStatus(IOException e) {
+    if (e instanceof GHFileNotFoundException) {
+      return 404;
+    }
+    if (e instanceof HttpException http) {
+      return http.getResponseCode();
+    }
+    return e.getCause() instanceof HttpException http ? http.getResponseCode() : -1;
   }
 
   private void warnMembersPermission(String org) {

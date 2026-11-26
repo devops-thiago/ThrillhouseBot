@@ -23,6 +23,7 @@ import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.QuarkusTestProfile;
 import io.quarkus.test.junit.TestProfile;
 import jakarta.inject.Inject;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -33,13 +34,15 @@ import org.junit.jupiter.api.Test;
 /**
  * The OTLP export to the endpoint {@code OTEL_EXPORTER_ENDPOINT} names, with log export switched on
  * (#1262). Before the fix the image had no OTLP metric exporter: a recorded metric never reached
- * the collector, though {@code GET /metrics} served it.
+ * the collector, though {@code GET /metrics} served it. Every signal carries the {@code HOSTNAME}
+ * as its {@code service.instance.id} (#1373).
  */
 @QuarkusTest
 @TestProfile(OtlpExportTest.LogsOnProfile.class)
 class OtlpExportTest {
 
   private static final Logger LOG = Logger.getLogger(OtlpExportTest.class);
+  private static final String HOSTNAME = "thrillhouse-pod-7";
 
   @Inject ReviewOutcomeMetrics outcomeMetrics;
   @Inject OpenTelemetry openTelemetry;
@@ -70,6 +73,27 @@ class OtlpExportTest {
         () -> OtlpReceiver.describe(collector));
   }
 
+  @Test
+  void everySignalCarriesTheHostnameAsServiceInstanceId() {
+    var marker = "otlp-instance-id-" + UUID.randomUUID();
+    outcomeMetrics.recordCompleted();
+    openTelemetry.getTracer("test").spanBuilder(marker).startSpan().end();
+    LOG.info(marker);
+
+    sdk().getSdkMeterProvider().forceFlush().join(10, TimeUnit.SECONDS);
+    sdk().getSdkTracerProvider().forceFlush().join(10, TimeUnit.SECONDS);
+    sdk().getSdkLoggerProvider().forceFlush().join(10, TimeUnit.SECONDS);
+
+    for (var path : List.of("/v1/metrics", "/v1/traces", "/v1/logs")) {
+      assertTrue(
+          OtlpReceiver.received(collector, path, "service.instance.id"),
+          () -> path + ": " + OtlpReceiver.describe(collector));
+      assertTrue(
+          OtlpReceiver.received(collector, path, HOSTNAME),
+          () -> path + ": " + OtlpReceiver.describe(collector));
+    }
+  }
+
   private OpenTelemetrySdk sdk() {
     return (OpenTelemetrySdk) openTelemetry;
   }
@@ -83,7 +107,8 @@ class OtlpExportTest {
           "quarkus.otel.sdk.disabled", "false",
           "OTEL_EXPORTER_ENDPOINT", COLLECTOR.endpoint(),
           "quarkus.otel.exporter.otlp.protocol", "http/protobuf",
-          "OTEL_LOGS_ENABLED", "true");
+          "OTEL_LOGS_ENABLED", "true",
+          "HOSTNAME", HOSTNAME);
     }
   }
 }

@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.dashboard;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -95,5 +96,19 @@ class DashboardResourceSummaryTest {
 
     assertEquals(true, detail.get("pricingMissing"));
     assertEquals(0.0, detail.get("cost"));
+  }
+
+  @Test
+  void toSessionDetailShouldExposeTheFailedModelCallCount() {
+    // #1417: a retried call is recorded as a count, not as an error on a completed session.
+    var session = new ReviewSession();
+    session.id = 9L;
+    session.setStatus(ReviewSession.STATUS_COMPLETED);
+    session.setFailedModelCalls(2);
+
+    var detail = DashboardResource.toSessionDetail(session);
+
+    assertEquals(2, detail.get("failedModelCalls"));
+    assertNull(detail.get("errorMessage"));
   }
 }

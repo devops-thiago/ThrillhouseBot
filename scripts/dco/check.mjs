@@ -22,6 +22,10 @@ export class Git {
     return { email: this.run('log', '-1', '--format=%ae', sha), signoffs: values('Signed-off-by'), remediation: values('DCO-Remediation') };
   }
   parents(sha) { return this.run('show', '-s', '--format=%P', sha).split(' ').filter(Boolean); }
+  ancestor(sha, head) {
+    try { this.run('merge-base', '--is-ancestor', sha, head); return true; }
+    catch (error) { if (error.status === 1) return false; throw error; }
+  }
   tree(sha) { return this.run('rev-parse', `${sha}^{tree}`); }
   mergeTree(parent, head, policy = 'default') {
     if (!['default', 'changelog-union'].includes(policy)) throw new Error('Unknown merge proof policy');
@@ -119,6 +123,24 @@ export class DcoChecker {
     }
     return false;
   }
+  // A bot's own commit can reach a later range unsquashed, when its PR was merged with a merge
+  // commit: it is then nobody's merge_commit_sha, and the PR being checked was not opened by the
+  // bot. It passes only through exactly one merged PR in this repository that the same bot opened
+  // and whose head contains it, with the bot's authenticated authorship checked as for its own PR.
+  async botSourcePull(sha) {
+    const pulls = (await this.github.pulls(sha)).filter((p) => p.merged_at && p.base?.repo?.full_name === this.repository);
+    if (pulls.some((p) => p.merge_commit_sha === sha)) return false; // A squash keeps the squash checks.
+    const opened = pulls.filter((p) => BOTS.has(p.user?.login));
+    if (opened.length !== 1) return false;
+    const pr = opened[0];
+    if (!Number.isSafeInteger(pr.number) || pr.number <= 0 || !SHA.test(pr.head?.sha || '')) return false;
+    if (!(await this.bot(sha, pr.user))) return false;
+    this.git.fetchPull(pr.number, pr.head.sha);
+    if (!this.git.ancestor(sha, pr.head.sha)) return false;
+    const proof = { sha, method: 'authenticated-bot-source-pr', pull: pr.number, head: pr.head.sha };
+    this.evidence.push(proof);
+    return proof;
+  }
   automaticMerge(sha, parents) {
     if (parents.length !== 2) return false;
     for (const policy of ['default', 'changelog-union']) {
@@ -140,6 +162,8 @@ export class DcoChecker {
       throw new Error('Merge lacks author certification and unchanged automatic-merge evidence');
     }
     if (await this.bot(sha, opener)) return { sha, method: 'authenticated-bot-pr' };
+    const botSource = await this.botSourcePull(sha);
+    if (botSource) return botSource;
     if (stack.has(sha) || stack.size >= 20) throw new Error('Circular or excessive source-PR history');
     const next = new Set(stack).add(sha);
     const commit = await this.github.commit(sha);

@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.github;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -28,14 +29,17 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.CreatePullRequestCommentRequest;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.CreateReviewRequest;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.PullRequestComment;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.PullRequestCommentResponse;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.ReplyToReviewCommentRequest;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.ReviewResponse;
+import jakarta.ws.rs.POST;
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Response;
+import java.lang.reflect.Method;
 import java.util.List;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
@@ -317,5 +321,45 @@ class GitHubReviewClientTest {
 
     assertSame(posted, client.replyToReviewComment("auth", "json", "o", "r", 7, 3L, request));
     verify(client, times(2)).replyToReviewCommentOnce("auth", "json", "o", "r", 7, 3L, request);
+  }
+
+  @Test
+  void submitReviewOnceUsesPostPerGitHubRest() throws Exception {
+    Method method =
+        GitHubReviewClient.class.getMethod(
+            "submitReviewOnce",
+            String.class,
+            String.class,
+            String.class,
+            String.class,
+            int.class,
+            long.class,
+            GitHubReviewClient.SubmitReviewRequest.class);
+    assertTrue(method.isAnnotationPresent(POST.class));
+  }
+
+  @Test
+  void getReviewReadsOneReviewThroughTheSingleAttempt() {
+    var client = mock(GitHubReviewClient.class);
+    when(client.getReview(anyString(), anyString(), anyString(), anyString(), anyInt(), anyLong()))
+        .thenCallRealMethod();
+    var review = new ReviewResponse(9L, "", "PENDING", "sha", null, "PRR_9");
+    when(client.getReviewOnce("auth", "json", "o", "r", 7, 9L)).thenReturn(review);
+
+    assertSame(review, client.getReview("auth", "json", "o", "r", 7, 9L));
+  }
+
+  @Test
+  void aReviewResponseReadsItsGraphQLNodeId() throws Exception {
+    var review =
+        new ObjectMapper()
+            .readValue(
+                "{\"id\":9,\"body\":\"\",\"state\":\"PENDING\",\"commit_id\":\"sha\","
+                    + "\"user\":null,\"node_id\":\"PRR_kwDO\"}",
+                ReviewResponse.class);
+
+    assertEquals("PRR_kwDO", review.nodeId());
+    assertEquals(9L, review.id());
+    assertNull(new ReviewResponse(1L, "", "COMMENTED", "sha", null).nodeId());
   }
 }

@@ -21,10 +21,15 @@ import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.ws.rs.WebApplicationException;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -35,7 +40,16 @@ class ReviewThreadServiceTest {
 
   private final ObjectMapper mapper = new ObjectMapper();
 
-  @InjectMocks private ReviewThreadService service;
+  private final List<Duration> waits = new ArrayList<>();
+
+  private ReviewThreadService service;
+
+  @BeforeEach
+  void setUp() {
+    service =
+        new ReviewThreadService(
+            graphQLClient, new GitHubWriteRetry(waits::add, () -> Instant.EPOCH));
+  }
 
   private void stubResponse(String json) throws JsonProcessingException {
     when(graphQLClient.execute(anyString(), any())).thenReturn(mapper.readTree(json));
@@ -171,5 +185,188 @@ class ReviewThreadServiceTest {
     stubResponse("{\"data\": {}}");
 
     assertFalse(service.resolve("auth", "T1"));
+  }
+
+  // #1434: a batched round attaches each thread to its pending review through GraphQL.
+  @Test
+  void addPendingReviewThreadSendsTheLineAnchoredCommentAsMutationInput() throws Exception {
+    when(graphQLClient.executeOnce(anyString(), any()))
+        .thenReturn(
+            mapper.readTree(
+                "{\"data\":{\"addPullRequestReviewThread\":{\"thread\":{\"id\":\"PRRT_1\"}}}}"));
+
+    var threadId =
+        service.addPendingReviewThread(
+            "auth",
+            "owner",
+            "repo",
+            7,
+            "PRR_9",
+            new GitHubReviewClient.CreatePullRequestCommentRequest(
+                "sha", "body", "src/A.java", 12, "RIGHT", 10, "RIGHT"));
+
+    assertEquals("PRRT_1", threadId);
+    var request = ArgumentCaptor.forClass(GitHubGraphQLClient.GraphQLRequest.class);
+    verify(graphQLClient).executeOnce(eq("auth"), request.capture());
+    var variables = request.getValue().variables();
+    assertTrue(request.getValue().query().contains("addPullRequestReviewThread"));
+    assertEquals("PRR_9", variables.get("reviewId"));
+    assertEquals("body", variables.get("body"));
+    assertEquals("src/A.java", variables.get("path"));
+    assertEquals(12, variables.get("line"));
+    assertEquals("RIGHT", variables.get("side"));
+    assertEquals(10, variables.get("startLine"));
+    assertEquals("RIGHT", variables.get("startSide"));
+    assertFalse(variables.containsKey("subjectType"));
+  }
+
+  @Test
+  void addPendingReviewThreadSendsAFileLevelCommentWithNoLine() throws Exception {
+    when(graphQLClient.executeOnce(anyString(), any()))
+        .thenReturn(
+            mapper.readTree(
+                "{\"data\":{\"addPullRequestReviewThread\":{\"thread\":{\"id\":\"PRRT_2\"}}}}"));
+
+    service.addPendingReviewThread(
+        "auth",
+        "owner",
+        "repo",
+        7,
+        "PRR_9",
+        GitHubReviewClient.CreatePullRequestCommentRequest.onFile("sha", "body", "src/A.java"));
+
+    var request = ArgumentCaptor.forClass(GitHubGraphQLClient.GraphQLRequest.class);
+    verify(graphQLClient).executeOnce(eq("auth"), request.capture());
+    var variables = request.getValue().variables();
+    assertEquals("FILE", variables.get("subjectType"));
+    assertFalse(variables.containsKey("line"));
+    assertFalse(variables.containsKey("side"));
+  }
+
+  @Test
+  void addPendingReviewThreadOmitsTheRangeOfASingleLineComment() throws Exception {
+    when(graphQLClient.executeOnce(anyString(), any()))
+        .thenReturn(
+            mapper.readTree(
+                "{\"data\":{\"addPullRequestReviewThread\":{\"thread\":{\"id\":\"PRRT_3\"}}}}"));
+
+    service.addPendingReviewThread(
+        "auth",
+        "owner",
+        "repo",
+        7,
+        "PRR_9",
+        new GitHubReviewClient.CreatePullRequestCommentRequest(
+            "sha", "body", "src/A.java", 12, "LEFT", null, null));
+
+    var request = ArgumentCaptor.forClass(GitHubGraphQLClient.GraphQLRequest.class);
+    verify(graphQLClient).executeOnce(eq("auth"), request.capture());
+    assertEquals("LEFT", request.getValue().variables().get("side"));
+    assertFalse(request.getValue().variables().containsKey("startLine"));
+    assertFalse(request.getValue().variables().containsKey("startSide"));
+  }
+
+  @Test
+  void addPendingReviewThreadRaisesGitHubsErrorsWhenNoThreadCameBack() throws Exception {
+    when(graphQLClient.executeOnce(anyString(), any()))
+        .thenReturn(
+            mapper.readTree(
+                "{\"data\":{\"addPullRequestReviewThread\":null},"
+                    + "\"errors\":[{\"type\":\"UNPROCESSABLE\","
+                    + "\"message\":\"Line could not be resolved\"}]}"));
+    var comment =
+        new GitHubReviewClient.CreatePullRequestCommentRequest(
+            "sha", "body", "src/A.java", 12, "RIGHT", null, null);
+
+    var failure =
+        assertThrows(
+            GitHubGraphQLException.class,
+            () -> service.addPendingReviewThread("auth", "owner", "repo", 7, "PRR_9", comment));
+
+    assertEquals("Line could not be resolved", failure.refusal());
+    assertFalse(failure.isThrottled());
+  }
+
+  private static final String THROTTLED =
+      "{\"data\":{\"addPullRequestReviewThread\":null},"
+          + "\"errors\":[{\"type\":\"RATE_LIMITED\","
+          + "\"message\":\"You have exceeded a secondary rate limit\"}]}";
+
+  private static final String OPENED =
+      "{\"data\":{\"addPullRequestReviewThread\":{\"thread\":{\"id\":\"PRRT_1\"}}}}";
+
+  private static GitHubReviewClient.CreatePullRequestCommentRequest lineComment() {
+    return new GitHubReviewClient.CreatePullRequestCommentRequest(
+        "sha", "body", "src/A.java", 12, "RIGHT", null, null);
+  }
+
+  @Test
+  void addPendingReviewThreadBacksOffAThrottleReportedInTheErrorsAndRepeatsTheWrite()
+      throws Exception {
+    when(graphQLClient.executeOnce(anyString(), any()))
+        .thenReturn(mapper.readTree(THROTTLED), mapper.readTree(OPENED));
+
+    var thread = service.addPendingReviewThread("auth", "owner", "repo", 7, "PRR_9", lineComment());
+
+    assertEquals("PRRT_1", thread);
+    assertEquals(List.of(GitHubApiError.FALLBACK_DELAY), waits);
+    verify(graphQLClient, times(2)).executeOnce(anyString(), any());
+  }
+
+  @Test
+  void addPendingReviewThreadRaisesTheThrottleOnceItsRetriesRunOut() throws Exception {
+    when(graphQLClient.executeOnce(anyString(), any())).thenReturn(mapper.readTree(THROTTLED));
+
+    var comment = lineComment();
+    var failure =
+        assertThrows(
+            GitHubGraphQLException.class,
+            () -> service.addPendingReviewThread("auth", "owner", "repo", 7, "PRR_9", comment));
+
+    assertTrue(failure.isThrottled());
+    assertEquals("You have exceeded a secondary rate limit", failure.refusal());
+    assertEquals(GitHubWriteRetry.MAX_ATTEMPTS - 1, waits.size());
+    verify(graphQLClient, times(GitHubWriteRetry.MAX_ATTEMPTS)).executeOnce(anyString(), any());
+  }
+
+  @Test
+  void addPendingReviewThreadDoesNotRepeatARefusal() throws Exception {
+    when(graphQLClient.executeOnce(anyString(), any()))
+        .thenReturn(
+            mapper.readTree(
+                "{\"errors\":[{\"type\":\"UNPROCESSABLE\",\"message\":\"bad line\"}]}"));
+
+    var comment = lineComment();
+    assertThrows(
+        GitHubGraphQLException.class,
+        () -> service.addPendingReviewThread("auth", "owner", "repo", 7, "PRR_9", comment));
+
+    assertTrue(waits.isEmpty());
+    verify(graphQLClient).executeOnce(anyString(), any());
+  }
+
+  @Test
+  void addPendingReviewThreadPassesOnAnHttpFailureUnchanged() {
+    var refused = new WebApplicationException(403);
+    when(graphQLClient.executeOnce(anyString(), any())).thenThrow(refused);
+
+    var comment = lineComment();
+    var failure =
+        assertThrows(
+            WebApplicationException.class,
+            () -> service.addPendingReviewThread("auth", "owner", "repo", 7, "PRR_9", comment));
+
+    assertSame(refused, failure);
+  }
+
+  @Test
+  void theInjectedServiceOpensAThreadThroughTheSharedWriteRetry() throws Exception {
+    when(graphQLClient.executeOnce(anyString(), any())).thenReturn(mapper.readTree(OPENED));
+
+    var thread =
+        new ReviewThreadService(graphQLClient)
+            .addPendingReviewThread("auth", "owner", "repo", 7, "PRR_9", lineComment());
+
+    assertEquals("PRRT_1", thread);
   }
 }

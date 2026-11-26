@@ -73,7 +73,8 @@ class FollowUpReviewNoiseTest {
           mock(FollowUpAnalyzer.class),
           mock(PrLabeler.class),
           config,
-          BOT);
+          BOT,
+          new PendingReviewGuard());
 
   @BeforeEach
   void configured() {

@@ -56,6 +56,8 @@ export interface InstallationOption {
 
 export interface SessionDetail extends SessionListItem {
   commitSha: string;
+  /** Model calls that failed during the review, retried or not; not an error on its own. */
+  failedModelCalls?: number;
   errorMessage?: string | null;
   aiResponseJson?: string | null;
 }

@@ -313,9 +313,13 @@ public interface GitHubReviewClient {
                         credential, accept, owner, repo, pullNumber, commentId, request)));
   }
 
+  /**
+   * One HTTP attempt at deleting a pending review. Callers want {@link #deletePendingReview}
+   * instead.
+   */
   @DELETE
   @Path("/repos/{owner}/{repo}/pulls/{pullNumber}/reviews/{reviewId}")
-  void deletePendingReview(
+  void deletePendingReviewOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
@@ -323,10 +327,113 @@ public interface GitHubReviewClient {
       @PathParam("pullNumber") int pullNumber,
       @PathParam("reviewId") long reviewId);
 
+  /**
+   * Deletes a pending pull request review, with the throttle backoff described on {@link
+   * GitHubWriteRetry}.
+   */
+  default void deletePendingReview(
+      String auth, String accept, String owner, String repo, int pullNumber, long reviewId) {
+    GitHubWriteRetry.DEFAULT.call(
+        "delete pending review " + reviewId + " on " + owner + "/" + repo + " #" + pullNumber,
+        auth,
+        credential -> {
+          deletePendingReviewOnce(credential, accept, owner, repo, pullNumber, reviewId);
+          return null;
+        });
+  }
+
+  /** One HTTP attempt at reading one review. Callers want {@link #getReview} instead. */
+  @GET
+  @Path("/repos/{owner}/{repo}/pulls/{pullNumber}/reviews/{reviewId}")
+  @Produces(MediaType.APPLICATION_JSON)
+  ReviewResponse getReviewOnce(
+      @HeaderParam("Authorization") String auth,
+      @HeaderParam("Accept") String accept,
+      @PathParam("owner") String owner,
+      @PathParam("repo") String repo,
+      @PathParam("pullNumber") int pullNumber,
+      @PathParam("reviewId") long reviewId);
+
+  /** Reads one review, healing a rejected credential once (#626). */
+  default ReviewResponse getReview(
+      String auth, String accept, String owner, String repo, int pullNumber, long reviewId) {
+    return GitHubTokenRefresh.SHARED.retrying(
+        "review " + reviewId + " on " + owner + "/" + repo + "#" + pullNumber,
+        auth,
+        credential -> getReviewOnce(credential, accept, owner, repo, pullNumber, reviewId));
+  }
+
+  /**
+   * One HTTP attempt at submitting a pending review. Callers want {@link #submitReview} instead.
+   * GitHub's REST reference documents this route as {@code POST
+   * /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/events} ("Submit a review for a
+   * pull request"); {@code PUT} on {@code …/reviews/{review_id}} updates a review, it does not
+   * submit one.
+   */
+  @POST
+  @Path("/repos/{owner}/{repo}/pulls/{pullNumber}/reviews/{reviewId}/events")
+  @Produces(MediaType.APPLICATION_JSON)
+  @Consumes(MediaType.APPLICATION_JSON)
+  ReviewResponse submitReviewOnce(
+      @HeaderParam("Authorization") String auth,
+      @HeaderParam("Accept") String accept,
+      @PathParam("owner") String owner,
+      @PathParam("repo") String repo,
+      @PathParam("pullNumber") int pullNumber,
+      @PathParam("reviewId") long reviewId,
+      SubmitReviewRequest request);
+
+  /**
+   * Submits a pending pull request review, with the throttle backoff described on {@link
+   * GitHubWriteRetry}.
+   */
+  default ReviewResponse submitReview(
+      String auth,
+      String accept,
+      String owner,
+      String repo,
+      int pullNumber,
+      long reviewId,
+      SubmitReviewRequest request) {
+    return GitHubLostWrites.SHARED.carrying(
+        new GitHubLostWrites.Target(owner, repo, pullNumber),
+        notice ->
+            GitHubWriteRetry.DEFAULT.call(
+                "submit review " + reviewId + " on " + owner + "/" + repo + " #" + pullNumber,
+                auth,
+                credential ->
+                    submitReviewOnce(
+                        credential,
+                        accept,
+                        owner,
+                        repo,
+                        pullNumber,
+                        reviewId,
+                        new SubmitReviewRequest(
+                            GitHubLostWrites.prepend(notice, request.body()), request.event()))));
+  }
+
+  /**
+   * Creates a review left in {@code PENDING} state so inline threads can attach before it is
+   * submitted (#1434). The response's {@code node_id} is what {@code
+   * ReviewThreadService#addPendingReviewThread} attaches each thread to.
+   */
+  default ReviewResponse createPendingReview(
+      String auth, String accept, String owner, String repo, int pullNumber, String commitId) {
+    return createReview(
+        auth,
+        accept,
+        owner,
+        repo,
+        pullNumber,
+        new CreateReviewRequest(commitId, "", null, List.of()));
+  }
+
+  @JsonInclude(JsonInclude.Include.NON_NULL)
   record CreateReviewRequest(
       @JsonProperty("commit_id") String commitId,
       String body,
-      String event, // APPROVE, REQUEST_CHANGES, COMMENT
+      String event, // APPROVE, REQUEST_CHANGES, COMMENT; null leaves the review PENDING
       List<ReviewComment> comments) {
     public CreateReviewRequest {
       body = CommentBodyLimit.cap(body);
@@ -384,6 +491,20 @@ public interface GitHubReviewClient {
         String commitId, String body, String path) {
       return new CreatePullRequestCommentRequest(
           commitId, body, path, null, null, null, null, SUBJECT_TYPE_FILE);
+    }
+
+    /** Whether this is a thread on the file as a whole rather than on a line. */
+    public boolean fileLevel() {
+      return SUBJECT_TYPE_FILE.equals(subjectType);
+    }
+  }
+
+  /**
+   * Payload for {@link #submitReviewOnce}: the body and one of APPROVE, REQUEST_CHANGES, COMMENT.
+   */
+  record SubmitReviewRequest(String body, String event) {
+    public SubmitReviewRequest {
+      body = CommentBodyLimit.cap(body);
     }
   }
 
@@ -459,12 +580,22 @@ public interface GitHubReviewClient {
     }
   }
 
+  /**
+   * A pull request review. {@code nodeId} is the review's GraphQL node id, which the batched path
+   * hands to {@code addPullRequestReviewThread} to attach a thread to a pending review (#1434).
+   */
   record ReviewResponse(
       long id,
       String body,
-      String state, // APPROVED, CHANGES_REQUESTED, COMMENTED
+      String state, // PENDING, APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED
       @JsonProperty("commit_id") String commitId,
-      User user) {
+      User user,
+      @JsonProperty("node_id") String nodeId) {
     public record User(String login) {}
+
+    /** A review whose node id is not known. */
+    public ReviewResponse(long id, String body, String state, String commitId, User user) {
+      this(id, body, state, commitId, user, null);
+    }
   }
 }

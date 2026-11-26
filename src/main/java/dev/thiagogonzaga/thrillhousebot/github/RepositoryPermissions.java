@@ -15,34 +15,36 @@
  */
 package dev.thiagogonzaga.thrillhousebot.github;
 
-import java.util.Locale;
-import java.util.Set;
+import org.kohsuke.github.GHPermissionType;
 
 /**
  * The one rule for who may act on a repository through the bot (#1221): a collaborator whose role
  * is write, maintain or admin. Viewing on the dashboard needs only read access; acting (a paid
  * {@code /review}, a learning taught by a decline, feedback that counts) needs this.
  *
- * <p>GitHub's legacy {@code permission} field reports {@code maintain} as {@code write} and {@code
- * triage} as {@code read}, and a custom role as the base role it extends. {@code role_name} names
- * the role itself. Either one granting write is enough, so maintain and a custom role built on
- * write both count, while triage and read never do.
+ * <p>Only the collaborator-permission {@code permission} field is read. It reports {@code maintain}
+ * as {@code write} and {@code triage} as {@code read}, and a custom role as the base role it
+ * extends, so maintain and a custom role built on write both count, while triage and read never do.
  */
 public final class RepositoryPermissions {
 
-  private static final Set<String> ACTING_PERMISSIONS = Set.of("admin", "write");
-  private static final Set<String> ACTING_ROLES = Set.of("admin", "maintain", "write");
-
   private RepositoryPermissions() {}
 
-  /** Whether a collaborator-permission answer lets its user act on the repository. */
-  public static boolean canAct(GitHubInstallationClient.CollaboratorPermission permission) {
+  /**
+   * Whether a collaborator-permission answer lets its user act on the repository.
+   *
+   * <p>GitHub's collaborator-permission endpoint reports the base permission level in its {@code
+   * permission} field (admin, write, read, or none) and the effective role in a separate {@code
+   * role_name} field (maintain, triage, or a custom role name). hub4j's {@code
+   * GHRepository.getPermission(user)} fetches that endpoint and decodes only the {@code permission}
+   * field via {@code GHPermission.getPermissionType()}, which calls {@code
+   * EnumUtils.getEnumOrDefault(GHPermissionType.class, permission, UNKNOWN)}; an unrecognized value
+   * maps to {@code UNKNOWN} and is denied here. Because GitHub reports a maintainer's base level as
+   * {@code write}, {@code GHPermissionType#WRITE} covers maintain and any custom role built on
+   * write. A {@code null} answer grants nothing.
+   */
+  public static boolean canAct(GHPermissionType permission) {
     return permission != null
-        && (matches(permission.permission(), ACTING_PERMISSIONS)
-            || matches(permission.roleName(), ACTING_ROLES));
-  }
-
-  private static boolean matches(String value, Set<String> accepted) {
-    return value != null && accepted.contains(value.strip().toLowerCase(Locale.ROOT));
+        && (permission == GHPermissionType.ADMIN || permission == GHPermissionType.WRITE);
   }
 }

@@ -217,7 +217,8 @@ class RetriedFollowUpRoundTest {
             analyzer,
             mock(PrLabeler.class),
             config,
-            BOT);
+            BOT,
+            new PendingReviewGuard());
   }
 
   @Test

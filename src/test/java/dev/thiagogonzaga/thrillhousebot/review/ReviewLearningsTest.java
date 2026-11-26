@@ -24,7 +24,6 @@ import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
 import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewLearningService.LearningInput;
@@ -32,13 +31,18 @@ import dev.thiagogonzaga.thrillhousebot.review.ReviewLearningService.LearningVie
 import dev.thiagogonzaga.thrillhousebot.review.ReviewLearningService.RecordOutcome;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import io.quarkiverse.githubapp.GitHubClientProvider;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.kohsuke.github.GHPermissionType;
+import org.kohsuke.github.GHRepository;
+import org.kohsuke.github.GitHub;
 import org.mockito.ArgumentCaptor;
 
 class ReviewLearningsTest {
@@ -49,15 +53,23 @@ class ReviewLearningsTest {
   private static final FakeCredentials FAKE = new FakeCredentials(38);
 
   private final ReviewLearningService store = mock(ReviewLearningService.class);
-  private final GitHubInstallationClient installationClient = mock(GitHubInstallationClient.class);
+  private final GitHubClientProvider clientProvider = mock(GitHubClientProvider.class);
+  private final GitHub gitHub = mock(GitHub.class);
+  private final GHRepository repository = mock(GHRepository.class);
   private final FollowUpAnalyzer analyzer = new FollowUpAnalyzer(new ObjectMapper());
+
+  @BeforeEach
+  void stubChain() throws Exception {
+    lenient().doReturn(gitHub).when(clientProvider).getInstallationClient(anyLong());
+    lenient().doReturn(repository).when(gitHub).getRepository(anyString());
+  }
 
   private ReviewLearnings learnings(boolean enabled, int maxItems, int maxChars) {
     return new ReviewLearnings(
         store,
         analyzer,
         BOT_ID,
-        installationClient,
+        clientProvider,
         new ReviewLearnings.Settings(enabled, 100, maxItems, maxChars));
   }
 
@@ -99,9 +111,10 @@ class ReviewLearningsTest {
         null);
   }
 
-  private void writeAccess(String level) {
-    when(installationClient.collaboratorPermission(any(), any(), any(), any(), any()))
-        .thenReturn(new GitHubInstallationClient.CollaboratorPermission(level, null));
+  private void writeAccess(String level) throws Exception {
+    doReturn(GHPermissionType.valueOf(level.toUpperCase()))
+        .when(repository)
+        .getPermission(anyString());
   }
 
   // --- config wiring ---
@@ -112,7 +125,7 @@ class ReviewLearningsTest {
     when(config.review().learnings().enabled()).thenReturn(true);
     when(config.review().learnings().maxPerRepo()).thenReturn(7);
 
-    var built = new ReviewLearnings(store, analyzer, BOT_ID, installationClient, config);
+    var built = new ReviewLearnings(store, analyzer, BOT_ID, clientProvider, config);
 
     assertTrue(built.enabled());
     assertEquals(7, built.maxPerRepo());
@@ -448,7 +461,19 @@ class ReviewLearningsTest {
   }
 
   @Test
-  void thePr159DeclineBecomesALearningCitingItsThreadReply() {
+  void anUnresolvableRepositoryIsTreatedAsNoAccess() throws Exception {
+    doThrow(new java.io.IOException("not found")).when(gitHub).getRepository("o/r");
+
+    assertEquals(
+        0,
+        enabled()
+            .captureSurvivingDeclines(
+                capture(NESTED, "justified", thread(NESTED, 500L, FLAT_THREADS), PLAIN_DIFF)));
+    verify(store, never()).save(any(), anyInt());
+  }
+
+  @Test
+  void thePr159DeclineBecomesALearningCitingItsThreadReply() throws Exception {
     writeAccess("write");
     when(store.save(any(), anyInt())).thenReturn(RecordOutcome.STORED);
 
@@ -473,12 +498,30 @@ class ReviewLearningsTest {
     assertEquals("maintainer", learning.author());
   }
 
+  @Test
+  void anInterruptedCaptureStoresNothing() throws Exception {
+    writeAccess("write");
+
+    Thread.currentThread().interrupt();
+    try {
+      var stored =
+          enabled()
+              .captureSurvivingDeclines(
+                  capture(NESTED, "justified", thread(NESTED, 500L, FLAT_THREADS), PLAIN_DIFF));
+
+      assertEquals(0, stored);
+      verify(store, never()).save(any(), anyInt());
+    } finally {
+      Thread.interrupted();
+    }
+  }
+
   /**
    * #958: an earlier round's standing decline carries id 0 and its own thread; it is learned from
    * that thread, about its own finding, and never from the previous round's finding 1.
    */
   @Test
-  void anEarlierRoundDeclineIsLearnedFromItsOwnThread() {
+  void anEarlierRoundDeclineIsLearnedFromItsOwnThread() throws Exception {
     writeAccess("write");
     when(store.save(any(), anyInt())).thenReturn(RecordOutcome.STORED);
 
@@ -510,7 +553,7 @@ class ReviewLearningsTest {
   }
 
   @Test
-  void aConversationDeclineCitesTheIssueComment() {
+  void aConversationDeclineCitesTheIssueComment() throws Exception {
     writeAccess("admin");
     when(store.save(any(), anyInt())).thenReturn(RecordOutcome.STORED);
     var directive =
@@ -541,7 +584,7 @@ class ReviewLearningsTest {
   }
 
   @Test
-  void thePr160DeclineTheRecheckContradictedIsNeverCaptured() {
+  void thePr160DeclineTheRecheckContradictedIsNeverCaptured() throws Exception {
     // The re-check reopened the finding, so the round's final status is "unresolved".
     writeAccess("write");
     var comments = thread(RACE, 700L, ASYNC_AFTER_ACK);
@@ -565,7 +608,7 @@ class ReviewLearningsTest {
   }
 
   @Test
-  void thePr160DeclineThatStoodThisRoundIsStillNotCaptured() {
+  void thePr160DeclineThatStoodThisRoundIsStillNotCaptured() throws Exception {
     writeAccess("write");
 
     var stored =
@@ -578,7 +621,7 @@ class ReviewLearningsTest {
   }
 
   @Test
-  void aDeclineFromSomeoneWithoutWriteAccessIsNotCaptured() {
+  void aDeclineFromSomeoneWithoutWriteAccessIsNotCaptured() throws Exception {
     writeAccess("read");
 
     assertEquals(
@@ -590,13 +633,11 @@ class ReviewLearningsTest {
   }
 
   @Test
-  void aJoinedReasonIsStoredOnlyWhenEveryContributorHoldsWriteAccess() {
+  void aJoinedReasonIsStoredOnlyWhenEveryContributorHoldsWriteAccess() throws Exception {
     var comments = new java.util.ArrayList<>(thread(NESTED, 500L, FLAT_THREADS));
     comments.add(comment(502L, 500L, NESTED_FILE, "See the REST docs.", "member", "MEMBER"));
-    when(installationClient.collaboratorPermission(any(), any(), any(), any(), eq("maintainer")))
-        .thenReturn(new GitHubInstallationClient.CollaboratorPermission("write", null));
-    when(installationClient.collaboratorPermission(any(), any(), any(), any(), eq("member")))
-        .thenReturn(new GitHubInstallationClient.CollaboratorPermission("read", null));
+    doReturn(GHPermissionType.WRITE).when(repository).getPermission("maintainer");
+    doReturn(GHPermissionType.READ).when(repository).getPermission("member");
 
     assertEquals(
         0, enabled().captureSurvivingDeclines(capture(NESTED, "justified", comments, PLAIN_DIFF)));
@@ -604,27 +645,16 @@ class ReviewLearningsTest {
   }
 
   @Test
-  void anUnreadablePermissionIsTreatedAsNoAccess() {
-    when(installationClient.collaboratorPermission(any(), any(), any(), any(), any()))
-        .thenThrow(new IllegalStateException("404"));
+  void anUnreadablePermissionIsTreatedAsNoAccess() throws Exception {
+    doThrow(new IllegalStateException("404")).when(repository).getPermission(anyString());
     assertEquals(
         0,
         enabled()
             .captureSurvivingDeclines(
                 capture(NESTED, "justified", thread(NESTED, 500L, FLAT_THREADS), PLAIN_DIFF)));
 
-    reset(installationClient);
-    when(installationClient.collaboratorPermission(any(), any(), any(), any(), any()))
-        .thenReturn(null);
-    assertEquals(
-        0,
-        enabled()
-            .captureSurvivingDeclines(
-                capture(NESTED, "justified", thread(NESTED, 500L, FLAT_THREADS), PLAIN_DIFF)));
-
-    reset(installationClient);
-    when(installationClient.collaboratorPermission(any(), any(), any(), any(), any()))
-        .thenReturn(new GitHubInstallationClient.CollaboratorPermission(null, null));
+    reset(repository);
+    doReturn(GHPermissionType.UNKNOWN).when(repository).getPermission(anyString());
     assertEquals(
         0,
         enabled()
@@ -634,8 +664,8 @@ class ReviewLearningsTest {
   }
 
   @Test
-  void aRefusedRecordIsNotCounted() {
-    writeAccess("maintain");
+  void aRefusedRecordIsNotCounted() throws Exception {
+    writeAccess("write");
     when(store.save(any(), anyInt())).thenReturn(RecordOutcome.REFUSED_CAP);
 
     assertEquals(
@@ -667,7 +697,7 @@ class ReviewLearningsTest {
             .captureSurvivingDeclines(
                 new ReviewLearnings.DeclineCapture(
                     "t", SCOPE, "o", "r", 1, null, null, null, null, () -> "")));
-    verifyNoInteractions(store, installationClient);
+    verifyNoInteractions(store, clientProvider);
   }
 
   @Test

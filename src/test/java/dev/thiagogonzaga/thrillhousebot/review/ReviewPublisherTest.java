@@ -73,7 +73,8 @@ class ReviewPublisherTest {
           mock(FollowUpAnalyzer.class),
           mock(PrLabeler.class),
           config,
-          BotIdentity.of("thrillhousebot"));
+          BotIdentity.of("thrillhousebot"),
+          new PendingReviewGuard());
 
   private void followUpSummaryEnabled(boolean enabled) {
     when(config.review()).thenReturn(reviewConfig);
@@ -167,7 +168,46 @@ class ReviewPublisherTest {
 
   /** The body the publisher posts for {@code summary}: the marker line, then the summary. */
   private static String posted(String summary) {
-    return PrSummaryGenerator.SUMMARY_MARKER + "\n" + summary;
+    return PrSummaryGenerator.SUMMARY_MARKER + "\n" + EMPTY_MANIFEST + "\n" + summary;
+  }
+
+  private static final String EMPTY_MANIFEST = "<!-- thrillhousebot:findings v=1 [] -->";
+
+  @Test
+  void theSummaryCarriesTheOpenFindingsManifestBetweenTheMarkerAndTheProse() {
+    var open =
+        new Finding(RiskLevel.HIGH, Confidence.HIGH, "src/A.java", 12, "NPE", "d", null, null);
+    var result =
+        new ReviewResult(
+            List.of(open),
+            0,
+            1,
+            0,
+            0,
+            RiskLevel.HIGH,
+            ReviewState.COMMENT,
+            true,
+            "summary",
+            List.of(),
+            List.of(),
+            0);
+
+    assertTrue(publisher.publishSummary("auth", "o", "r", 1, result, false));
+
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .createComment(anyString(), anyString(), eq("o"), eq("r"), eq(1), body.capture());
+    var lines = body.getValue().body().lines().toList();
+    assertEquals(PrSummaryGenerator.SUMMARY_MARKER, lines.get(0));
+    assertEquals(
+        "<!-- thrillhousebot:findings v=1 [{\"key\":\""
+            + SuggestionFormatter.findingKey("src/A.java", 12, "NPE")
+            + "\",\"file\":\"src/A.java\",\"line\":12,\"risk\":\"high\",\"confidence\":\"high\","
+            + "\"status\":\"open\",\"thread\":true,\"hasSuggestion\":false,\"carried\":false}]"
+            + " -->",
+        lines.get(1));
+    assertEquals("summary", lines.get(2));
+    assertTrue(ReviewContextLoader.isBotSummaryComment(body.getValue().body()));
   }
 
   private void existingComments(GitHubCommentClient.IssueComment... comments) {
@@ -416,6 +456,75 @@ class ReviewPublisherTest {
     var body = review.getValue().body();
     assertTrue(body.contains("ThrillhouseBot closed 1 previous finding(s) this round:"), body);
     assertTrue(body.contains("- `src/main/java/A.java:42` — Unbounded retry"), body);
+  }
+
+  @Test
+  void summaryOnlyRerunStillPostsWhenASupersededFindingClosedEarlier() {
+    when(config.review()).thenReturn(reviewConfig);
+    when(config.github()).thenReturn(githubConfig);
+    when(githubConfig.writeRetryBudget()).thenReturn(Duration.ofMinutes(5));
+    var bot = new GitHubReviewClient.ReviewResponse.User("thrillhousebot");
+    var prior = new GitHubReviewClient.ReviewResponse(1L, "", "APPROVED", "sha1", bot);
+    when(reviewClient.createReview(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
+        .thenReturn(new GitHubReviewClient.ReviewResponse(2L, "", "APPROVE", "sha1", bot));
+    publisher.postReview(
+        new ReviewPublisher.PostReviewRequest(
+            "auth",
+            "o",
+            "r",
+            1,
+            "sha1",
+            SUPERSEDED_RESULT,
+            new DiffLineResolver(Map.of()),
+            true,
+            List.of(),
+            "",
+            List.of(prior)));
+
+    verify(reviewClient)
+        .createReview(anyString(), anyString(), anyString(), anyString(), eq(1), any());
+  }
+
+  @Test
+  void summaryOnlyRerunSkipsReviewWhenBotAlreadyApprovedThisHead() {
+    when(config.review()).thenReturn(reviewConfig);
+    when(config.github()).thenReturn(githubConfig);
+    when(githubConfig.writeRetryBudget()).thenReturn(Duration.ofMinutes(5));
+    var bot = new GitHubReviewClient.ReviewResponse.User("thrillhousebot");
+    var prior = new GitHubReviewClient.ReviewResponse(1L, "", "APPROVED", "sha1", bot);
+    var clean =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.APPROVE,
+            false,
+            "summary",
+            List.of(),
+            List.of(),
+            0);
+    publisher.postReview(
+        new ReviewPublisher.PostReviewRequest(
+            "auth",
+            "o",
+            "r",
+            1,
+            "sha1",
+            clean,
+            new DiffLineResolver(Map.of()),
+            true,
+            List.of(),
+            "",
+            List.of(prior)));
+
+    verify(reviewClient, never())
+        .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+    verify(reviewClient, never())
+        .createPendingReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
   }
 
   @Test

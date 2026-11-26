@@ -4,6 +4,141 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-11-26
+
+Follow-up rounds re-check older findings whenever a fix could stand and stop closing the same
+finding twice, a webhook redelivered after a restart is no longer reviewed again, and `/review`
+on a closed or merged pull request is answered with a notice. The first start runs migrations V4,
+which adds the `webhook_delivery` table, and V5, which adds the `failedmodelcalls` column to
+`reviewsession`. `OTEL_RESOURCE_ATTRIBUTES` is new, and the two new review options,
+`REVIEW_AGENT_PROMPT_ENABLED` and `REVIEW_BATCHED_INLINE_REVIEW_ENABLED`, are off by default.
+There are no new GitHub App permissions.
+
+### Added
+
+- **A collapsed agent prompt on inline findings** (#1432): with `REVIEW_AGENT_PROMPT_ENABLED`
+  (default off), each inline finding comment ends with a collapsed "Agent prompt" block giving the
+  file, line, problem and suggested fix, built from the finding already posted. It makes no model
+  call, and file-level comments do not get it.
+- **Inline findings in one pending review** (#1434): with `REVIEW_BATCHED_INLINE_REVIEW_ENABLED`
+  (default off), a round opens one pending pull request review, attaches each inline comment to
+  it and submits it once, instead of posting each comment on its own. A round with nothing to
+  post inline opens none. A pending review the bot left behind is deleted before a new one is
+  opened. When GitHub refuses the submit, or it fails without an answer and the review is still
+  pending, the round deletes the pending review and posts a review that lists its findings by
+  file and line. Threads are attached with the GraphQL `addPullRequestReviewThread` mutation, and
+  a reply in a finding's thread waits for the pending review to close, for at most two minutes.
+- **The summary comment carries a machine-readable list of the open findings** (#1433): a hidden
+  `<!-- thrillhousebot:findings v=1 [...] -->` line after the summary's markers lists each open
+  finding's key, file, line, risk, confidence, whether the review opens an inline thread for it
+  (it posts inline, on a file the pull request changes, within the comment cap), whether it has a
+  suggestion, and whether it was carried from an earlier review. It holds no model-written text,
+  lists at most 100 entries or 16,000 characters (`omitted=N` counts the rest), and is `[]` when
+  nothing is open.
+
+### Changed
+
+- Repository permission checks for manual reviews, feedback capture, learnings and dashboard
+  access now read collaborator permission and organization membership through the extension's
+  installation-scoped GitHub client (`GitHubClientProvider`) instead of
+  `GitHubInstallationClient` and `GitHubAuthClient`. `RepositoryPermissions.canAct` takes a
+  `GHPermissionType`. (#1428)
+
+### Fixed
+
+- **`/review` no longer reviews a closed or merged pull request (#1458).** The comment path never
+  looked at the pull request's state, so a `/review` after the merge ran a full review and asked
+  for fixes nobody could push. The bot now answers with a fixed notice and calls no model; reopen
+  the pull request to review it again.
+- **Config key definitions are found in ordinarily-named files** (#642): the "Config key
+  definitions from the repository" section only read `application*` resources and source files
+  whose name ended in `config`, `settings`, `properties` or `env`, so a key read in `main.go`,
+  `main.py`, `main.rs`, `Main.java`, `Program.cs` or `app-config.service.ts` produced no section.
+  The resolver now also reads C#, PHP, Swift, Scala, `.kts`, `.mjs` and `.cjs` sources, matches the
+  config word in any dotted, hyphenated or underscored part of the name, and after the named files
+  reads changed source files whose diff reads the environment (`os.Getenv`, `getenv(`,
+  `process.env`, `Environment.GetEnvironmentVariable`, `env::var`, …), then entry-point files
+  (`main`, `Program`, `app`, `index`, `server`, `startup`). The fetch budget is unchanged, and the
+  new tiers only use what the named files leave.
+- **A GitHub rate limit no longer holds a review open until it resets**: reads made through the
+  GitHub App client (linked issues, repository instructions and settings, stack manifests, and
+  from this release permission and membership checks) used the client library's default, which
+  sleeps until the limit resets, up to an hour. They now fail at once, and each caller goes on
+  without what it could not read, as it does for any other failed read.
+- **A source file whose name ends in "test" or "spec" is no longer taken for a test**: the config
+  key lookup skipped any file whose name contained `test.` or `spec.`, so `latest.go`,
+  `contest.py` or `attest.go` was never read for key definitions. A name now counts as a test only
+  when `test`, `tests`, `spec` or `specs` is a word of its own before the extension
+  (`foo_test.go`, `config.spec.ts`, `AppConfigTest.java`, `FooSpecs.swift`), or when it is
+  `conftest.py`.
+- **A carried-gap label after a possessive or "the" no longer reads "the a previously listed
+  gap"** (#1398): the summary rewrote an echoed label such as "G1" to "a previously listed gap"
+  wherever it stood, so "the earlier summary's G1" became "the earlier summary's a previously
+  listed gap". After a possessive (`'s`, `’s`, a plural `s'`, "its", "their") or "the", "this" or
+  "that" the rewrite now leaves out the article, and "the G1 gap" reads "the previously listed
+  gap". A "that" that opens a clause ("says that G1 is open") keeps it.
+- **Findings from rounds before the previous one are re-checked when they could be fixed**
+  (#1316): an older round's open finding was put back to the model only when its file was known
+  to have changed since the round that raised it. When that could not be told (more round heads
+  than the review compares, or a comparison at GitHub's file cap) it was never asked about again
+  and stayed open after its fix. It is now asked about every round. A finding whose own file is
+  unchanged is also asked about, and its `resolved` stands, when another file its title or
+  description names changed since: a finding that a document and the code disagree can be fixed
+  in the document while the code line it quotes stays the same.
+- The review session row records the review's outcome instead of per-call values (#1417):
+  - `durationMs` is the review's elapsed time from start to its final status. It was the sum of
+    the model calls' durations, which counted parallel and retried calls each time and left out
+    the time spent outside model calls.
+  - A model call that fails no longer sets the session to `failed`. The review's final outcome
+    sets the status, so a call that is retried and succeeds leaves the review `completed`.
+  - A completed session has no error message. Failed calls are counted in a new
+    `failedmodelcalls` column (migration V5, default 0), shown as "Failed model calls" on the
+    dashboard's session page.
+- **A webhook redelivered after a restart is no longer reviewed twice** (#1374): the delivery ids
+  used to drop GitHub redeliveries were kept only in memory, so after a restart, a redeploy or a
+  scale from zero, a retried or manually redelivered `pull_request` delivery ran a second full
+  review on the same commit. The ids are now also stored in a new table, `webhook_delivery`
+  (migration V4, created on the first start), for `WEBHOOK_DEDUP_TTL`; the first instance to store
+  an id handles the delivery, a delivery whose dispatch failed can still be redelivered, and
+  expired rows are deleted hourly. A database failure falls back to the in-memory check.
+- **The review probes path and name rules that match too much** (#1385): the request for parsing
+  and matching code weighted silent misses over false matches, and its examples were all regex,
+  whitespace and line-ending probes. A whole-word file-name match and a Go import resolved by
+  directory suffix both matched files they should not, and neither was ever probed. The request
+  now treats both directions alike, lists path and name matching (`endsWith`, basename, whole-word
+  matches over paths) as decision rules with same-name, suffix/prefix and module-path probes, asks
+  for one probe per branch of a per-language rule, and counts a guard that one branch has and its
+  parallel lacks as evidence.
+- **A finding closed in one follow-up round is no longer closed and counted again in later
+  rounds** (#1409): a round stored the model's status for each previous finding, not the status
+  the round ended with, so a finding a maintainer's clear resolved or whose code left the diff
+  was still open to the next round, which closed it again under "Previous findings resolved" or
+  "superseded" and named it again. A round now stores its final statuses, and a stored
+  `superseded` closes the finding for later rounds. Findings carried from a run that stood down
+  no longer drop the earlier rounds' closes recorded with the round they join, which had made a
+  finding close a third time.
+- A pull request head that moved while the review loaded its context no longer posts the "review
+  could not be completed" comment. The run ends as superseded, like a head that moves later in the
+  review: the skip is counted under `HEAD_MOVED`, the check run is concluded as skipped, and no
+  failed review is counted or notified. The review of the new head runs as before. A head that
+  cannot be read is still a failure. (#1412)
+- **Exported telemetry carries `service.instance.id`** (#1373): instances exporting to one
+  backend had identical resource attributes, so their metrics landed in one series and cumulative
+  counters such as `thrillhouse.reviews.total` overwrote each other. The id is `HOSTNAME`, or a
+  random id generated at startup when it is unset, and `OTEL_RESOURCE_ATTRIBUTES` (new) can set it
+  or add other resource attributes.
+- **The DCO check accepts a Dependabot commit merged into a release branch unsquashed**: when a
+  Dependabot pull request was merged with a merge commit, its own commit reached the release pull
+  request as it was, and the check failed it there because a person, not the bot, opened the
+  release pull request. The commit now passes when it is GitHub-verified as the bot's, sits in the
+  head of exactly one merged pull request in this repository that the same bot opened, and is not
+  that pull request's squash. Squash merges keep the existing checks.
+
+### Dependencies
+
+- Bumped the Maven minor and patch group, holding back OpenTelemetry (#1418), the actions group
+  (#1416), the frontend npm dependencies (#1414) and the website docs dependencies (#1413)
+
 ## [0.9.2] - 2026-11-16
 
 Follow-up rounds now count each finding once and decide whether it is fixed from the file's

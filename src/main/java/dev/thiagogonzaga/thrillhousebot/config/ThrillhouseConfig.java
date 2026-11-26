@@ -173,7 +173,8 @@ public interface ThrillhouseConfig {
   interface WebhookConfig {
     /**
      * How long a webhook delivery id ({@code X-GitHub-Delivery}) is remembered, to ignore GitHub
-     * redeliveries instead of reviewing twice. Kept in memory, per replica.
+     * redeliveries instead of reviewing twice. Kept in memory and in the database, so a redelivery
+     * after a restart is still dropped.
      */
     @WithDefault("24h")
     @WithName("dedup-ttl")
@@ -239,6 +240,14 @@ public interface ThrillhouseConfig {
     @WithDefault("50")
     @WithName("max-review-comments")
     int maxReviewComments();
+
+    /**
+     * Open one pending pull request review per round, attach each inline comment to it, then submit
+     * it once (#1434). Off, each inline comment is posted on its own, as before.
+     */
+    @WithDefault("false")
+    @WithName("batched-inline-review-enabled")
+    boolean batchedInlineReviewEnabled();
 
     /**
      * Attempts per failed AI call. At most two may end in a timeout. A rejected API key is never
@@ -366,6 +375,17 @@ public interface ThrillhouseConfig {
     @WithDefault("false")
     @WithName("summary-verification-enabled")
     boolean summaryVerificationEnabled();
+
+    /**
+     * Add a collapsed "Agent prompt" block to each inline finding, built from the title,
+     * description and suggestion already on the comment (#1432). Default off.
+     *
+     * <p>When adding the block would push the comment past GitHub's limit, the block is left out
+     * and the comment posts without it, so a long comment never ends in an unclosed block.
+     */
+    @WithDefault("false")
+    @WithName("agent-prompt-enabled")
+    boolean agentPromptEnabled();
 
     /**
      * When a review or summary answer is not valid review JSON, send only that answer and the

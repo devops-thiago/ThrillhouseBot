@@ -91,16 +91,19 @@ jobs:
         with:
           ref: ${{ needs.source.outputs.sha }}
 
-      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: "25"
           distribution: "temurin"
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - id: m2
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.m2
-          key: ${{ runner.os }}-${{ matrix.arch }}-m2-${{ hashFiles('**/pom.xml') }}
-          restore-keys: ${{ runner.os }}-${{ matrix.arch }}-m2
+          key: ${{ runner.os }}-${{ matrix.arch }}-m2-native-${{ hashFiles('**/pom.xml', '.mvn/wrapper/maven-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.arch }}-m2-native-
+            ${{ runner.os }}-${{ matrix.arch }}-m2-
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -124,6 +127,12 @@ jobs:
           name: test-native-${{ matrix.arch }}
           path: target/*-runner
           retention-days: 1
+      # This workflow only runs on workflow_dispatch, so unlike ci.yml it needs no pull_request guard.
+      - if: ${{ success() && steps.m2.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2
+          key: ${{ steps.m2.outputs.cache-primary-key }}
 
   build-push:
     needs: [source, native-build]
@@ -208,18 +217,21 @@ jobs:
             echo "\`\`\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         if: inputs.variant == 'jvm'
         with:
           java-version: "25"
           distribution: "temurin"
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - id: m2
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: inputs.variant == 'jvm'
         with:
           path: ~/.m2
-          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
-          restore-keys: ${{ runner.os }}-m2
+          key: ${{ runner.os }}-m2-package-${{ hashFiles('**/pom.xml', '.mvn/wrapper/maven-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-m2-package-
+            ${{ runner.os }}-m2-
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: inputs.variant == 'jvm'
@@ -240,6 +252,13 @@ jobs:
       - name: Package (JVM)
         if: inputs.variant == 'jvm'
         run: ./mvnw -B package -DskipTests -Dquarkus.package.jar.type=mutable-jar
+
+      # This workflow only runs on workflow_dispatch, so unlike ci.yml it needs no pull_request guard.
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ success() && inputs.variant == 'jvm' && steps.m2.outputs.cache-hit != 'true' }}
+        with:
+          path: ~/.m2
+          key: ${{ steps.m2.outputs.cache-primary-key }}
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: inputs.variant == 'native'

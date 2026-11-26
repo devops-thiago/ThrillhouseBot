@@ -1,0 +1,98 @@
+### src/main/java/dev/thiagogonzaga/thrillhousebot/review/RelatedContext.java (added, +238 -0)
+```diff
+@@ -0,0 +26,25 @@
++/**
++ * One review's related context (#55): the repository files outside the diff that were picked and
++ * read, each clipped to the regions the changed code uses. The review call gets all of it as one
++ * fenced section ({@link #section()}); the verifier gets, per finding, the excerpt of a file that
++ * finding names ({@link #noteFor}).
++ *
++ * @param files the files read, in the order they were picked
++ * @param selectionCalls the model calls the selection made (0 or 1), counted in {@code
++ *     REVIEW_MAX_AI_CALLS}
++ */
++public record RelatedContext(List<RelatedFile> files, int selectionCalls) {
++
++  /** No related context: the feature is off, nothing was found, or the selection failed. */
++  public static final RelatedContext NONE = new RelatedContext(List.of(), 0);
++
++  /** Characters of excerpt one finding's note carries, before the evidence budget's own cap. */
++  static final int MAX_NOTE_EXCERPT_CHARS = 900;
++
++  /** A file name without its extension shorter than this is too common a word to match on. */
++  static final int MIN_DISTINCT_STEM = 4;
++
++  private static final Pattern IDENTIFIER = Pattern.compile("[A-Za-z_][A-Za-z0-9_]{3,}");
++
++  public RelatedContext {
++    files = List.copyOf(files);
+@@ -0,0 +122,24 @@
++  /**
++   * What the verifier is told for one finding: the excerpt of the first related file the finding
++   * names, with the regions that share the most identifiers with the finding first; {@code null}
++   * when the finding names none. A file is named by its path, its file name, or, when it is
++   * distinctive enough, its file name without the extension as a whole word.
++   */
++  String noteFor(ReviewResponse.Finding finding) {
++    if (files.isEmpty() || finding == null) {
++      return null;
++    }
++    var text =
++        String.join(
++            "\n",
++            nullToEmpty(finding.title()),
++            nullToEmpty(finding.description()),
++            nullToEmpty(finding.suggestionNew()));
++    for (var file : files) {
++      if (names(text, file.path())) {
++        return note(file, identifiersOf(text));
++      }
++    }
++    return null;
++  }
++
+@@ -0,0 +196,43 @@
++
++  /** Whether {@code text} names the file at {@code path}. */
++  static boolean names(String text, String path) {
++    if (text.contains(path)) {
++      return true;
++    }
++    var name = path.substring(path.lastIndexOf('/') + 1);
++    if (wholeWord(text, name)) {
++      return true;
++    }
++    var dot = name.lastIndexOf('.');
++    var stem = dot <= 0 ? name : name.substring(0, dot);
++    var distinctive =
++        stem.length() >= MIN_DISTINCT_STEM
++            && (stem.indexOf('_') >= 0 || !stem.equals(stem.toLowerCase(java.util.Locale.ROOT)));
++    return distinctive && wholeWord(text, stem);
++  }
++
++  private static boolean wholeWord(String text, String word) {
++    var from = 0;
++    while (true) {
++      var at = text.indexOf(word, from);
++      if (at < 0) {
++        return false;
++      }
++      var end = at + word.length();
++      var startsWord = at == 0 || !isWordChar(text.charAt(at - 1));
++      var endsWord = end == text.length() || !isWordChar(text.charAt(end));
++      if (startsWord && endsWord) {
++        return true;
++      }
++      from = at + 1;
++    }
++  }
++
++  private static boolean isWordChar(char c) {
++    return Character.isLetterOrDigit(c) || c == '_';
++  }
++
++  private static String nullToEmpty(String text) {
++    return text == null ? "" : text;
++  }
++}
+```

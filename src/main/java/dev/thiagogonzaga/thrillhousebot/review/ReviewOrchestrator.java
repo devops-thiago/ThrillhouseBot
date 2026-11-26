@@ -291,8 +291,12 @@ public class ReviewOrchestrator {
    * moved a finding, or when {@code /summary} asked for it (#1319).
    */
   private boolean summaryStandsIn(
-      String auth, ReviewRequest req, ReviewResult result, boolean moved) {
-    return publishSummaryBestEffort(auth, req, result) && (moved || req.forceSummary());
+      String auth,
+      ReviewRequest req,
+      ReviewResult result,
+      ReviewContextLoader.ReviewContext ctx,
+      boolean moved) {
+    return publishSummaryBestEffort(auth, req, result, ctx) && (moved || req.forceSummary());
   }
 
   /** The follow-up delta, or {@code ""} on a round that moved no finding (#1319). */
@@ -464,7 +468,7 @@ public class ReviewOrchestrator {
       // summary nor the delta; the summary may still be edited in place, which notifies nobody.
       var findingRound = findingStates.prepare(req, ctx, result);
       var moved = findingRound.moved(result);
-      boolean summaryPosted = summaryStandsIn(auth, req, result, moved);
+      boolean summaryPosted = summaryStandsIn(auth, req, result, ctx, moved);
       // The optional delta enriches the review, never a second notification beside it.
       var followUpDelta = movedDelta(moved, result, summaryPosted, req, previousFindings);
       reviewPublisher.dismissPendingBotReviews(
@@ -549,14 +553,10 @@ public class ReviewOrchestrator {
           doneReq,
           "complete the session",
           () -> {
-            // #1066: the earlier rounds' findings this round closed are recorded with the round,
-            // so the next round's replay no longer carries them and does not close or name them
-            // again.
-            var closedEarlier = result.earlierRoundClosedMembers();
-            if (!closedEarlier.isEmpty()) {
-              findingPipeline.persistAiResponse(
-                  session, aiResponse.withClosedEarlierRound(closedEarlier));
-            }
+            // #1066, #1409: the round is stored with its final statuses and the earlier rounds'
+            // findings it closed, so the next round's replay no longer carries a finding the code
+            // closed here and does not close or name it again.
+            findingPipeline.persistAiResponse(session, result.recordedResponse(aiResponse));
             // Persist first: a failed write must skip the broadcast so persisted and live
             // dashboard state stay consistent.
             applyReviewResult(session, result);
@@ -582,7 +582,7 @@ public class ReviewOrchestrator {
             req.repo(),
             req.prNumber());
       } else {
-        handleReviewFailure(auth, req, session, checkRunId, e);
+        endUnpublishedRun(auth, req, session, checkRunId, e);
       }
     } finally {
       // Every outcome but a CI hold — a verdict with findings, a failure, a superseded run — is
@@ -656,6 +656,46 @@ public class ReviewOrchestrator {
   }
 
   /**
+   * Ends a run that stopped before its result reached the pull request: a head that moved while the
+   * context loaded supersedes it quietly (#1412), anything else is a failure.
+   */
+  private void endUnpublishedRun(
+      String auth, ReviewRequest req, ReviewSession session, long checkRunId, RuntimeException e) {
+    if (e instanceof ReviewContextLoader.StaleReviewException stale && stale.headMoved()) {
+      closeSupersededWhileLoading(auth, req, session, checkRunId, stale.currentHead());
+    } else {
+      handleReviewFailure(auth, req, session, checkRunId, e);
+    }
+  }
+
+  /**
+   * Closes out a run whose head moved while its context loaded (#1412). A push superseded it and
+   * the dispatcher already queued the review of the new head, so this is not a failure: nothing is
+   * posted, no failure is counted or notified, and the check run is concluded as skipped. The
+   * session row reads like any other superseded run's, with its elapsed time as {@code durationMs}
+   * (#1417). Visible for tests.
+   */
+  void closeSupersededWhileLoading(
+      String auth, ReviewRequest req, ReviewSession session, long checkRunId, String freshHead) {
+    var stoodDown =
+        standDown.supersededWhileLoading(auth, req, checkRunId, sessionUrl(session), freshHead);
+    var elapsedMs = session.elapsedMs();
+    try {
+      applySessionState(
+          session,
+          s -> {
+            s.setStatus(ReviewSession.STATUS_FAILED);
+            s.setErrorMessage(stoodDown.sessionError());
+            s.setDurationMs(elapsedMs);
+          });
+    } catch (RuntimeException persistenceError) {
+      Log.warnf(
+          persistenceError, "Failed to persist %s review session %d", stoodDown.kind(), session.id);
+    }
+    broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.failed(session));
+  }
+
+  /**
    * Posts or edits the PR summary comment, swallowing any failure: it is enrichment, not the review
    * itself, so a transient failure here must not abort before {@code postReview} and surface a hard
    * FAILED check for a review that would otherwise post.
@@ -665,16 +705,10 @@ public class ReviewOrchestrator {
    *     a swallowed failure, so the summary-only review skip never fires without a summary on the
    *     PR.
    */
-  private boolean publishSummaryBestEffort(String auth, ReviewRequest req, ReviewResult result) {
+  private boolean publishSummaryBestEffort(
+      String auth, ReviewRequest req, ReviewResult result, ReviewContextLoader.ReviewContext ctx) {
     try {
-      return reviewPublisher.publishSummary(
-          auth,
-          req.owner(),
-          req.repo(),
-          req.prNumber(),
-          result,
-          req.forceSummary(),
-          PromptSections.prContext(req.prTitle(), req.prDescription()));
+      return reviewPublisher.publishSummary(auth, req, result, ctx.lineResolver());
     } catch (RuntimeException e) {
       Log.warnf(
           e,
@@ -924,10 +958,15 @@ public class ReviewOrchestrator {
 
   /** Applies review completion fields to the in-memory session and persisted entity together. */
   void applyReviewResult(ReviewSession session, ReviewResult result) {
+    var elapsedMs = session.elapsedMs();
     applySessionState(
         session,
         s -> {
           s.setStatus(ReviewSession.STATUS_COMPLETED);
+          // #1417: a model call that failed and was retried is counted on the row, not left as its
+          // error on a review that completed.
+          s.setErrorMessage(null);
+          s.setDurationMs(elapsedMs);
           s.setCriticalFindings(result.criticalCount());
           s.setHighFindings(result.highCount());
           s.setMediumFindings(result.mediumCount());
@@ -952,11 +991,13 @@ public class ReviewOrchestrator {
    * cannot make the next one treat findings it never posted as already raised.
    */
   void applyReviewFailure(ReviewSession session, String errorMessage) {
+    var elapsedMs = session.elapsedMs();
     applySessionState(
         session,
         s -> {
           s.setStatus(ReviewSession.STATUS_FAILED);
           s.setErrorMessage(errorMessage);
+          s.setDurationMs(elapsedMs);
           if (session.getAiResponseJson() != null) {
             s.setAiResponseJson(session.getAiResponseJson());
           }

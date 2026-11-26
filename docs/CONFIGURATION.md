@@ -28,6 +28,7 @@ These variables set Quarkus and LangChain4j keys rather than a `thrillhousebot.*
 | `OTEL_HTTP_SERVER_METRICS_ENABLED` | Record Quarkus's HTTP server metrics (`http.server.request.duration`), exported over OTLP and served on `/metrics`. | `true` | `quarkus.otel.instrument.http-server-metrics` |
 | `OTEL_JVM_METRICS_ENABLED` | Record Quarkus's JVM metrics (`jvm.*`), exported over OTLP and served on `/metrics`. | `true` | `quarkus.otel.instrument.jvm-metrics` |
 | `OTEL_LOGS_ENABLED` | Also export the bot's log records over OTLP, beside the console. Off by default, so a collector does not start receiving every log line without an opt-in. | `false` | `quarkus.otel.logs.handler.enabled` |
+| `OTEL_RESOURCE_ATTRIBUTES` | Extra OpenTelemetry resource attributes as `key1=value1,key2=value2`, added to every exported span, metric and log record. Every instance gets a `service.instance.id` of its own (the `HOSTNAME` environment variable, or a random id generated at startup when it is unset), so instances exporting to one backend keep separate series; set `service.instance.id=...` here to choose it. | _(none)_ | `quarkus.otel.resource.attributes` |
 | `OTEL_SDK_DISABLED` | Turn telemetry off: nothing is exported over OTLP and the Prometheus endpoint answers 404. | `false` | `quarkus.otel.sdk.disabled` |
 | `PORT` | HTTP port the bot listens on (webhooks, dashboard, health and metrics). | `8080` | `quarkus.http.port` |
 | `REVIEW_CONCISE_MAX_OUTPUT_TOKENS` | Response cap (`max_tokens`) for the calls on the `concise` model: the summary call, the verifier and replies. A summary cut at this cap is salvaged or replaced by a counts-only summary, and the findings are kept. Set it empty to send no cap. | `8192` | `quarkus.langchain4j.openai.concise.chat-model.max-tokens` |
@@ -150,9 +151,11 @@ Prices used for cost tracking, keyed by model name (the `AI_MODEL` value) like t
 |---|---|---|---|
 | `ACK_REACTION_TIMEOUT`<br>`thrillhousebot.review.ack-reaction-timeout` | Time limit on posting the 👀 reaction to a command; the reaction may land late. | duration | `3s` |
 | `REVIEW_ADD_DOCS_ENABLED`<br>`thrillhousebot.review.add-docs-enabled` | Allow `/add-docs`, which posts generated docs for the changed symbols as committable suggestions. | boolean | `true` |
+| `REVIEW_AGENT_PROMPT_ENABLED`<br>`thrillhousebot.review.agent-prompt-enabled` | Add a collapsed "Agent prompt" block to each inline finding, built from the title, description and suggestion already on the comment (#1432). Default off. | boolean | `false` |
 | `THRILLHOUSEBOT_REVIEW_AI_RETRY_BASE_DELAY_MS`<br>`thrillhousebot.review.ai-retry-base-delay-ms` | Base delay of the exponential retry backoff, in milliseconds. | integer | `2000` |
 | `THRILLHOUSEBOT_REVIEW_AI_TIMEOUT_SECONDS`<br>`thrillhousebot.review.ai-timeout-seconds` | Client-side wait per streaming attempt, in seconds. Keep it at or above `AI_TIMEOUT` so a timed-out attempt does not leave a stream open at the provider. A second timeout fails the call. | integer | `300` |
 | `AUTO_REVIEW_MIN_INTERVAL`<br>`thrillhousebot.review.auto-review-min-interval` | Minimum time between automatic reviews of one PR. Pushes inside the window are skipped, even on a new head (in memory, per replica). `/review` always runs. `0` reviews every push. | duration | `0` |
+| `REVIEW_BATCHED_INLINE_REVIEW_ENABLED`<br>`thrillhousebot.review.batched-inline-review-enabled` | Open one pending pull request review per round, attach each inline comment to it, then submit it once (#1434). Off, each inline comment is posted on its own, as before. | boolean | `false` |
 | `REVIEW_BLOCKING_STRICTNESS`<br>`thrillhousebot.review.blocking-strictness` | Which findings request changes: `balanced`, `strict` or `lenient`. See [Blocking strictness](https://github.com/devops-thiago/ThrillhouseBot#blocking-strictness). | string | `balanced` |
 | `REVIEW_CI_GATING`<br>`thrillhousebot.review.ci-gating` | How CI affects approval: `strict` holds approval while required CI is pending, failing or unreadable; `warn` approves and notes the CI state; `off` ignores CI. See [CI gating](https://github.com/devops-thiago/ThrillhouseBot#ci-gating). | string | `strict` |
 | `REVIEW_CONVERSATIONAL_REPLIES_ENABLED`<br>`thrillhousebot.review.conversational-replies-enabled` | Answer `@thrillhousebot` mentions in PR threads and replies to findings. | boolean | `true` |
@@ -254,7 +257,7 @@ Prices used for cost tracking, keyed by model name (the `AI_MODEL` value) like t
 
 | Variable | Description | Type | Default |
 |---|---|---|---|
-| `WEBHOOK_DEDUP_TTL`<br>`thrillhousebot.webhook.dedup-ttl` | How long a webhook delivery id (`X-GitHub-Delivery`) is remembered, to ignore GitHub redeliveries instead of reviewing twice. Kept in memory, per replica. | duration | `24h` |
+| `WEBHOOK_DEDUP_TTL`<br>`thrillhousebot.webhook.dedup-ttl` | How long a webhook delivery id (`X-GitHub-Delivery`) is remembered, to ignore GitHub redeliveries instead of reviewing twice. Kept in memory and in the database, so a redelivery after a restart is still dropped. | duration | `24h` |
 
 ## `thrillhousebot.webhook.triggers`
 

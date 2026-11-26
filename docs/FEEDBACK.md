@@ -52,6 +52,8 @@ run at startup.
 |--------|------|-------|
 | `id` | bigint | Primary key from a sequence |
 | `repository` | string | `owner/repo` |
+| `installationId` | bigint, nullable | GitHub App installation id |
+| `repositoryId` | bigint, nullable | GitHub's numeric repository id (rows before v0.9.0 are backfilled at startup) |
 | `prNumber` | int | Pull request number in that repository |
 | `githubCommentId` | bigint | ID of the finding's root review comment |
 | `findingIndex` | int, nullable | 1-based index from the marker |
@@ -93,7 +95,7 @@ cannot access gets `403`.
 
 - `FindingFeedback`, `FindingFeedbackRepository`, `FindingFeedbackService`:
   the entity, its queries and the per-repository counts
-  (`summarize(repository)`, `summarizeAll()`).
+  (`summarize(scope, repository)`, `listRecent`, `countsByRepository`).
 - `FindingFeedbackCaptureService`: reaction polling and the reply heuristic.
 - `GitHubReactionClient.listReviewCommentReactions`: the Reactions API call.
 - `WebhookEvents`: schedules capture when someone replies on a review

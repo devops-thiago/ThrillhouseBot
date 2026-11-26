@@ -55,7 +55,7 @@ thread resolution over GraphQL, the instructions file and the repository setting
 flowchart TD
     GH[GitHub event] -->|HMAC check, delivery parse<br/>Quarkiverse GitHub App| WH[WebhookEvents]
     WH -->|pull_request: pause, trigger filters,<br/>auto-review window| DSP
-    WH -->|/review: 👀, pause, write access| DSP
+    WH -->|/review: 👀, pause, write access, open PR| DSP
     WH -->|other commands: 👀| CMD[CommentCommandService]
     WH -->|mention or reply to a finding| REP[MaintainerReplyDispatcher]
     WH -->|check_suite or status| CIR[CI-hold recheck]
@@ -82,7 +82,7 @@ installation client is built on the ack path: the observers receive the raw even
 | Event | What it starts |
 |---|---|
 | `pull_request` `opened`, `reopened`, `synchronize`, `ready_for_review` | An automatic review, unless the PR is paused, filtered out by the `WEBHOOK_*` trigger settings (drafts, labels, base branches), or reviewed less than `AUTO_REVIEW_MIN_INTERVAL` ago (default `0`, window off). `ready_for_review` clears that window. |
-| `issue_comment` with `/review` or `@thrillhousebot review` | A manual review. It bypasses the trigger filters and the rate-limit window, and needs write access. |
+| `issue_comment` with `/review` or `@thrillhousebot review` | A manual review. It bypasses the trigger filters and the rate-limit window, and needs write access. On a closed or merged PR it posts a notice instead of reviewing. |
 | `issue_comment` with another command | The command: `/help`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`, `/resolve`, `/pause`, `/resume`, `/learnings`, `/remember`, `/forget`. `/summary` runs a review that posts a new summary comment. |
 | `issue_comment` mentioning the bot without a command | A conversational reply in the PR conversation. No 👀 reaction. |
 | `pull_request_review_comment` | A reply in the review thread when it mentions the bot, and finding-feedback capture when it answers a finding. |
@@ -137,7 +137,8 @@ head or a failed head read queues a run. A CI-hold recheck runs once no review o
 A failure before anything was published marks the check run `failure` and posts a short notice on
 the PR. For a cut response or a context-window rejection the notice names the cap and the setting
 to change; otherwise it suggests `/review`. The session is saved as failed and the failure
-notification is sent.
+notification is sent. A head that moved while the context loaded is not a failure: the check run
+is marked `skipped`, no notice is posted, and the queued run for the new head replaces it.
 
 ```mermaid
 sequenceDiagram
@@ -368,7 +369,10 @@ are listed by number with their thread replies, and the model reports a status f
 
 Findings the rounds before that one left open, each on its own thread, are listed in a separate
 unnumbered section that the model is told not to raise again or report on. Findings from older
-rounds that a maintainer answered are listed the same way. Without these sections, a round after
+rounds that a maintainer answered are listed the same way. An older round's open finding that a
+`resolved` could close (its file changed, its change is unknown, or a file it names changed) is
+instead numbered after the effective round's findings and gets a status
+(`FollowUpAnalyzer.priorListing`). Without these sections, a round after
 one that raised something new would see the older open findings as never reported and post them
 again.
 
@@ -417,7 +421,9 @@ The summary is one comment per pull request, marked with `<!-- thrillhousebot:su
 first round posts it. Every later round finds the newest bot comment carrying the marker (or, for
 summaries posted before 0.7.0, the summary heading) and replaces its body. An unchanged body is
 not rewritten. A new comment is posted when the old one was deleted or the edit failed, and when
-`/summary` asks for one.
+`/summary` asks for one. Under the marker, a hidden `<!-- thrillhousebot:findings v=1 [...] -->`
+line lists the open findings the summary renders (key, file, line, risk, confidence, thread,
+suggestion, carried) for other tools to read; the bot never reads it back (`FindingsManifest`).
 
 Because the edit replaces the whole body, each round renders the PR as it stands. The risk counts,
 Key Findings and "Things to double-check" cover the round's new findings plus every earlier finding
@@ -463,7 +469,9 @@ it:
 
 The next round reads the rows before the earlier rounds' statuses are reconciled
 (`StoredRoundChanges`). A finding whose file has the same blob SHA at this head as at the round
-that raised it is unchanged, and stays open without a call to GitHub; where no row knows the file,
+that raised it is unchanged, and stays open without a call to GitHub, unless its title or
+description names another file that changed since that round (`NamedFiles`): the model is then
+asked about it and its `resolved` stands; where no row knows the file,
 the comparison of the two heads decides (`RoundFileChanges`). Presence is checked on the side the
 quote was on, and a finding whose quote did not match even in the round that raised it is not read
 as gone only because it still does not match, while its file is still in the pull request (#1318).
@@ -522,7 +530,13 @@ unresolved instead of calling the PR clean. Findings are posted as individual in
 a committable suggestion where the range resolves. A comment GitHub refuses is retried without the
 suggestion, then as a file-level comment. Low-confidence medium and low findings go to the
 summary's "Things to double-check" list instead. At most `thrillhousebot.review.max-review-comments` (default 50)
-findings are posted inline.
+findings are posted inline. With `REVIEW_BATCHED_INLINE_REVIEW_ENABLED` (off by default), the round
+opens one pending review, attaches every inline comment to it (GraphQL `addPullRequestReviewThread`)
+and submits it once with the verdict. When the submit is refused, or fails without an answer and
+the review is still pending, the pending review is deleted and a separate review lists every finding
+it held. A maintainer-reply thread write waits, for at most two minutes, until the pending review is
+submitted or deleted. With `REVIEW_AGENT_PROMPT_ENABLED`, each inline finding comment ends with a collapsed
+"Agent prompt" block built from the finding already posted, with no model call.
 
 ## Context sections
 
@@ -591,23 +605,25 @@ The following state lives in memory, per process, and is lost on restart:
 | Verdicts held on CI (`CiHoldRegistry`, up to 256 PRs) | The approval is not posted when CI turns green; `/review` posts it. |
 | Findings handed over by a superseded run (`SupersededFindingsCarryover`) | The next round finds them again from the diff. |
 | Verifier rejections per head (`VerifierRejectionMemory`) | A rejected finding can go through the verifier again. |
-| Webhook delivery ids (24 h) and the auto-review window | A redelivery or an early push can be reviewed. |
+| The auto-review window | An early push can be reviewed. (Webhook delivery ids are also kept in `webhook_delivery`, so a redelivery is still dropped after a restart.) |
 | Dashboard login sessions (8 h) | Users log in again. |
 | Caches: installation tokens, instructions file, repository settings, project stack, dashboard access | Read again from GitHub. |
 
 The summary comment is found by its marker each round, not by an id held in memory, so a restart
 does not lose it. On startup `InterruptedSessionReconciler` marks every session still
-`in_progress` as failed. The bot is designed to run as a single replica.
+`in_progress` as failed. Most of this state is per process, so the bot is designed to run as a
+single replica; only webhook delivery dedup works across instances.
 
 ## Persistence
 
 | Entity | Table | Holds |
 |---|---|---|
-| `ReviewSession` | `ReviewSession` | One row per review round: PR, head commit, model, tokens, cost, duration, finding counts, status, and the final response (`aiResponseJson`) that later rounds read their earlier findings from. |
+| `ReviewSession` | `ReviewSession` | One row per review round: PR, head commit, model, tokens, cost, elapsed time, failed model calls, finding counts, status, and the final response (`aiResponseJson`) that later rounds read their earlier findings from. |
 | `PausedPr` | `PausedPr` | PRs paused with `/pause`. |
 | `FindingFeedback` | `finding_feedback` | 👍/👎 reactions and reply signals on findings. See [Finding feedback](https://devops-thiago.github.io/ThrillhouseBot/feedback/). |
 | `ReviewLearning` | `review_learning` | Review learnings, scoped to installation and repository. A retracted row stays, with `active` cleared. |
 | `FindingState` | `finding_state` | Each finding of a pull request and its status across rounds. See [Stored finding state](#stored-finding-state). |
+| `SeenDelivery` | `webhook_delivery` | Webhook delivery ids seen within `WEBHOOK_DEDUP_TTL`, so a redelivery after a restart or on another instance is dropped. Only the id and two times; expired rows are purged hourly. |
 
 Production uses PostgreSQL (`DATABASE_URL`); dev mode and the tests use in-memory H2 in PostgreSQL
 mode. Flyway runs the scripts in `src/main/resources/db/migration` at boot, and Hibernate only
@@ -666,14 +682,16 @@ served and an empty scope matches nothing; `?installation=` narrows to one insta
 `?repository=` naming a repository outside the scope answers 403, and a session id from one
 answers 404, the same as a missing id. Skip counters are kept per installation and summed only
 over installations whose installation-wide views the login may see: its own personal account, or
-an organization it is a member of (`GET /orgs/{org}/members/{user}` with the installation token,
-which needs Organization → Members: read and is granted only on 204). A WebSocket connection
+an organization it is a member of (`GET /orgs/{org}/memberships/{user}` with the installation token,
+which needs Organization → Members: read and is granted only on an active membership; a 403 logs
+the missing permission once). A WebSocket connection
 reads its scope from memory on every event; the keepalive tick re-resolves it on a virtual
 thread, never the event loop or a review thread, and closes the connection once nothing is
 readable or the session has ended.
 
-Acting is separate from viewing: `github/RepositoryPermissions` grants it to write, maintain and
-admin (the legacy `permission` field or `role_name`), and `/review`, decline learnings and
+Acting is separate from viewing: `github/RepositoryPermissions` grants it to admin and write, read
+from the collaborator-permission `permission` field (GitHub reports maintain, and a custom role
+built on write, as `write`), and `/review`, decline learnings and
 finding feedback all use it. The dashboard has no endpoint that changes state.
 
 With `NOTIFICATIONS_WEBHOOK_URL` set, `ReviewNotifier` posts each final outcome (completed or
@@ -681,7 +699,10 @@ failed) once, as JSON, Slack or Discord, off the review thread. Requests can be 
 HMAC-SHA256 and are retried on timeouts, 429 and 5xx. A superseded run and the approval posted
 when held CI turns green send nothing.
 
-Traces, token counts and cost come from OpenTelemetry. Security reports follow
+Traces, token counts and cost come from OpenTelemetry. Every exported span, metric and log record
+carries `service.instance.id` (`HOSTNAME`, else a random id per start; `OTEL_RESOURCE_ATTRIBUTES`
+can set it, as comma-separated `key=value` pairs), so instances exporting to one backend keep
+separate series. Security reports follow
 [SECURITY.md](https://github.com/devops-thiago/ThrillhouseBot/blob/main/SECURITY.md).
 
 ## Conversational replies
@@ -713,10 +734,11 @@ diff, filtered by the ignore globs.
 
 | Package | Responsibility | Notable classes |
 |---|---|---|
-| `webhook/` | The webhook entry: the Quarkiverse GitHub App extension verifies the signature and parses deliveries, then applies trigger filters, pause state and the auto-review window, drops redeliveries, acks commands with 👀, routes commands and replies, starts CI-hold rechecks | `WebhookEvents`, `WebhookDeduplicator`, `TriggerDetector`, `ReviewTriggerFilter`, `ManualReviewAuthorizer`, `AckReactionService`, `CommentCommandService`, `LearningCommands`, `PrPauseService` |
-| `review/` | Everything from "a review was requested" to "the result is on GitHub": dispatch, context, prompt assembly, budgeting, the finding chain, the security scan, follow-up reconciliation, verdict, publishing, CI gating, learnings, replies and the on-request commands | `ReviewDispatcher`, `ReviewOrchestrator`, `ReviewContextLoader`, `ReviewPromptAssembler`, `DiffBudgetPlanner`, `FindingPipeline`, `FindingScreen`, `SecurityScan`, `FollowUpAnalyzer`, `VerdictBuilder`, `ReviewPublisher`, `PrSummaryGenerator`, `CiStatusEvaluator`, `CiHoldRevisit`, `TicketContextResolver`, `ReviewLearnings`, `MaintainerReplyService` |
+| `webhook/` | The webhook entry: the Quarkiverse GitHub App extension verifies the signature and parses deliveries, then applies trigger filters, pause state and the auto-review window, drops redeliveries, acks commands with 👀, routes commands and replies, starts CI-hold rechecks | `WebhookEvents`, `WebhookDeduplicator`, `SeenDeliveries`, `DeliveryPurge`, `TriggerDetector`, `ReviewTriggerFilter`, `ManualReviewAuthorizer`, `AckReactionService`, `CommentCommandService`, `LearningCommands`, `PrPauseService` |
+| `review/` | Everything from "a review was requested" to "the result is on GitHub": dispatch, context, prompt assembly, budgeting, the finding chain, the security scan, follow-up reconciliation, verdict, publishing, CI gating, learnings, replies and the on-request commands | `ReviewDispatcher`, `ReviewOrchestrator`, `ReviewContextLoader`, `ReviewPromptAssembler`, `DiffBudgetPlanner`, `FindingPipeline`, `FindingScreen`, `SecurityScan`, `FollowUpAnalyzer`, `VerdictBuilder`, `ReviewPublisher`, `FindingsManifest`, `PrSummaryGenerator`, `CiStatusEvaluator`, `CiHoldRevisit`, `TicketContextResolver`, `ReviewLearnings`, `MaintainerReplyService` |
 | `review/ai/` | The LangChain4j layer: AI service interfaces and prompts, streaming and retries, response parsing and salvage, the verifier, the token ledger and the call gate | `AiReviewService`, `PrReviewer`, `PrSummarizer`, `FindingVerifier`, `FindingVerificationService`, `ReviewResponseParser`, `ReplyAssistant`, `ModelCallGate`, `ReviewTokenLedger` |
 | `github/` | GitHub REST and GraphQL clients, app auth, write pacing and retry, the instructions file and repository settings | `GitHubAuthClient`, `GitHubReviewClient`, `GitHubCheckRunClient`, `GitHubWritePacer`, `GitHubWriteRetry`, `InstructionsResolver`, `RepoSettingsResolver`, `ReviewThreadService` |
+| `observability/` | Metrics export and the OpenTelemetry resource | `PrometheusMetricsResource`, `ReviewOutcomeMetrics`, `ServiceInstanceResource` |
 | `dashboard/` | OAuth sessions, the WebSocket broadcaster, review session persistence, dashboard REST | `AuthResource`, `DashboardResource`, `SessionEventBroadcaster`, `ReviewSession`, `ReviewSessionPersistence`, `InterruptedSessionReconciler` |
 | `notification/` | The opt-in outgoing review-outcome webhook | `ReviewNotifier`, `NotificationSettings`, `NotificationPayloads`, `WebhookDelivery` |
 | `config/` | Typed configuration, startup validation, the review executor, the HTTP client, model settings, bot identity | `ThrillhouseConfig`, `StartupConfigValidator`, `ReviewExecutorProducer`, `ActiveModelSettings`, `BotIdentity` |

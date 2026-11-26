@@ -16,9 +16,8 @@
 package dev.thiagogonzaga.thrillhousebot.webhook;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
-import dev.thiagogonzaga.thrillhousebot.github.RepositoryPermissions;
+import dev.thiagogonzaga.thrillhousebot.github.InstallationRepository;
+import io.quarkiverse.githubapp.GitHubClientProvider;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -31,7 +30,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import org.eclipse.microprofile.rest.client.inject.RestClient;
+import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,7 +44,6 @@ import org.slf4j.LoggerFactory;
 public class ManualReviewAuthorizer {
 
   private static final Logger log = LoggerFactory.getLogger(ManualReviewAuthorizer.class);
-  private static final String ACCEPT = "application/vnd.github+json";
 
   /**
    * GitHub {@code author_association} values that a write-access holder can present. Any other
@@ -59,26 +57,21 @@ public class ManualReviewAuthorizer {
       Set.of("OWNER", "MEMBER", "COLLABORATOR");
 
   private final ThrillhouseConfig config;
-  private final GitHubAuthClient authClient;
-  private final GitHubInstallationClient installationClient;
+  private final GitHubClientProvider clientProvider;
 
   /**
-   * Runs the write-access check (token mint + permission call) off the webhook acknowledgement
-   * thread so it can be abandoned once {@code manual-trigger-auth-timeout} elapses. Virtual threads
-   * keep an abandoned-but-still-blocked check cheap if GitHub is slow to respond.
+   * Runs the write-access check (permission call) off the webhook acknowledgement thread so it can
+   * be abandoned once {@code manual-trigger-auth-timeout} elapses. Virtual threads keep an
+   * abandoned-but-still-blocked check cheap if GitHub is slow to respond.
    */
   private final ExecutorService authCheckExecutor =
       Executors.newThreadPerTaskExecutor(
           Thread.ofVirtual().name("manual-review-auth-", 0).factory());
 
   @Inject
-  public ManualReviewAuthorizer(
-      ThrillhouseConfig config,
-      GitHubAuthClient authClient,
-      @RestClient GitHubInstallationClient installationClient) {
+  public ManualReviewAuthorizer(ThrillhouseConfig config, GitHubClientProvider clientProvider) {
     this.config = config;
-    this.authClient = authClient;
-    this.installationClient = installationClient;
+    this.clientProvider = clientProvider;
   }
 
   @PreDestroy
@@ -159,8 +152,10 @@ public class ManualReviewAuthorizer {
 
   private boolean writeAccessConfirmed(
       String owner, String repo, long installationId, String login) {
-    return RepositoryPermissions.canAct(
-        installationClient.collaboratorPermission(
-            authClient.getAuthHeader(installationId), ACCEPT, owner, repo, login));
+    Consumer<Exception> failed =
+        e -> log.warn("Permission check failed for {}/{} user {}: {}", owner, repo, login, e);
+    return InstallationRepository.resolve(clientProvider, installationId, owner, repo, failed)
+        .map(repository -> InstallationRepository.mayAct(repository, login, failed))
+        .orElse(false);
   }
 }
