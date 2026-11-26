@@ -12,6 +12,26 @@ All notable changes to ThrillhouseBot.
   agents need not infer next work from several sections. A hidden `thrillhousebot:head` line
   fingerprints the head between edits; a fixed command cheat sheet makes the summary
   self-sufficient for agents without the repository's AGENTS.md. No extra model call.
+
+### Changed
+
+- **A partial review says why the call failed and lists every file** (#1472): the notice names
+  what ended a failed batch (a timeout, the model's context window, a response cut before any
+  finding was complete, the provider's HTTP status or rate limit, or an unreadable answer). When
+  it has to roll file names up as "+N more", a collapsed list under it names every file not fully
+  reviewed, up to 200. The wording comes from the kind of failure, never from the provider's
+  error body.
+- **A test is reviewed in the same call as the source it covers** (#1472): when a review is split
+  into several batches, a test file joins the batch of the source file it names where that fits, so
+  a failed call no longer drops one without the other. Which files are reviewed and the number of
+  calls do not change.
+- **The installer pages take a GitHub address and an organization** (#1492): both fields are
+  optional. An organization name registers the App under that organization instead of your
+  personal account. A typed address has to be a plain `https` origin; left empty, it is
+  `https://github.com`, or on the page the bot serves, the address the bot is configured with.
+  Each page shows where the manifest will be sent and keeps the button disabled while either
+  value is invalid. Support in the bot for other addresses is still in progress and untested on a
+  real instance (#1487).
 ### Fixed
 
 - **A clear or decline comment says what it matched** (#1463): the reply lists the open findings
@@ -26,6 +46,13 @@ All notable changes to ThrillhouseBot.
   `https://ghes.example.com`, `https://ghes.example.com/api/v3` and
   `https://ghes.example.com/api/graphql`), and `GITHUB_OAUTH_URL` follows `GITHUB_URL` unless set.
   The defaults are unchanged.
+
+### Security
+
+- **The native image moves to the 2026-11-25 UBI9 micro base**, which ships `pcre2` 10.40-7.el9_8
+  (RHSA-2026:81532) with the fixes for CVE-2026-89161, CVE-2026-86145 and CVE-2026-103111, so their
+  `.trivyignore` entries are removed. CVE-2026-84782 (`libssl3`, DTLS only) stays ignored for the
+  `-distroless` image: Debian has a fixed package, but the distroless base has not picked it up.
 
 ## [0.9.3] - 2026-11-26
 
