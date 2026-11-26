@@ -39,6 +39,7 @@ class NotificationSettingsTest {
     private Optional<String> secret = Optional.of("signing-key");
     private List<String> events = List.of("completed", "failed");
     private boolean includeContent = false;
+    private boolean includeOpenFindings = false;
     private boolean allowHttp = false;
     private Duration timeout = Duration.ofSeconds(10);
     private int maxAttempts = 3;
@@ -50,6 +51,7 @@ class NotificationSettingsTest {
       lenient().when(config.secret()).thenReturn(secret);
       lenient().when(config.events()).thenReturn(events);
       lenient().when(config.includeContent()).thenReturn(includeContent);
+      lenient().when(config.includeOpenFindings()).thenReturn(includeOpenFindings);
       lenient().when(config.allowHttp()).thenReturn(allowHttp);
       lenient().when(config.timeout()).thenReturn(timeout);
       lenient().when(config.maxAttempts()).thenReturn(maxAttempts);
@@ -88,6 +90,7 @@ class NotificationSettingsTest {
     c.url = Optional.of("  " + SLACK_URL + "  ");
     c.events = List.of(" Completed ");
     c.includeContent = true;
+    c.includeOpenFindings = true;
 
     var settings = NotificationSettings.resolve(c.build()).orElseThrow();
 
@@ -97,6 +100,7 @@ class NotificationSettingsTest {
     assertThat(settings.signed()).isTrue();
     assertThat(settings.events()).containsExactly(ReviewOutcome.Event.COMPLETED);
     assertThat(settings.includeContent()).isTrue();
+    assertThat(settings.includeOpenFindings()).isTrue();
     assertThat(settings.timeout()).isEqualTo(Duration.ofSeconds(10));
     assertThat(settings.maxAttempts()).isEqualTo(3);
   }
@@ -306,6 +310,7 @@ class NotificationSettingsTest {
             NotificationFormat.JSON,
             Optional.empty(),
             events,
+            false,
             false,
             Duration.ofSeconds(1),
             1);

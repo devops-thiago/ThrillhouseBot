@@ -289,6 +289,16 @@ public class ReviewPublisher {
   }
 
   /**
+   * The open set the summary comment's manifest lists for {@code result} (#1433), over the same
+   * scrubbed findings, so its keys match the comment's.
+   */
+  OpenFindings openFindings(ReviewResult result, DiffLineResolver lineResolver) {
+    var scrubbed = PromptLabelScrubber.scrub(result);
+    return FindingsManifest.collect(
+        PrSummaryGenerator.currentState(scrubbed), threadRule(scrubbed, lineResolver));
+  }
+
+  /**
    * Which manifest entries {@link #postReview} is set to open an inline thread for (#1433): of the
    * round's own findings, in the order they are posted, those that post inline on a changed file
    * ({@link DiffLineResolver#isChangedFile}), up to {@code maxReviewComments}, the same rules

@@ -1287,6 +1287,25 @@ PR title is sent. `NOTIFICATIONS_WEBHOOK_INCLUDE_CONTENT=true` adds
 first, each with `severity`, `file`, `line` and `title`); descriptions and code
 are never sent. `session_url` is built from `DASHBOARD_URL`.
 
+`NOTIFICATIONS_WEBHOOK_INCLUDE_OPEN_FINDINGS=true` adds `review.openFindings`
+to the `json` format, with or without content: every finding still open on the pull request, including ones carried from earlier
+rounds, as the summary comment's findings manifest lists them.
+
+```json
+"openFindings": {
+  "v": 1,
+  "entries": [
+    { "key": "1a2b3c4d", "file": "src/A.java", "line": 12, "risk": "high",
+      "confidence": "high", "status": "open", "thread": true,
+      "hasSuggestion": false, "carried": false }
+  ]
+}
+```
+
+The entry fields, order and limits are the manifest's; `omitted` gives how many
+findings the limits left out, and is absent when none were. The entries hold file
+paths and lines but no titles.
+
 **Chat formats.** `slack` and `discord` send one message (verdict, counts, head
 commit, links to the PR and the dashboard session) to an incoming-webhook URL.
 With content on, the message also lists the PR title and up to five findings. PR

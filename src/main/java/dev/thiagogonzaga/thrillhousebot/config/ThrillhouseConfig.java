@@ -1195,6 +1195,17 @@ public interface ThrillhouseConfig {
       boolean includeContent();
 
       /**
+       * In the {@code json} format, also send the findings still open on the pull request, as the
+       * summary comment's findings manifest lists them: identifiers, file paths and lines, no
+       * titles.
+       *
+       * <p>Off by default so no file path leaves the process unasked.
+       */
+      @WithName("include-open-findings")
+      @WithDefault("false")
+      boolean includeOpenFindings();
+
+      /**
        * Accept a plain {@code http://} URL, for local testing.
        *
        * <p>Off by default so the payload and its signature never travel unencrypted by accident.

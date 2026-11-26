@@ -28,12 +28,14 @@ import static org.mockito.Mockito.when;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
+import dev.thiagogonzaga.thrillhousebot.review.OpenFindings;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewOrchestrator.ReviewRequest;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewResult;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewState;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewTimeoutException;
 import java.net.URI;
 import java.net.http.HttpClient;
+import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -45,6 +47,7 @@ import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
@@ -75,12 +78,18 @@ class ReviewNotifierTest {
   private final Executor executor = queued::add;
 
   private static NotificationSettings settings(Set<ReviewOutcome.Event> events) {
+    return settings(events, false);
+  }
+
+  private static NotificationSettings settings(
+      Set<ReviewOutcome.Event> events, boolean includeOpenFindings) {
     return new NotificationSettings(
         URI.create("https://hooks.example/secret"),
         NotificationFormat.JSON,
         Optional.empty(),
         events,
         false,
+        includeOpenFindings,
         Duration.ofSeconds(5),
         3);
   }
@@ -97,11 +106,63 @@ class ReviewNotifierTest {
     return captor.getValue();
   }
 
+  private String sentBodyFor(boolean includeOpenFindings) {
+    var notifier =
+        notifier(Optional.of(settings(Set.of(ReviewOutcome.Event.COMPLETED), includeOpenFindings)));
+
+    notifier.reviewCompleted(
+        REQUEST, SESSION, CLEAN, () -> new OpenFindings("[{\"file\":\"src/A.java\"}]", 0));
+
+    return new String(runQueuedAndCapture().body(), StandardCharsets.UTF_8);
+  }
+
+  @Test
+  void openFindingsAreSentOnceOptedIn() {
+    assertThat(sentBodyFor(true))
+        .contains("\"openFindings\":{\"v\":1,\"entries\":[{\"file\":\"src/A.java\"}]}");
+  }
+
+  @Test
+  void openFindingsStayHomeUntilOptedInBecauseTheyNameFiles() {
+    assertThat(sentBodyFor(false)).doesNotContain("openFindings").doesNotContain("src/A.java");
+  }
+
+  @Test
+  void openFindingsAreNotComputedWhenNothingWouldSendThem() {
+    Supplier<OpenFindings> computed =
+        () -> {
+          throw new AssertionError("open findings were computed");
+        };
+
+    notifier(Optional.empty()).reviewCompleted(REQUEST, SESSION, CLEAN, computed);
+    notifier(Optional.of(settings(Set.of(ReviewOutcome.Event.COMPLETED), false)))
+        .reviewCompleted(REQUEST, SESSION, CLEAN, computed);
+    notifier(Optional.of(settings(Set.of(ReviewOutcome.Event.FAILED), true)))
+        .reviewCompleted(REQUEST, SESSION, CLEAN, computed);
+
+    for (var format : List.of(NotificationFormat.SLACK, NotificationFormat.DISCORD)) {
+      var json = settings(Set.of(ReviewOutcome.Event.COMPLETED), true);
+      var chat =
+          new NotificationSettings(
+              json.url(),
+              format,
+              json.secret(),
+              json.events(),
+              json.includeContent(),
+              true,
+              json.timeout(),
+              json.maxAttempts());
+      notifier(Optional.of(chat)).reviewCompleted(REQUEST, SESSION, CLEAN, computed);
+    }
+
+    assertThat(queued).hasSize(3);
+  }
+
   @Test
   void offByDefaultIsANoOp() {
     var notifier = notifier(Optional.empty());
 
-    notifier.reviewCompleted(REQUEST, SESSION, CLEAN);
+    notifier.reviewCompleted(REQUEST, SESSION, CLEAN, null);
     notifier.reviewFailed(REQUEST, SESSION, new RuntimeException("x"));
 
     assertThat(queued).isEmpty();
@@ -113,7 +174,7 @@ class ReviewNotifierTest {
     var active = settings(Set.of(ReviewOutcome.Event.COMPLETED, ReviewOutcome.Event.FAILED));
     var notifier = notifier(Optional.of(active));
 
-    notifier.reviewCompleted(REQUEST, SESSION, CLEAN);
+    notifier.reviewCompleted(REQUEST, SESSION, CLEAN, null);
 
     // Nothing is sent on the caller's thread: the delivery waits on the executor.
     verifyNoInteractions(delivery);
@@ -149,7 +210,7 @@ class ReviewNotifierTest {
   void eventsTheOperatorLeftOutAreNotSent() {
     var notifier = notifier(Optional.of(settings(Set.of(ReviewOutcome.Event.FAILED))));
 
-    notifier.reviewCompleted(REQUEST, SESSION, CLEAN);
+    notifier.reviewCompleted(REQUEST, SESSION, CLEAN, null);
 
     assertThat(queued).isEmpty();
     verifyNoInteractions(delivery);
@@ -169,7 +230,7 @@ class ReviewNotifierTest {
             CLOCK,
             "v");
 
-    assertThatCode(() -> notifier.reviewCompleted(REQUEST, SESSION, CLEAN))
+    assertThatCode(() -> notifier.reviewCompleted(REQUEST, SESSION, CLEAN, null))
         .doesNotThrowAnyException();
     verify(delivery, never()).deliver(any(), any());
   }
@@ -186,7 +247,7 @@ class ReviewNotifierTest {
 
     var notifier =
         new ReviewNotifier(config, HttpClient.newHttpClient(), executorService, "unknown");
-    notifier.reviewCompleted(REQUEST, SESSION, CLEAN);
+    notifier.reviewCompleted(REQUEST, SESSION, CLEAN, null);
 
     verifyNoInteractions(executorService);
   }
