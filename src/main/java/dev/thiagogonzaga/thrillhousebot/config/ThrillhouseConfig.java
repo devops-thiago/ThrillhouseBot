@@ -110,6 +110,31 @@ public interface ThrillhouseConfig {
     String webhookSecret();
 
     /**
+     * Base URL of the GitHub web UI: {@code https://github.com}, or a GitHub Enterprise Server host
+     * such as {@code https://github.example.com}. Pull request links, the OAuth endpoints and the
+     * App install page follow it.
+     */
+    @WithName("web-url")
+    @WithDefault("https://github.com")
+    String webUrl();
+
+    /**
+     * Base URL of the GitHub REST API: {@code https://api.github.com}, or {@code
+     * https://<host>/api/v3} on GitHub Enterprise Server.
+     */
+    @WithName("api-url")
+    @WithDefault("https://api.github.com")
+    String apiUrl();
+
+    /**
+     * The GitHub GraphQL endpoint: {@code https://api.github.com/graphql}, or {@code
+     * https://<host>/api/graphql} on GitHub Enterprise Server.
+     */
+    @WithName("graphql-url")
+    @WithDefault("https://api.github.com/graphql")
+    String graphqlUrl();
+
+    /**
      * Comma-separated bot logins the bot ignores so it never answers itself. Override when the App
      * slug differs ({@code <app-slug>[bot]}).
      *
@@ -1046,10 +1071,13 @@ public interface ThrillhouseConfig {
     @WithDefault("http://localhost:8080/api/auth/callback")
     String redirectUri();
 
-    /** Base URL of GitHub's OAuth endpoints. */
+    /**
+     * Base URL of GitHub's OAuth endpoints. Unset, it is {@code GITHUB_URL} followed by {@code
+     * /login/oauth}: {@code https://github.com/login/oauth}, or the GitHub Enterprise Server
+     * host's.
+     */
     @WithName("github.oauth-url")
-    @WithDefault("https://github.com/login/oauth")
-    String oauthUrl();
+    Optional<String> oauthUrl();
 
     /**
      * Optional. When set, the dashboard serves only the installation on this account. Unset serves

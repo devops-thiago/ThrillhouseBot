@@ -83,6 +83,18 @@
     document.getElementById("preview-webhook").textContent = origin + "/api/webhook";
     document.getElementById("preview-callback").textContent = origin + "/api/auth/callback";
     document.getElementById("manifest").value = JSON.stringify(manifest);
+
+    // Create the App on the configured GitHub host (GITHUB_URL): github.com unless a GitHub
+    // Enterprise Server is set. The form keeps its github.com action if the lookup fails.
+    fetch("/api/install/github")
+      .then((response) => (response.ok ? response.json() : null))
+      .then((github) => {
+        if (github && /^https?:\/\//.test(github.webUrl)) {
+          document.getElementById("manifest-form").action =
+            github.webUrl.replace(/\/+$/, "") + "/settings/apps/new";
+        }
+      })
+      .catch(() => {});
   </script>
 </body>
 </html>

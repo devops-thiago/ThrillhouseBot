@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.notification;
 
+import dev.thiagogonzaga.thrillhousebot.github.GitHubUrls;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewResult;
 import java.util.Locale;
 import java.util.Objects;
@@ -124,8 +125,8 @@ public record ReviewOutcome(
     return owner + "/" + repo;
   }
 
-  /** The pull request's page on GitHub. */
+  /** The pull request's page on GitHub, or on the configured GitHub Enterprise Server host. */
   public String pullRequestUrl() {
-    return "https://github.com/" + owner + "/" + repo + "/pull/" + prNumber;
+    return GitHubUrls.pullRequest(owner, repo, prNumber);
   }
 }
