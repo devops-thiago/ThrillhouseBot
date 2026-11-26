@@ -38,6 +38,7 @@ import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
+import jakarta.ws.rs.WebApplicationException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -95,6 +96,9 @@ public class FixService {
   static final String EDIT_MISMATCH =
       "🔧 ThrillhouseBot drafted a fix, but it no longer matches the current files — this usually "
           + "happens after a new push to the PR. Please try `/fix` again.";
+  static final String PATH_CHECK_FAILED =
+      "🔧 ThrillhouseBot drafted a fix that adds a file, but could not confirm with GitHub that "
+          + "the path is free, so nothing was committed. Please try `/fix` again.";
   static final String PUSH_FAILED =
       "🔧 ThrillhouseBot drafted the fix but could not push the branch or open the PR. Check that "
           + "the GitHub App has the **contents: write** permission, then try `/fix` again.";
@@ -482,8 +486,27 @@ public class FixService {
     if (contents.containsKey(path) || changed.containsKey(path)) {
       throw new EditApplicationException("created path already loaded: " + path, EDIT_MISMATCH);
     }
-    if (loadFileContent(auth, task, path, headSha) != null) {
+    if (!isAbsent(auth, task, path, headSha)) {
       throw new EditApplicationException("created path already exists: " + path, EDIT_MISMATCH);
+    }
+  }
+
+  /**
+   * Whether GitHub says outright that {@code path} does not exist at {@code ref}. Only a 404 is
+   * "absent": any other failure leaves the question open, and creating the file then could
+   * overwrite one that is there, so the fix is abandoned instead.
+   */
+  private boolean isAbsent(String auth, FixTask task, String path, String ref) {
+    try {
+      prClient.getFileContent(auth, ACCEPT, task.owner(), task.repo(), path, ref);
+      return false;
+    } catch (WebApplicationException e) {
+      if (e.getResponse() != null && e.getResponse().getStatus() == 404) {
+        return true;
+      }
+      throw new EditApplicationException("could not check created path: " + e, PATH_CHECK_FAILED);
+    } catch (RuntimeException e) {
+      throw new EditApplicationException("could not check created path: " + e, PATH_CHECK_FAILED);
     }
   }
 

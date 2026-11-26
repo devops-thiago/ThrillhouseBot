@@ -38,6 +38,8 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.FixGenerator;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FixResponseParser;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import dev.thiagogonzaga.thrillhousebot.webhook.TriggerDetector;
+import jakarta.ws.rs.WebApplicationException;
+import jakarta.ws.rs.core.Response;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.List;
@@ -245,10 +247,10 @@ class FixServiceTest {
     findingThreadExists();
     prWithFooFile();
     gitDataSucceeds();
-    // The created path must not already exist: its content lookup fails like a 404.
+    // The created path must not already exist: GitHub answers its content lookup with a 404.
     when(prClient.getFileContent(
             any(), any(), eq("owner"), eq("repo"), eq("src/FooValidator.java"), eq(HEAD_SHA)))
-        .thenThrow(new RuntimeException("404"));
+        .thenThrow(new WebApplicationException(Response.status(404).build()));
     modelReturns(
         """
         {"summary": "Extract validation", "edits": [
@@ -381,6 +383,41 @@ class FixServiceTest {
     service.execute(task());
 
     assertTrue(threadReply().contains("limit of 1"));
+    verifyNoGitWrites();
+  }
+
+  @Test
+  void abandonsACreateWhenThePathCheckFailsWithoutA404() {
+    assertCreateAbandoned(new WebApplicationException(Response.status(502).build()));
+  }
+
+  @Test
+  void abandonsACreateWhenThePathCheckFailsOutsideHttp() {
+    assertCreateAbandoned(new RuntimeException("connection reset"));
+  }
+
+  @Test
+  void abandonsACreateWhenThePathCheckFailsWithNoResponse() {
+    assertCreateAbandoned(new WebApplicationException((Response) null));
+  }
+
+  /** A lookup that fails without saying "not found" must never be read as a free path. */
+  private void assertCreateAbandoned(RuntimeException lookupFailure) {
+    findingThreadExists();
+    prWithFooFile();
+    when(prClient.getFileContent(
+            any(), any(), eq("owner"), eq("repo"), eq("src/New.java"), eq(HEAD_SHA)))
+        .thenThrow(lookupFailure);
+    modelReturns(
+        """
+        {"summary": "s", "edits": [
+          {"file": "src/New.java", "operation": "create", "search": "", "replace": "b"}
+        ], "notes": ""}
+        """);
+
+    service.execute(task());
+
+    assertEquals(FixService.PATH_CHECK_FAILED, threadReply());
     verifyNoGitWrites();
   }
 
