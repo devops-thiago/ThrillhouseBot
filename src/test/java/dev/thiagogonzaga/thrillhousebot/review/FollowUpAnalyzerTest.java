@@ -36,6 +36,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class FollowUpAnalyzerTest {
 
@@ -3610,6 +3611,37 @@ class FollowUpAnalyzerTest {
             List.of(maintainerSays("@thrillhousebot resolved `src/A.java:10` Missing null check")));
 
     assertEquals(List.of(2), heldIds(held));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "Unchecked `get` on List<String> | null",
+        "Unchecked &#96;get&#96; on List&lt;String> \\| null"
+      })
+  void aTitleNamesItsFindingAsWrittenOrAsTheSummarySourceEscapesIt(String named) {
+    var title = "Unchecked `get` on List<String> | null";
+    var comment = "@thrillhousebot resolved src/A.java:10 — " + named;
+
+    assertTrue(FollowUpAnalyzer.CommentNaming.of(comment).names("src/A.java", 10, title));
+    assertTrue(
+        FollowUpAnalyzer.CommentNaming.of(comment).namesPathAndLine("src/A.java", 10, title));
+  }
+
+  @Test
+  void anEscapedTitleThatLeadsWithADigitStillReadsAsThePrintedRow() {
+    assertTrue(
+        FollowUpAnalyzer.CommentNaming.of(
+                "@thrillhousebot resolved src/A.java:1 — 2 calls to &#96;get&#96;")
+            .names("src/A.java", 1, "2 calls to `get`"));
+  }
+
+  @Test
+  void theEscapedFormOfAnotherTitleNamesNothing() {
+    assertFalse(
+        FollowUpAnalyzer.CommentNaming.of(
+                "@thrillhousebot resolved src/A.java:10 — Unchecked &#96;put&#96;")
+            .names("src/A.java", 10, "Unchecked `get`"));
   }
 
   static Stream<Arguments> conversationCommentsThatClearNothing() {

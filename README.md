@@ -784,6 +784,11 @@ One comment may name several findings; each is matched on its own. A finding
 with neither title nor description cannot be named, so fix it or reply on its
 thread if it has one. The next review records a named finding resolved.
 
+The bot's reply says which open findings on record the comment matched, and for
+a `path:line` named with a different title it shows the title on record. A title
+also matches as the summary comment's source holds it (`&#96;` for a backtick,
+`&lt;` for `<`, `\|` for `|`), so text copied through the API names its finding.
+
 **On a finding's own review thread**, reply `@thrillhousebot resolved` (the
 `path:line` and title are optional there, since the thread names the finding).
 The bot resolves the thread straight away and replies with a fixed
