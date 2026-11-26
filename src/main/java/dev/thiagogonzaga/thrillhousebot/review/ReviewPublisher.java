@@ -2157,7 +2157,7 @@ public class ReviewPublisher {
         if (clearedByDirective(status)) {
           replyOnClearedThread(auth, req, rootCommentId);
         }
-        if (reviewThreadService.resolve(auth, thread.id())) {
+        if (resolveUnlessRefused(auth, req, thread.id())) {
           resolved++;
         }
       }
@@ -2168,6 +2168,26 @@ public class ReviewPublisher {
       }
     } catch (RuntimeException e) {
       Log.warn("Failed to resolve addressed review threads (continuing)", e);
+    }
+  }
+
+  /** Resolves one thread; a refusal is logged with GitHub's reason and costs only that thread. */
+  private boolean resolveUnlessRefused(
+      String auth, ReviewOrchestrator.ReviewRequest req, String threadId) {
+    try {
+      return reviewThreadService.resolve(auth, threadId);
+    } catch (GitHubGraphQLException e) {
+      Log.warnf(
+          "GitHub refused to resolve review thread %s on %s/%s #%d: %s%s",
+          threadId,
+          req.owner(),
+          req.repo(),
+          req.prNumber(),
+          e.refusal(),
+          e.isNotPermitted()
+              ? " (the App needs " + ReviewThreadService.RESOLVE_PERMISSION + ")"
+              : "");
+      return false;
     }
   }
 
