@@ -51,11 +51,14 @@ jobs:
         with:
           java-version: "25"
           distribution: "temurin"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - id: m2
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.m2
-          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
-          restore-keys: ${{ runner.os }}-m2
+          key: ${{ runner.os }}-m2-release-${{ hashFiles('**/pom.xml', '.mvn/wrapper/maven-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-m2-release-
+            ${{ runner.os }}-m2-
       - name: Check tag matches pom.xml version
         env:
           TAG: ${{ steps.meta.outputs.tag }}
@@ -83,6 +86,11 @@ jobs:
               exit 1
             fi
           done
+      - if: ${{ !cancelled() && steps.m2.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2
+          key: ${{ steps.m2.outputs.cache-primary-key }}
 
   scan:
     needs: [verify]
@@ -430,11 +438,14 @@ jobs:
         with:
           java-version: "25"
           distribution: "temurin"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - id: m2
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.m2
-          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
-          restore-keys: ${{ runner.os }}-m2
+          key: ${{ runner.os }}-m2-release-${{ hashFiles('**/pom.xml', '.mvn/wrapper/maven-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-m2-release-
+            ${{ runner.os }}-m2-
       - name: Compute next snapshot version
         id: next
         env:
@@ -489,3 +500,8 @@ jobs:
             echo "::error::Failed to open bump PR: ${out}"
             exit 1
           fi
+      - if: ${{ !cancelled() && steps.m2.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2
+          key: ${{ steps.m2.outputs.cache-primary-key }}
