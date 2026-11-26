@@ -105,6 +105,9 @@ export class Git {
 export function check(git, baseSha, headSha) {
   const base = git.mergeBase(baseSha, headSha);
   const released = releasedVersions(git.tags());
+  // No release tag at all means the tags were not fetched, not that nothing was released: every
+  // rule but the versions.json one would then pass whatever the pull request changed.
+  if (released.size === 0) return ['No vX.Y.Z release tag was found, so nothing can be checked; fetch the tags first'];
   const changes = git.changes(base, headSha);
   // Whether an archive already exists is judged at the base branch's tip, not the merge base:
   // a branch cut before the archive landed would otherwise add to it as if it were new.

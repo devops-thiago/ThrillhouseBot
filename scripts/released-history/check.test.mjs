@@ -161,3 +161,17 @@ test('a branch cut before an archive existed cannot add to it once released', ()
     r.cleanup();
   }
 });
+
+test('a repository with no release tag fails closed', () => {
+  const r = repo();
+  try {
+    r.write('CHANGELOG.md', CHANGELOG);
+    const base = r.commit('release');
+    r.write('CHANGELOG.md', CHANGELOG.replace('- Added a.', '- Rewritten.'));
+    const head = r.commit('edit');
+    assert.deepEqual(check(new Git(r.dir), base, head),
+      ['No vX.Y.Z release tag was found, so nothing can be checked; fetch the tags first']);
+  } finally {
+    r.cleanup();
+  }
+});

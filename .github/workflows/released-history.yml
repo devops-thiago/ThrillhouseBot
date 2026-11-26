@@ -34,6 +34,9 @@ jobs:
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
+          # The release tags decide what is locked, so fetch them explicitly rather than rely on
+          # what the checkout brought for a commit ref.
+          git fetch --no-tags --quiet "https://github.com/${GITHUB_REPOSITORY}.git" "+refs/tags/v*:refs/tags/v*"
           if ! git fetch --no-tags --quiet "https://github.com/${GITHUB_REPOSITORY}.git" "+refs/pull/${PR_NUMBER}/merge:refs/remotes/pull/merge"; then
             echo "::error::GitHub has no test merge for this pull request; resolve its conflicts with the base branch and push again."
             exit 1
