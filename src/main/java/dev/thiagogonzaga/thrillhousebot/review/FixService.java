@@ -44,6 +44,7 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
@@ -96,6 +97,13 @@ public class FixService {
   static final String EDIT_MISMATCH =
       "🔧 ThrillhouseBot drafted a fix, but it no longer matches the current files — this usually "
           + "happens after a new push to the PR. Please try `/fix` again.";
+  static final String PROTECTED_PATH =
+      "🔧 ThrillhouseBot drafted a fix that touches repository automation or ownership files "
+          + "(anything under `.github/`, or a `CODEOWNERS` file). `/fix` never writes those, so "
+          + "nothing was committed — that change needs a person.";
+  static final String DISABLED =
+      "🚫 `/fix` is disabled on this ThrillhouseBot deployment. An administrator can turn it on "
+          + "with `thrillhousebot.review.fix.enabled=true`.";
   static final String PATH_CHECK_FAILED =
       "🔧 ThrillhouseBot drafted a fix that adds a file, but could not confirm with GitHub that "
           + "the path is free, so nothing was committed. Please try `/fix` again.";
@@ -171,6 +179,15 @@ public class FixService {
   /** Runs the fix asynchronously off the webhook ACK path. */
   public void handle(FixTask task) {
     executor.execute(() -> execute(task));
+  }
+
+  /**
+   * Answers a {@code /fix} on a finding thread while the feature is off, so the command does not
+   * read as a hang. The caller has already checked the requester's write access: an unauthorized
+   * commenter must not be able to make the bot post.
+   */
+  public void declineDisabled(FixTask task) {
+    executor.execute(() -> tryReply(task, DISABLED));
   }
 
   /** Visible for tests: performs the whole fix on the calling thread. */
@@ -450,6 +467,9 @@ public class FixService {
         throw new EditApplicationException("edit missing file/search/replace", EDIT_MISMATCH);
       }
       var path = edit.file().strip();
+      if (isProtectedPath(path)) {
+        throw new EditApplicationException("edit targets a protected path", PROTECTED_PATH);
+      }
       if (edit.isCreate()) {
         validateNewPath(auth, task, headSha, contents, changed, path);
         changed.put(path, edit.replace());
@@ -470,6 +490,19 @@ public class FixService {
               + current.substring(first + edit.search().length()));
     }
     return changed;
+  }
+
+  /**
+   * Whether {@code path} is one {@code /fix} never writes, create or replace: workflows and the
+   * rest of {@code .github/}, and {@code CODEOWNERS} wherever it lives. The model reads text the
+   * pull request's participants wrote, so what it may change is bounded here, in code, and not only
+   * by the prompt.
+   */
+  static boolean isProtectedPath(String path) {
+    var lower = path.toLowerCase(Locale.ROOT);
+    return lower.startsWith(".github/")
+        || lower.equals("codeowners")
+        || lower.endsWith("/codeowners");
   }
 
   /** Rejects created paths that escape the repo or collide with an existing file. */

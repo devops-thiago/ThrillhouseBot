@@ -901,6 +901,62 @@ class FixServiceTest {
         """);
   }
 
+  private void assertProtectedPathRefused(String editJson) {
+    findingThreadExists();
+    prWithFooFile();
+    modelReturns(
+        """
+        {"summary": "s", "edits": [%s], "notes": ""}
+        """
+            .formatted(editJson));
+
+    service.execute(task());
+
+    assertEquals(FixService.PROTECTED_PATH, threadReply());
+    verifyNoGitWrites();
+  }
+
+  @Test
+  void neverCreatesAWorkflow() {
+    assertProtectedPathRefused(
+        """
+        {"file": ".github/workflows/ci.yml", "operation": "create", "search": "", "replace": "on: push"}
+        """);
+  }
+
+  @Test
+  void neverRewritesAFileUnderDotGithubWhateverItsCase() {
+    assertProtectedPathRefused(
+        """
+        {"file": ".GitHub/dependabot.yml", "operation": "replace", "search": "a", "replace": "b"}
+        """);
+  }
+
+  @Test
+  void neverWritesACodeownersFile() {
+    assertTrue(FixService.isProtectedPath("CODEOWNERS"));
+    assertTrue(FixService.isProtectedPath("docs/CODEOWNERS"));
+    assertFalse(FixService.isProtectedPath("src/CodeOwnersParser.java"));
+    assertFalse(FixService.isProtectedPath("src/github/Client.java"));
+    assertProtectedPathRefused(
+        """
+        {"file": "docs/CODEOWNERS", "operation": "create", "search": "", "replace": "* @someone"}
+        """);
+  }
+
+  @Test
+  void declineDisabledRepliesOnTheThreadOffTheWebhookThread() {
+    service.declineDisabled(task());
+
+    var work = ArgumentCaptor.forClass(Runnable.class);
+    verify(executor).execute(work.capture());
+    verifyNoInteractions(reviewClient);
+    work.getValue().run();
+
+    assertEquals(FixService.DISABLED, threadReply());
+    verifyNoInteractions(fixGenerator);
+  }
+
   // ---- Replies and titles ----
 
   @Test

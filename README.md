@@ -189,7 +189,8 @@ clearly attributed to the bot, name the requesting user, link the finding thread
 an AI-generated disclaimer; nothing ever lands without a human merging it, keeping the
 [advisory stance](https://github.com/devops-thiago/ThrillhouseBot#responsible-use-and-security). Fixes are all-or-nothing (a fix whose
 edits no longer match the files — e.g. after a new push — is abandoned with a reply, never
-partially applied), capped at `REVIEW_FIX_MAX_EDITED_FILES` files, and unavailable on fork
+partially applied), capped at `REVIEW_FIX_MAX_EDITED_FILES` files, never written to `.github/` or a
+`CODEOWNERS` file, and unavailable on fork
 PRs (the bot can only push branches to the repository it is installed on). Enabling it
 requires the GitHub App to hold the **contents: write** permission and
 `REVIEW_FIX_ENABLED=true`. Each run spends AI budget and is restricted to the same

@@ -593,23 +593,18 @@ public class WebhookEvents {
   }
 
   /**
-   * Handles {@code /fix} on a review finding thread: gated on the opt-in {@code fix.enabled}
-   * switch, the pause state, and the same write-access authorization as a manual {@code /review}
-   * (the fix both spends AI budget and pushes a branch). The heavy work runs asynchronously in
-   * {@link FixService}; this only acks and dispatches.
+   * Handles {@code /fix} on a review finding thread: gated on the same write-access authorization
+   * as a manual {@code /review} (the fix both spends AI budget and pushes a branch), the opt-in
+   * {@code fix.enabled} switch and the pause state. The heavy work runs asynchronously in {@link
+   * FixService}; this only acks and dispatches.
+   *
+   * <p>Authorization comes first so that the "disabled" answer, like every other reply, is only
+   * ever given to someone allowed to run the command.
    */
   private boolean handleFixCommand(
       WebhookPayload payload, WebhookPayload.Comment comment, long rootCommentId) {
     var repo = payload.repository();
     var pr = payload.pullRequest();
-    if (!config.review().fix().enabled()) {
-      log.info("Ignoring /fix on PR #{} — the command is disabled", pr.number());
-      return true;
-    }
-    if (prPauseService.isPaused(scope(payload), repo.owner().login(), repo.name(), pr.number())) {
-      log.info("Ignoring /fix on paused PR #{} in {}", pr.number(), repo.fullName());
-      return true;
-    }
     if (!manualReviewAuthorizer.isAuthorized(
         repo.owner().login(),
         repo.name(),
@@ -620,18 +615,7 @@ public class WebhookEvents {
           "Ignoring unauthorized /fix from @{} on PR #{}", comment.user().login(), pr.number());
       return true;
     }
-    ackReactionService.addEyes(
-        payload.installation().id(),
-        repo.owner().login(),
-        repo.name(),
-        comment.id(),
-        AckReactionService.CommentKind.REVIEW);
-    log.info(
-        "/fix requested by @{} on PR #{} thread {}",
-        comment.user().login(),
-        pr.number(),
-        rootCommentId);
-    fixService.handle(
+    var task =
         new FixService.FixTask(
             repo.owner().login(),
             repo.name(),
@@ -640,8 +624,35 @@ public class WebhookEvents {
             payload.installation().id(),
             comment.user().login(),
             rootCommentId,
-            comment.path()));
+            comment.path());
+    if (!config.review().fix().enabled()) {
+      log.info("Declining /fix on PR #{} — the command is disabled", pr.number());
+      ackFix(payload, comment);
+      fixService.declineDisabled(task);
+      return true;
+    }
+    if (prPauseService.isPaused(scope(payload), repo.owner().login(), repo.name(), pr.number())) {
+      log.info("Ignoring /fix on paused PR #{} in {}", pr.number(), repo.fullName());
+      return true;
+    }
+    ackFix(payload, comment);
+    log.info(
+        "/fix requested by @{} on PR #{} thread {}",
+        comment.user().login(),
+        pr.number(),
+        rootCommentId);
+    fixService.handle(task);
     return true;
+  }
+
+  private void ackFix(WebhookPayload payload, WebhookPayload.Comment comment) {
+    var repo = payload.repository();
+    ackReactionService.addEyes(
+        payload.installation().id(),
+        repo.owner().login(),
+        repo.name(),
+        comment.id(),
+        AckReactionService.CommentKind.REVIEW);
   }
 
   private boolean handleCheckSuite(WebhookPayload payload) {

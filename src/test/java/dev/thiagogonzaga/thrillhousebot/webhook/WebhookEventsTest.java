@@ -1858,11 +1858,13 @@ class WebhookEventsTest {
   }
 
   @Test
-  void shouldIgnoreFixCommandWhenFeatureIsDisabled() {
+  void shouldSayFixIsDisabledToAnAuthorizedRequester() {
     when(triggerDetector.isBotComment("octocat")).thenReturn(false);
     when(triggerDetector.detectCommand("/fix")).thenReturn(CommentCommand.FIX);
     when(reviewConfig.fix()).thenReturn(fixConfig);
     when(fixConfig.enabled()).thenReturn(false);
+    when(manualReviewAuthorizer.isAuthorized("owner", "repo", 12345L, "octocat", "OWNER"))
+        .thenReturn(true);
 
     var body =
         buildReviewCommentPayload("created", 42, "owner/repo", "octocat", "/fix", 99L, 1000L)
@@ -1870,7 +1872,34 @@ class WebhookEventsTest {
 
     deliver("pull_request_review_comment", event("pull_request_review_comment", DELIVERY, body));
 
+    // An acknowledged command gets one visible reply, so a switched-off /fix does not read as a
+    // hang.
+    verify(ackReactionService)
+        .addEyes(12345L, "owner", "repo", 1000L, AckReactionService.CommentKind.REVIEW);
+    verify(fixService)
+        .declineDisabled(
+            new FixService.FixTask(
+                "owner", "repo", 42, "main", 12345L, "octocat", 99L, "src/Foo.java"));
     verify(fixService, never()).handle(any());
+  }
+
+  @Test
+  void shouldStaySilentOnADisabledFixFromSomeoneWithoutWriteAccess() {
+    when(triggerDetector.isBotComment("drive-by")).thenReturn(false);
+    when(triggerDetector.detectCommand("/fix")).thenReturn(CommentCommand.FIX);
+    when(reviewConfig.fix()).thenReturn(fixConfig);
+    when(fixConfig.enabled()).thenReturn(false);
+    when(manualReviewAuthorizer.isAuthorized("owner", "repo", 12345L, "drive-by", "OWNER"))
+        .thenReturn(false);
+
+    var body =
+        buildReviewCommentPayload("created", 42, "owner/repo", "drive-by", "/fix", 99L, 1000L)
+            .getBytes(StandardCharsets.UTF_8);
+
+    deliver("pull_request_review_comment", event("pull_request_review_comment", DELIVERY, body));
+
+    // A notice before authorization would let any commenter make the bot post.
+    verifyNoInteractions(fixService);
     verify(ackReactionService, never()).addEyes(anyLong(), any(), any(), anyLong(), any());
   }
 
@@ -1899,6 +1928,8 @@ class WebhookEventsTest {
     when(triggerDetector.detectCommand("/fix")).thenReturn(CommentCommand.FIX);
     when(reviewConfig.fix()).thenReturn(fixConfig);
     when(fixConfig.enabled()).thenReturn(true);
+    when(manualReviewAuthorizer.isAuthorized("owner", "repo", 12345L, "octocat", "OWNER"))
+        .thenReturn(true);
     when(prPauseService.isPaused(any(), eq("owner"), eq("repo"), eq(42))).thenReturn(true);
 
     var body =
@@ -1907,7 +1938,8 @@ class WebhookEventsTest {
 
     deliver("pull_request_review_comment", event("pull_request_review_comment", DELIVERY, body));
 
-    verify(fixService, never()).handle(any());
+    verifyNoInteractions(fixService);
+    verify(ackReactionService, never()).addEyes(anyLong(), any(), any(), anyLong(), any());
   }
 
   @ParameterizedTest
