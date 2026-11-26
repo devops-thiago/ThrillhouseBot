@@ -70,7 +70,7 @@ To register the app manually, open
 |---|---|
 | Webhook URL | `https://<your-host>/api/webhook` |
 | Webhook Secret | Random string |
-| Repository Permissions | Pull Requests: R/W, Checks: R/W, Contents: Read, Issues: R/W, Actions: Read, Commit Statuses: Read |
+| Repository Permissions | Pull Requests: R/W, Checks: R/W, Contents: Read (Read and write only if you turn on the opt-in `/fix`), Issues: R/W, Actions: Read, Commit Statuses: Read |
 | Organization Permissions | Members: Read (shows installation-wide dashboard counters to organization members) |
 | Subscribe to Events | Pull Request, Issue comment, Pull request review comment, Check suite, Status, Repository |
 | Identifying & authorizing users | Enabled (for dashboard login) |

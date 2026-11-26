@@ -46,6 +46,10 @@ import org.slf4j.LoggerFactory;
  * /remember}. Work runs on the shared review executor so the webhook 200-ack thread is never
  * blocked by GitHub API calls.
  *
+ * <p>{@code /fix} reaches here only as a PR-level comment, where it cannot name a finding and gets
+ * a usage pointer; the finding-thread form goes from the webhook entry straight to {@code
+ * FixService}.
+ *
  * <p>Every recognized command is acknowledged with a 👀 reaction before it reaches here, so a path
  * that ends without posting reads on the PR as a hang. The rule these handlers follow is therefore:
  * an acknowledged command produces exactly one visible reply — the requested output, or a one-line
@@ -91,6 +95,7 @@ public class CommentCommandService {
       | `/add-docs` | Suggest docstrings for the symbols changed in this PR |
       | `/improve` | Suggest committable improvements across the whole PR |
       | `/generate-tests` | Suggest unit tests for the code changed in this PR |
+      | `/fix` | On a finding thread: open a PR with a proposed fix for that finding (opt-in) |
       | `/resolve` | Resolve ThrillhouseBot's open finding threads on this PR |
       | `/pause` | Silence the bot on this PR (no automatic or manual reviews) |
       | `/resume` | Re-enable the bot on a paused PR |
@@ -253,6 +258,7 @@ public class CommentCommandService {
         case ADD_DOCS -> handleAddDocs(ctx, auth);
         case IMPROVE -> handleImprove(ctx, auth);
         case GENERATE_TESTS -> handleGenerateTests(ctx, auth);
+        case FIX -> handleFix(ctx, auth);
         case RESOLVE -> handleResolve(ctx, auth);
         case PAUSE -> handlePause(ctx, auth);
         case RESUME -> handleResume(ctx, auth);
@@ -441,6 +447,29 @@ public class CommentCommandService {
             ctx.repositoryId(),
             auth);
     postComment(auth, ctx, suggestion != null ? suggestion : noOutputNotice("/generate-tests"));
+  }
+
+  /** Posted when {@code /fix} is used as a PR-level comment instead of on a finding thread. */
+  static final String FIX_USAGE =
+      "🔧 `/fix` works on a specific finding: reply `/fix` directly on a ThrillhouseBot finding"
+          + " thread (an inline review comment) and ThrillhouseBot will draft the change on a bot"
+          + " branch and open a PR targeting this PR's branch.";
+
+  /**
+   * A {@code /fix} typed as a PR-level comment cannot name a finding, so it gets a usage pointer
+   * instead of a fix. The review-thread form is routed directly to {@code FixService} by the
+   * webhook entry and never reaches here.
+   */
+  private void handleFix(CommandContext ctx, String auth) {
+    if (!authorized(ctx)) {
+      log.info("Ignoring unauthorized /fix from @{} on PR #{}", ctx.login(), num(ctx));
+      return;
+    }
+    if (!config.review().fix().enabled()) {
+      declineAsDisabled(ctx, auth, "/fix", "fix.enabled");
+      return;
+    }
+    postComment(auth, ctx, FIX_USAGE);
   }
 
   private void handleResolve(CommandContext ctx, String auth) {

@@ -660,6 +660,36 @@ public interface ThrillhouseConfig {
 
     @WithName("security-scan")
     SecurityScanConfig securityScan();
+
+    FixConfig fix();
+  }
+
+  /**
+   * Opt-in agentic {@code /fix} command (#57). When {@link #enabled()} a write-access holder can
+   * reply {@code /fix} on a review finding thread; the model drafts the change across the relevant
+   * files and the bot commits it to a bot-owned branch and opens a pull request targeting the
+   * reviewed PR's branch. Off by default: the bot never pushes code unless the operator opts in,
+   * keeping the "AI review is advisory" stance — the fix PR is a proposal a human reviews and
+   * merges.
+   */
+  interface FixConfig {
+    /**
+     * Allow {@code /fix} on a finding thread: the bot commits a proposed fix to a {@code
+     * thrillhousebot/fix-*} branch and opens a pull request targeting the reviewed PR's branch.
+     * Needs the GitHub App to hold Contents: Read and write.
+     */
+    @WithDefault("false")
+    boolean enabled();
+
+    /**
+     * Most files one {@code /fix} may edit or create. A fix that needs more is rejected with a
+     * reply instead of being partly applied. Must be at least 1.
+     *
+     * <p>A suspiciously broad fix deserves a human, not a bigger commit.
+     */
+    @WithName("max-edited-files")
+    @WithDefault("10")
+    int maxEditedFiles();
   }
 
   /**

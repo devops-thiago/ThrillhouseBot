@@ -114,6 +114,7 @@ command word gets a written answer instead.
 | `/add-docs` | Suggest doc comments for the symbols the PR changed, as committable suggestions | write |
 | `/improve` | Suggest improvements across the whole PR, as committable suggestions | write |
 | `/generate-tests` | Propose unit tests for the changed code, one code block per test file | write |
+| `/fix` | Replied on a finding thread: draft the fix, commit it to a `thrillhousebot/fix-*` branch and open a PR targeting the reviewed PR's branch. Opt-in (`REVIEW_FIX_ENABLED=true`), off by default. | write |
 | `/resolve` | Resolve the bot's open finding threads | write |
 | `/pause` | Silence the bot on the PR | write |
 | `/resume` | Re-enable the bot on a paused PR | write |
@@ -179,6 +180,21 @@ uses. A new test file has no diff line to anchor a suggestion to, so each test
 file is posted as a code block headed by its path. Proposals from different
 batches are merged by path. Turn it off with
 `REVIEW_GENERATE_TESTS_ENABLED=false`.
+
+**`/fix`** (opt-in, off by default) — replied on a review finding thread, the bot drafts the
+change that resolves that finding — across multiple files when needed — commits it to a
+bot-owned `thrillhousebot/fix-*` branch, and opens a pull request **targeting the reviewed
+PR's branch**, so merging the fix PR updates the original PR. The fix PR and its commit are
+clearly attributed to the bot, name the requesting user, link the finding thread, and carry
+an AI-generated disclaimer; nothing ever lands without a human merging it, keeping the
+[advisory stance](https://github.com/devops-thiago/ThrillhouseBot#responsible-use-and-security). Fixes are all-or-nothing (a fix whose
+edits no longer match the files — e.g. after a new push — is abandoned with a reply, never
+partially applied), capped at `REVIEW_FIX_MAX_EDITED_FILES` files, never written to `.github/` or a
+`CODEOWNERS` file, and unavailable on fork
+PRs (the bot can only push branches to the repository it is installed on). Enabling it
+requires the GitHub App to hold the **contents: write** permission and
+`REVIEW_FIX_ENABLED=true`. Each run spends AI budget and is restricted to the same
+write-access holders as `/review`.
 <!-- docs:commands:end -->
 
 ## Quick start
@@ -280,7 +296,7 @@ Create the GitHub App before starting the bot; its credentials go in `.env`.
 |---|---|
 | Webhook URL | `https://<your-host>/api/webhook` |
 | Webhook secret | Random string |
-| Repository permissions | Pull requests: R/W, Checks: R/W, Contents: Read, Issues: R/W, Actions: Read, Commit statuses: Read |
+| Repository permissions | Pull requests: R/W, Checks: R/W, Contents: Read (Read and write only if you turn on the opt-in `/fix`), Issues: R/W, Actions: Read, Commit statuses: Read |
 | Organization permissions | Members: Read (shows installation-wide dashboard counters to organization members) |
 | Subscribe to events | Pull request, Issue comment, Pull request review comment, Check suite, Status, Repository |
 | Identifying and authorizing users | Enabled (for dashboard login) |
@@ -1715,6 +1731,12 @@ closed or merged pull request.
 
 AI review is advisory. The model raises false positives and misses real bugs, so
 confirm a finding before acting on it.
+
+The opt-in `/fix` command is held to the same stance: it is off by default, only
+runs when a write-access holder explicitly requests it on a specific finding, only
+writes to bot-owned `thrillhousebot/*` branches, and delivers its change as a
+clearly attributed pull request that a human reviews and merges — the bot never
+pushes to your branches or merges anything itself.
 
 Pull request diffs go to the endpoint you configure. Use an HTTPS endpoint with
 an API key, and read the provider's data-retention policy before sending it

@@ -25,6 +25,7 @@ import dev.thiagogonzaga.thrillhousebot.review.AutoReviewRateLimiter;
 import dev.thiagogonzaga.thrillhousebot.review.CiHoldRegistry;
 import dev.thiagogonzaga.thrillhousebot.review.CiHoldRevisit;
 import dev.thiagogonzaga.thrillhousebot.review.FindingFeedbackCaptureService;
+import dev.thiagogonzaga.thrillhousebot.review.FixService;
 import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyService;
 import dev.thiagogonzaga.thrillhousebot.review.PullRequestLabelGate;
@@ -88,6 +89,7 @@ public class WebhookEvents {
   private final AckReactionService ackReactionService;
   private final ReviewSkipEmitter skipEmitter;
   private final FindingFeedbackCaptureService findingFeedbackCapture;
+  private final FixService fixService;
   private final CiHoldRegistry ciHoldRegistry;
   private final AllowedAccounts allowedAccounts;
 
@@ -111,6 +113,7 @@ public class WebhookEvents {
       AckReactionService ackReactionService,
       ReviewSkipEmitter skipEmitter,
       FindingFeedbackCaptureService findingFeedbackCapture,
+      FixService fixService,
       CiHoldRegistry ciHoldRegistry,
       AllowedAccounts allowedAccounts,
       BeanManager beanManager,
@@ -129,6 +132,7 @@ public class WebhookEvents {
     this.ackReactionService = ackReactionService;
     this.skipEmitter = skipEmitter;
     this.findingFeedbackCapture = findingFeedbackCapture;
+    this.fixService = fixService;
     this.ciHoldRegistry = ciHoldRegistry;
     this.allowedAccounts = allowedAccounts;
     this.beanManager = beanManager;
@@ -544,6 +548,12 @@ public class WebhookEvents {
               comment.user().login(), comment.authorAssociation(), comment.body()));
     }
 
+    // /fix is the one command that must be invoked on a finding thread — it names the finding
+    // being fixed — so it is routed here rather than through the issue-comment command path.
+    if (triggerDetector.detectCommand(comment.body()) == CommentCommand.FIX) {
+      return handleFixCommand(payload, comment, rootCommentId);
+    }
+
     if (!config.review().conversationalRepliesEnabled()) {
       return true;
     }
@@ -582,6 +592,67 @@ public class WebhookEvents {
             comment.id(),
             true,
             comment.diffHunk()));
+  }
+
+  /**
+   * Handles {@code /fix} on a review finding thread: gated on the same write-access authorization
+   * as a manual {@code /review} (the fix both spends AI budget and pushes a branch), the opt-in
+   * {@code fix.enabled} switch and the pause state. The heavy work runs asynchronously in {@link
+   * FixService}; this only acks and dispatches.
+   *
+   * <p>Authorization comes first so that the "disabled" answer, like every other reply, is only
+   * ever given to someone allowed to run the command.
+   */
+  private boolean handleFixCommand(
+      WebhookPayload payload, WebhookPayload.Comment comment, long rootCommentId) {
+    var repo = payload.repository();
+    var pr = payload.pullRequest();
+    if (!manualReviewAuthorizer.isAuthorized(
+        repo.owner().login(),
+        repo.name(),
+        payload.installation().id(),
+        comment.user().login(),
+        comment.authorAssociation())) {
+      log.info(
+          "Ignoring unauthorized /fix from @{} on PR #{}", comment.user().login(), pr.number());
+      return true;
+    }
+    var task =
+        new FixService.FixTask(
+            repo.owner().login(),
+            repo.name(),
+            pr.number(),
+            repo.defaultBranch(),
+            payload.installation().id(),
+            comment.user().login(),
+            rootCommentId,
+            comment.path());
+    if (!config.review().fix().enabled()) {
+      log.info("Declining /fix on PR #{} — the command is disabled", pr.number());
+      ackFix(payload, comment);
+      return fixService.declineDisabled(task);
+    }
+    if (prPauseService.isPaused(scope(payload), repo.owner().login(), repo.name(), pr.number())) {
+      log.info("Ignoring /fix on paused PR #{} in {}", pr.number(), repo.fullName());
+      return true;
+    }
+    ackFix(payload, comment);
+    log.info(
+        "/fix requested by @{} on PR #{} thread {}",
+        comment.user().login(),
+        pr.number(),
+        rootCommentId);
+    return fixService.handle(task);
+  }
+
+  private void ackFix(WebhookPayload payload, WebhookPayload.Comment comment) {
+    var repo = payload.repository();
+    ackReactionService.addEyes(
+        payload.installation().id(),
+        repo.owner().login(),
+        repo.name(),
+        comment.id(),
+        AckReactionService.CommentKind.REVIEW);
   }
 
   private boolean handleCheckSuite(WebhookPayload payload) {

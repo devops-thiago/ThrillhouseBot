@@ -81,6 +81,10 @@ Attackers considered:
 
 The App manifest (`manifest.json`) asks for `contents: read`, `actions: read`,
 `statuses: read`, `checks: write`, `pull_requests: write` and `issues: write`.
+The opt-in `/fix` command (off by default) is the one feature that needs
+`contents: write`: an operator who turns it on raises the App's Contents
+permission to Read and write, and the bot then pushes only bot-owned
+`thrillhousebot/fix-*` branches, never a branch a person owns.
 Issues write is needed because pull request conversation comments, labels and
 reactions go through the Issues API; linked issues are only read. Every
 workflow declares its token permissions, read-only unless a workflow or job
