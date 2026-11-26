@@ -48,7 +48,9 @@ Run the Java checks locally:
 If you changed the dashboard, also run
 `cd frontend && npm ci && npm test && npm run build`. If you changed the docs
 site or any page it includes (README, CONTRIBUTING, `docs/`), run
-`cd website && npm ci && npm run build`; the build fails on a broken link.
+`cd website && npm ci && npm run build`; the build fails on a broken link. If
+you changed one of the three installer pages, run
+`node --test scripts/installer/install.test.mjs`.
 
 If you add a configuration key or change one's javadoc, default or alias,
 regenerate the configuration reference (`docs/CONFIGURATION.md`) and the
