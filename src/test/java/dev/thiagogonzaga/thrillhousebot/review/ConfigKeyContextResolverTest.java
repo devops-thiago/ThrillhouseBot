@@ -486,6 +486,48 @@ class ConfigKeyContextResolverTest {
           java.util.Set.of("a.go"), ConfigKeyContextResolver.environmentReaders(List.of(file)));
     }
 
+    /** A read named only in a string literal or a trailing comment is not made. */
+    @ParameterizedTest
+    @ValueSource(
+        strings = {
+          "+fmt.Fprintln(w, \"check process.env.FOO when unset\")",
+          "+cfg = nil  # we plan to switch to os.Getenv(\"RATE_LIMIT_MAX\") in main.go",
+          "+x := 1 // os.Getenv(\"X\") later",
+          "+y = 2 /* getenv(\"X\") */",
+          "+local v = 1 -- os.getenv(\"X\")",
+          "+msg = 'use ENV[\"X\"] instead'",
+          "+s := \"say \\\"os.Getenv(X)\\\" here\""
+        })
+    void shouldNotTakeAReadNamedInALiteralOrTrailingCommentForOne(String line) {
+      var file = new FileDiff("a.go", "modified", 1, 0, 1, "@@ -1 +1 @@\n" + line);
+
+      assertTrue(ConfigKeyContextResolver.environmentReaders(List.of(file)).isEmpty());
+    }
+
+    /** A read inside a string interpolation, or beside a quote that opens no literal, is made. */
+    @ParameterizedTest
+    @ValueSource(
+        strings = {
+          "+val v = \"${System.getenv(\"X\")}\"",
+          "+v = \"#{ENV['X']}\"",
+          "+const v = `${process.env.X}`",
+          "+v = f\"{os.environ['X']}\"",
+          "+let v = \"\\(ProcessInfo.processInfo.environment[\"X\"] ?? \"\")\"",
+          "+var v = $\"{Environment.GetEnvironmentVariable(\"X\")}\";",
+          "+v = \"${a(b) + getenv(\"X\")}\"",
+          "+fn v(x: &'static str) -> String { env::var(x).unwrap() }",
+          "+  #define LIMIT getenv(\"LIMIT\")",
+          "+url = \"http://x/#a\" + os.getenv(\"X\")",
+          "+v = os.getenv(\"X\") # the limit",
+          "+if c == '{' { v = getenv(\"X\") }"
+        })
+    void shouldKeepAReadInAnInterpolationOrBesideAStrayQuote(String line) {
+      var file = new FileDiff("a.x", "modified", 1, 0, 1, "@@ -1 +1 @@\n" + line);
+
+      assertEquals(
+          java.util.Set.of("a.x"), ConfigKeyContextResolver.environmentReaders(List.of(file)));
+    }
+
     /** Swift, Scala and PHP read the environment in their own idioms. */
     @Test
     void shouldFindTheEnvironmentReadsOfSwiftScalaAndPhp() {
