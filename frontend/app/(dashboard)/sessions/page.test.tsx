@@ -53,6 +53,22 @@ describe('SessionsPage', () => {
     expect(screen.getByText('deepseek-chat')).toBeInTheDocument();
   });
 
+  it('links both pull request links to the address the server sends', async () => {
+    const pullRequestUrl = 'https://github.example.com/devops-thiago/ThrillhouseBot/pull/12';
+    window.history.replaceState(null, '', '/?id=1');
+    vi.mocked(api).mockReturnValue({
+      sessions: vi.fn().mockResolvedValue({ ...listPage(), sessions: [{ ...mockSessions[0], pullRequestUrl }] }),
+      session: vi.fn().mockResolvedValue({ ...mockSessionDetail, pullRequestUrl }),
+    } as unknown as ReturnType<typeof api>);
+
+    render(<SessionsPage />);
+
+    const row = await screen.findByRole('link', { name: '#12' });
+    const detail = await screen.findByRole('link', { name: /^#12 .+Add dashboard charts$/ });
+    expect(row).toHaveAttribute('href', pullRequestUrl);
+    expect(detail).toHaveAttribute('href', pullRequestUrl);
+  });
+
   it('shows an error with retry when the list API fails, then recovers', async () => {
     let calls = 0;
     const sessions = vi.fn().mockImplementation(() => {
