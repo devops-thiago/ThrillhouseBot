@@ -20,8 +20,9 @@ import java.util.List;
 
 /**
  * The collapsed list under the partial-review banner naming every file not fully reviewed (#1472).
- * Rendered only when the banner itself had to roll names up as "+N more". It then lists every file,
- * those the banner already names included, so the section is complete on its own.
+ * Rendered only when the banner itself had to roll names up as "+N more". It then lists up to
+ * {@link #MAX_ENTRIES} entries, those the banner already names included, and ends in a count when
+ * entries remain past the cap.
  */
 final class UncoveredFileList {
 
