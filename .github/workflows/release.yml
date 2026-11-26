@@ -478,11 +478,12 @@ jobs:
             exit 0
           fi
           BRANCH="chore/bump-${NEXT}"
+          # The job checks out main (ref: main above), so HEAD is main's tip.
           BASE_SHA=$(git rev-parse HEAD)
           # main requires signed commits, and a commit pushed with GITHUB_TOKEN is unsigned, so
           # the commit is made through the API, which GitHub signs as github-actions[bot]. The
-          # sign-off keeps the DCO check satisfied as well. The branch is (re)pointed at main
-          # first, so a rerun replaces an earlier bump instead of stacking on it.
+          # sign-off keeps the DCO check satisfied as well. The branch is created at main's tip,
+          # or moved back to it when a rerun finds it, so each run starts the bump from main.
           if ! gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" \
             -f ref="refs/heads/${BRANCH}" -f sha="$BASE_SHA" >/dev/null 2>&1; then
             gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/heads/${BRANCH}" \
