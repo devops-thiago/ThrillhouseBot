@@ -127,6 +127,7 @@ jobs:
           name: test-native-${{ matrix.arch }}
           path: target/*-runner
           retention-days: 1
+      # This workflow only runs on workflow_dispatch, so unlike ci.yml it needs no pull_request guard.
       - if: ${{ success() && steps.m2.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -252,6 +253,7 @@ jobs:
         if: inputs.variant == 'jvm'
         run: ./mvnw -B package -DskipTests -Dquarkus.package.jar.type=mutable-jar
 
+      # This workflow only runs on workflow_dispatch, so unlike ci.yml it needs no pull_request guard.
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: ${{ success() && inputs.variant == 'jvm' && steps.m2.outputs.cache-hit != 'true' }}
         with:
