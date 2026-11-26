@@ -41,12 +41,14 @@ import jakarta.inject.Inject;
 import jakarta.ws.rs.WebApplicationException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 /**
@@ -176,9 +178,30 @@ public class FixService {
       long rootCommentId,
       String path) {}
 
-  /** Runs the fix asynchronously off the webhook ACK path. */
-  public void handle(FixTask task) {
-    executor.execute(() -> execute(task));
+  /** Runs the fix asynchronously off the webhook ACK path; see {@link #dispatch}. */
+  public boolean handle(FixTask task) {
+    return dispatch(task, () -> execute(task));
+  }
+
+  /**
+   * Queues {@code work} on the review executor.
+   *
+   * @return {@code false} when the executor rejected it (it is shutting down), so nothing will run:
+   *     the webhook entry then rolls its dedupe back and a redelivery can retry.
+   */
+  private boolean dispatch(FixTask task, Runnable work) {
+    try {
+      executor.execute(work);
+      return true;
+    } catch (RejectedExecutionException e) {
+      Log.warnf(
+          e,
+          "Failed to queue /fix for %s/%s #%d — executor rejected task",
+          task.owner(),
+          task.repo(),
+          task.prNumber());
+      return false;
+    }
   }
 
   /**
@@ -186,8 +209,8 @@ public class FixService {
    * read as a hang. The caller has already checked the requester's write access: an unauthorized
    * commenter must not be able to make the bot post.
    */
-  public void declineDisabled(FixTask task) {
-    executor.execute(() -> tryReply(task, DISABLED));
+  public boolean declineDisabled(FixTask task) {
+    return dispatch(task, () -> tryReply(task, DISABLED));
   }
 
   /** Visible for tests: performs the whole fix on the calling thread. */
@@ -499,10 +522,24 @@ public class FixService {
    * by the prompt.
    */
   static boolean isProtectedPath(String path) {
-    var lower = path.toLowerCase(Locale.ROOT);
-    return lower.startsWith(".github/")
-        || lower.equals("codeowners")
-        || lower.endsWith("/codeowners");
+    // Compared segment by segment, with "." and empty ones dropped, so "./.github/x" and
+    // ".github//x" are the same path here as they are to git.
+    var segments =
+        Arrays.stream(path.toLowerCase(Locale.ROOT).split("/"))
+            .filter(segment -> !segment.isEmpty() && !segment.equals("."))
+            .toList();
+    return !segments.isEmpty()
+        && (segments.getFirst().equals(".github") || segments.getLast().equals("codeowners"));
+  }
+
+  /** Whether any {@code /}-separated segment of {@code path} is empty or {@code .}. */
+  private static boolean hasEmptyOrDotSegment(String path) {
+    for (var segment : path.split("/", -1)) {
+      if (segment.isEmpty() || segment.equals(".")) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** Rejects created paths that escape the repo or collide with an existing file. */
@@ -513,7 +550,9 @@ public class FixService {
       Map<String, String> contents,
       Map<String, String> changed,
       String path) {
-    if (path.startsWith("/") || path.contains("\\") || path.contains("..")) {
+    // An empty first segment is an absolute path; "." and empty segments are spellings git would
+    // fold away, so a path that needs them is not one the model was shown.
+    if (path.contains("\\") || path.contains("..") || hasEmptyOrDotSegment(path)) {
       throw new EditApplicationException("unsafe created path " + path, EDIT_MISMATCH);
     }
     if (contents.containsKey(path) || changed.containsKey(path)) {

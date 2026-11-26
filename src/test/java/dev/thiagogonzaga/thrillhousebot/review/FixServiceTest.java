@@ -45,6 +45,7 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -933,11 +934,54 @@ class FixServiceTest {
   }
 
   @Test
+  void seesThroughDotAndEmptySegmentsInFrontOfAProtectedPath() {
+    assertTrue(FixService.isProtectedPath("./.github/workflows/ci.yml"));
+    assertTrue(FixService.isProtectedPath("././.github/dependabot.yml"));
+    assertTrue(FixService.isProtectedPath(".github//workflows/ci.yml"));
+    assertProtectedPathRefused(
+        """
+        {"file": "./.github/workflows/ci.yml", "operation": "create", "search": "", "replace": "on: push"}
+        """);
+  }
+
+  @Test
+  void abortsWhenCreatedPathHasADotSegment() {
+    assertEditMismatch(
+        """
+        {"summary": "s", "edits": [
+          {"file": "./src/New.java", "operation": "create", "search": "", "replace": "b"}
+        ], "notes": ""}
+        """);
+  }
+
+  @Test
+  void abortsWhenCreatedPathHasAnEmptySegment() {
+    assertEditMismatch(
+        """
+        {"summary": "s", "edits": [
+          {"file": "src//New.java", "operation": "create", "search": "", "replace": "b"}
+        ], "notes": ""}
+        """);
+  }
+
+  @Test
+  void reportsARejectedDispatchInsteadOfThrowing() {
+    doThrow(new RejectedExecutionException("shutting down")).when(executor).execute(any());
+
+    assertFalse(service.handle(task()));
+    assertFalse(service.declineDisabled(task()));
+    verifyNoInteractions(reviewClient);
+  }
+
+  @Test
   void neverWritesACodeownersFile() {
     assertTrue(FixService.isProtectedPath("CODEOWNERS"));
     assertTrue(FixService.isProtectedPath("docs/CODEOWNERS"));
     assertFalse(FixService.isProtectedPath("src/CodeOwnersParser.java"));
     assertFalse(FixService.isProtectedPath("src/github/Client.java"));
+    assertFalse(FixService.isProtectedPath("src/.github/notes.md"));
+    assertFalse(FixService.isProtectedPath("./"));
+    assertTrue(FixService.isProtectedPath("./CODEOWNERS"));
     assertProtectedPathRefused(
         """
         {"file": "docs/CODEOWNERS", "operation": "create", "search": "", "replace": "* @someone"}
@@ -946,7 +990,7 @@ class FixServiceTest {
 
   @Test
   void declineDisabledRepliesOnTheThreadOffTheWebhookThread() {
-    service.declineDisabled(task());
+    assertTrue(service.declineDisabled(task()));
 
     var work = ArgumentCaptor.forClass(Runnable.class);
     verify(executor).execute(work.capture());
@@ -1008,7 +1052,7 @@ class FixServiceTest {
 
   @Test
   void handleRunsOnTheReviewExecutor() {
-    service.handle(task());
+    assertTrue(service.handle(task()));
     verify(executor).execute(any());
     verifyNoInteractions(reviewClient);
   }

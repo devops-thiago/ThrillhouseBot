@@ -630,8 +630,7 @@ public class WebhookEvents {
     if (!config.review().fix().enabled()) {
       log.info("Declining /fix on PR #{} — the command is disabled", pr.number());
       ackFix(payload, comment);
-      fixService.declineDisabled(task);
-      return true;
+      return fixService.declineDisabled(task);
     }
     if (prPauseService.isPaused(scope(payload), repo.owner().login(), repo.name(), pr.number())) {
       log.info("Ignoring /fix on paused PR #{} in {}", pr.number(), repo.fullName());
@@ -643,8 +642,7 @@ public class WebhookEvents {
         comment.user().login(),
         pr.number(),
         rootCommentId);
-    fixService.handle(task);
-    return true;
+    return fixService.handle(task);
   }
 
   private void ackFix(WebhookPayload payload, WebhookPayload.Comment comment) {

@@ -1821,6 +1821,7 @@ class WebhookEventsTest {
     when(fixConfig.enabled()).thenReturn(true);
     when(manualReviewAuthorizer.isAuthorized("owner", "repo", 12345L, "octocat", "OWNER"))
         .thenReturn(true);
+    when(fixService.handle(any())).thenReturn(true);
 
     // A /fix replied into a finding thread targets the thread root (in_reply_to_id 99).
     var body =
@@ -1846,6 +1847,7 @@ class WebhookEventsTest {
     when(fixConfig.enabled()).thenReturn(true);
     when(manualReviewAuthorizer.isAuthorized("owner", "repo", 12345L, "octocat", "OWNER"))
         .thenReturn(true);
+    when(fixService.handle(any())).thenReturn(true);
 
     // A /fix posted as a new inline comment (no in_reply_to_id) is its own thread root.
     var body =
@@ -1868,6 +1870,7 @@ class WebhookEventsTest {
     when(fixConfig.enabled()).thenReturn(false);
     when(manualReviewAuthorizer.isAuthorized("owner", "repo", 12345L, "octocat", "OWNER"))
         .thenReturn(true);
+    when(fixService.declineDisabled(any())).thenReturn(true);
 
     var body =
         buildReviewCommentPayload("created", 42, "owner/repo", "octocat", "/fix", 99L, 1000L)
@@ -1884,6 +1887,27 @@ class WebhookEventsTest {
             new FixService.FixTask(
                 "owner", "repo", 42, "main", 12345L, "octocat", 99L, "src/Foo.java"));
     verify(fixService, never()).handle(any());
+    verify(deduplicator, never()).forget(any());
+  }
+
+  @Test
+  void shouldRollBackDedupeWhenTheFixCannotBeQueued() {
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+    when(triggerDetector.detectCommand("/fix")).thenReturn(CommentCommand.FIX);
+    when(reviewConfig.fix()).thenReturn(fixConfig);
+    when(fixConfig.enabled()).thenReturn(true);
+    when(manualReviewAuthorizer.isAuthorized("owner", "repo", 12345L, "octocat", "OWNER"))
+        .thenReturn(true);
+    when(fixService.handle(any())).thenReturn(false);
+
+    var body =
+        buildReviewCommentPayload("created", 42, "owner/repo", "octocat", "/fix", 99L, 1000L)
+            .getBytes(StandardCharsets.UTF_8);
+
+    deliver("pull_request_review_comment", event("pull_request_review_comment", DELIVERY, body));
+
+    // Nothing will run, so a redelivery has to be able to retry.
+    verify(deduplicator).forget(DELIVERY);
   }
 
   @Test
