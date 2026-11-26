@@ -19,9 +19,12 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /** Aggregated result of a full review orchestration. */
 @RegisterForReflection
@@ -254,7 +257,8 @@ public record ReviewResult(
       List<String> responseCutFileNames,
       List<String> callFailedFileNames,
       SummaryDegradation summaryDegradation,
-      VerificationCoverage verification) {
+      VerificationCoverage verification,
+      Map<String, String> callFailureCauses) {
     public static final TruncationDetail EMPTY =
         new TruncationDetail(
             List.of(),
@@ -265,6 +269,31 @@ public record ReviewResult(
             List.of(),
             SummaryDegradation.NONE,
             VerificationCoverage.EMPTY);
+
+    /**
+     * Convenience constructor for details built before failure causes were recorded (and tests):
+     * the call-failed clause then names its files without a cause.
+     */
+    public TruncationDetail(
+        List<String> omittedFileNames,
+        List<String> clippedFileNames,
+        List<String> patchlessFileNames,
+        List<String> spendCeilingSkippedFileNames,
+        List<String> responseCutFileNames,
+        List<String> callFailedFileNames,
+        SummaryDegradation summaryDegradation,
+        VerificationCoverage verification) {
+      this(
+          omittedFileNames,
+          clippedFileNames,
+          patchlessFileNames,
+          spendCeilingSkippedFileNames,
+          responseCutFileNames,
+          callFailedFileNames,
+          summaryDegradation,
+          verification,
+          Map.of());
+    }
 
     /**
      * Convenience constructor for details built before the patchless class existed (and tests): no
@@ -347,6 +376,7 @@ public record ReviewResult(
       summaryDegradation =
           summaryDegradation == null ? SummaryDegradation.NONE : summaryDegradation;
       verification = verification == null ? VerificationCoverage.EMPTY : verification;
+      callFailureCauses = callFailureCauses == null ? Map.of() : Map.copyOf(callFailureCauses);
     }
 
     public boolean isEmpty() {
@@ -931,13 +961,14 @@ public record ReviewResult(
     // were sent — the review call for them failed all its retries — so the budget wording would
     // misdirect the operator toward a knob that cannot help, and the summary overview already
     // says the call did not complete; the two surfaces must agree.
-    if (!detail.callFailedFileNames().isEmpty()) {
-      clauses.add(
-          String.format(
-              "%d file(s) were not reviewed because the review call for them did not complete"
-                  + " (%s)",
-              detail.callFailedFileNames().size(), nameList(detail.callFailedFileNames())));
-    }
+    callFailedByCause(detail)
+        .forEach(
+            (cause, names) ->
+                clauses.add(
+                    String.format(
+                        "%d file(s) were not reviewed because the review call for them did not"
+                            + " complete%s (%s)",
+                        names.size(), cause.isEmpty() ? "" : ": " + cause, nameList(names))));
     // The response-cut class is partial in a third way: the files were sent and reviewed, but the
     // model's answer was cut at its length cap — the findings produced before the cut were kept,
     // so "not reviewed" would understate the coverage and silence the honest caveat.
@@ -1132,6 +1163,32 @@ public record ReviewResult(
       }
     }
     return String.join(", ", parts);
+  }
+
+  /**
+   * The call-failed names grouped by why their call failed, in first-seen order; names with no
+   * recorded cause are grouped under {@code ""}.
+   */
+  private static Map<String, List<String>> callFailedByCause(TruncationDetail detail) {
+    return detail.callFailedFileNames().stream()
+        .collect(
+            Collectors.groupingBy(
+                name -> detail.callFailureCauses().getOrDefault(name, ""),
+                LinkedHashMap::new,
+                Collectors.toList()));
+  }
+
+  /** Whether the clause for {@code detail} rolls any of its names up as a count. */
+  static boolean elidesNames(TruncationDetail detail) {
+    return Stream.concat(
+            Stream.of(
+                detail.omittedFileNames(),
+                detail.clippedFileNames(),
+                detail.patchlessFileNames(),
+                detail.spendCeilingSkippedFileNames(),
+                detail.responseCutFileNames()),
+            callFailedByCause(detail).values().stream())
+        .anyMatch(names -> names.size() > NAMED_FILES_LIMIT);
   }
 
   /** How many names the rendered copy lists per class before rolling the rest up as a count. */

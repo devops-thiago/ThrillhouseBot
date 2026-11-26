@@ -1218,6 +1218,11 @@ public class AiReviewService {
     return Throwables.findCause(failure, AiReviewService::namesAThrottle).isPresent();
   }
 
+  /** Whether a call ended on an answer the parser refused (#1472). */
+  public static boolean isUnreadableAnswer(Throwable failure) {
+    return Throwables.findCause(failure, MalformedAnswer.class).isPresent();
+  }
+
   /**
    * Whether a failure is one the fallback model can help with (#43): a {@linkplain #isThrottle
    * throttle}, a server error (HTTP 5xx), or the provider not knowing the model. Visible for tests.
