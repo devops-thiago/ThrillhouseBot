@@ -43,6 +43,13 @@ All notable changes to ThrillhouseBot.
   `https://ghes.example.com/api/graphql`), and `GITHUB_OAUTH_URL` follows `GITHUB_URL` unless set.
   The defaults are unchanged.
 
+### Security
+
+- **The native image moves to the 2026-11-25 UBI9 micro base**, which ships `pcre2` 10.40-7.el9_8
+  (RHSA-2026:81532) with the fixes for CVE-2026-89161, CVE-2026-86145 and CVE-2026-103111, so their
+  `.trivyignore` entries are removed. CVE-2026-84782 (`libssl3`, DTLS only) stays ignored for the
+  `-distroless` image: Debian has a fixed package, but the distroless base has not picked it up.
+
 ## [0.9.3] - 2026-11-26
 
 Follow-up rounds re-check older findings whenever a fix could stand and stop closing the same
