@@ -1,0 +1,8 @@
+review:
+  # Archived docs versions are frozen copies of an earlier release's docs: the released-history
+  # check keeps them unchanged once added, so there is nothing to review in them. The current
+  # docs (website/src/content/docs/*.md and its other subfolders) are still reviewed.
+  ignored-files:
+    - "website/src/content/docs/[0-9]*/**"
+    - "website/src/assets/[0-9]*/**"
+    - "website/src/content/versions/[0-9]*.json"
