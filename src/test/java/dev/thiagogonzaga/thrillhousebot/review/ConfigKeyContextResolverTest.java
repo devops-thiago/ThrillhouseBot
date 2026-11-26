@@ -1230,7 +1230,7 @@ class ConfigKeyContextResolverTest {
               1,
               0,
               1,
-              "@@ -1 +1 @@\n+Read with `process.env.RATE_LIMIT_MAX`.");
+              "@@ -1 +1 @@\n+    const limit = process.env.RATE_LIMIT_MAX;");
 
       var candidates =
           resolver.candidatePaths(

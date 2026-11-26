@@ -21,6 +21,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubApiError;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubUserClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstallationChange;
+import dev.thiagogonzaga.thrillhousebot.github.InstallationRepository;
 import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import io.quarkiverse.githubapp.GitHubClientProvider;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -28,7 +29,6 @@ import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.WebApplicationException;
 import java.io.IOException;
-import java.io.InterruptedIOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -435,10 +435,11 @@ public class DashboardAccessChecker {
               .getOrganization(account.login())
               .getMembership(login);
       return membership != null && membership.getState() == GHMembership.State.ACTIVE;
-    } catch (InterruptedIOException _) {
-      Thread.currentThread().interrupt();
-      return false;
     } catch (IOException e) {
+      if (InstallationRepository.isInterrupt(e)) {
+        Thread.currentThread().interrupt();
+        return false;
+      }
       switch (httpStatus(e)) {
         case 404 -> {
           // Not a member.

@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.github;
 import io.quarkiverse.githubapp.GitHubClientProvider;
 import java.io.IOException;
 import java.io.InterruptedIOException;
+import java.net.SocketTimeoutException;
 import java.util.Optional;
 import java.util.function.Consumer;
 import org.kohsuke.github.GHRepository;
@@ -25,7 +26,8 @@ import org.kohsuke.github.GHRepository;
 /**
  * Reads made through an installation's hub4j client that several callers share: the repository
  * itself and a collaborator's right to act on it. A failure is handed to the caller, which logs it
- * in its own words; an interrupt is never handed over, it is restored on the thread instead.
+ * in its own words, a read timeout included; an interrupt is never handed over, it is restored on
+ * the thread instead.
  */
 public final class InstallationRepository {
 
@@ -43,10 +45,8 @@ public final class InstallationRepository {
     try {
       return Optional.of(
           clientProvider.getInstallationClient(installationId).getRepository(owner + "/" + repo));
-    } catch (InterruptedIOException _) {
-      Thread.currentThread().interrupt();
     } catch (IOException | RuntimeException e) {
-      onFailure.accept(e);
+      fail(e, onFailure);
     }
     return Optional.empty();
   }
@@ -56,11 +56,26 @@ public final class InstallationRepository {
       GHRepository repository, String login, Consumer<Exception> onFailure) {
     try {
       return RepositoryPermissions.canAct(repository.getPermission(login));
-    } catch (InterruptedIOException _) {
-      Thread.currentThread().interrupt();
     } catch (IOException | RuntimeException e) {
-      onFailure.accept(e);
+      fail(e, onFailure);
     }
     return false;
+  }
+
+  /**
+   * Whether {@code e} reports an interrupted thread. A {@link SocketTimeoutException} is also an
+   * {@link InterruptedIOException}, but it is a read that took too long, not an interrupt: treating
+   * it as one would set the flag on a thread nobody interrupted.
+   */
+  public static boolean isInterrupt(Exception e) {
+    return e instanceof InterruptedIOException && !(e instanceof SocketTimeoutException);
+  }
+
+  private static void fail(Exception e, Consumer<Exception> onFailure) {
+    if (isInterrupt(e)) {
+      Thread.currentThread().interrupt();
+    } else {
+      onFailure.accept(e);
+    }
   }
 }
