@@ -311,6 +311,14 @@ cannot resolve its review threads.
   sent it, and `/help` was answered every time anyone asked. The write-access check now comes
   first, so a commenter it refuses gets no reaction, no notice and no reply, and `/help` from a
   commenter without write access is answered once per pull request per hour.
+- **File names in the bot's notes are shown as code**: the summary's pure-rename note, the
+  partial-review notice and the lead-in of a finding filed on a whole file printed a pull request's
+  file names as they were, so a crafted file name could mention a user or insert HTML in the bot's
+  comments.
+- **The agent prompt block no longer follows the finding marker**: with
+  `REVIEW_AGENT_PROMPT_ENABLED`, the block came after the comment's hidden finding marker and
+  printed the file name, so a crafted file name could stand in for the marker and detach the thread
+  from its finding. The block is now placed before the marker.
 
 ## [0.9.3] - 2026-11-26
 
