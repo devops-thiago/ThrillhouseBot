@@ -45,7 +45,7 @@ final class CallSites {
     return start;
   }
 
-  private static boolean isWord(char c) {
+  static boolean isWord(char c) {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || isDigit(c) || c == '_';
   }
 
@@ -53,7 +53,7 @@ final class CallSites {
     return c >= '0' && c <= '9';
   }
 
-  private static boolean isSpace(char c) {
+  static boolean isSpace(char c) {
     return c == ' ' || (c >= '\t' && c <= '\r');
   }
 }

@@ -98,13 +98,6 @@ final class LinkedIssueCitations {
   private static final List<Pattern> CUES =
       List.of(LINKED_ISSUE, ACCEPTANCE_CRITERION, ISSUE_CRITERION);
 
-  /**
-   * A quoted passage, as {@link DescriptionGapScreen} reads one: double quotes, or single quotes
-   * that are not apostrophes. Curly quotes are folded first.
-   */
-  private static final Pattern QUOTED =
-      Pattern.compile("\"([^\"\n]++)\"|(?<![\\p{L}\\p{N}])'([^\n]+?)'(?![\\p{L}\\p{N}])");
-
   /** An eligible single-quote opener, including a quote closed only by a truncated region end. */
   private static final Pattern SINGLE_QUOTE_OPEN = Pattern.compile("(?<![\\p{L}\\p{N}])'");
 
@@ -353,9 +346,11 @@ final class LinkedIssueCitations {
     }
     var issue = sections.isEmpty() ? linkedIssues : sections.toString();
     var criterion = DescriptionGapCarryover.criterionOf(linked.group(2));
-    var quote = QUOTED.matcher(foldQuotes(criterion));
-    if (quote.find()) {
-      return DescriptionGapScreen.appearsIn(quoted(quote), DescriptionGapScreen.normalize(issue));
+    var folded = foldQuotes(criterion);
+    var quotes = QuotedPassages.in(folded);
+    if (!quotes.isEmpty()) {
+      return DescriptionGapScreen.appearsIn(
+          quotes.getFirst().body(folded), DescriptionGapScreen.normalize(issue));
     }
     return judgeWords(criterion, SummarySurfaceDeduplicator.claim(issue).wordSet())
         != Verdict.UNMATCHED;
@@ -532,11 +527,11 @@ final class LinkedIssueCitations {
     }
 
     /**
-     * Quote matching by positions, preserving QUOTED's nonempty bodies, Unicode guards and newline
-     * boundary. Incomplete openers do not repeatedly search the same tail. Prefix queries activate
-     * complete matches by end position; an earlier newly completed quote absorbs the matches inside
-     * it, just as a fresh matcher over that longer prefix would. Each position is added/removed
-     * once.
+     * Quote matching by positions, preserving {@link QuotedPassages}' nonempty bodies, Unicode
+     * guards and newline boundary. Incomplete openers do not repeatedly search the same tail.
+     * Prefix queries activate complete matches by end position; an earlier newly completed quote
+     * absorbs the matches inside it, just as a fresh matcher over that longer prefix would. Each
+     * position is added/removed once.
      */
     private static final class QuotePositions {
       private record Quote(int start, int end) {}
@@ -689,11 +684,8 @@ final class LinkedIssueCitations {
   private static int lastJoiner(String text, int from, int to) {
     var region = text.substring(from, to);
     // A joiner inside a quote is part of the quote, not of the sentence.
-    var lastQuote = QUOTED.matcher(foldQuotes(region));
-    var after = 0;
-    while (lastQuote.find()) {
-      after = lastQuote.end();
-    }
+    var quotes = QuotedPassages.in(foldQuotes(region));
+    var after = quotes.isEmpty() ? 0 : quotes.getLast().end();
     var joiner = JOINER.matcher(region);
     var at = -1;
     while (joiner.find(after)) {
@@ -778,10 +770,6 @@ final class LinkedIssueCitations {
   /** {@code level} raised to medium when it is low; as it is otherwise, {@code null} included. */
   private static String atLeastMedium(String level) {
     return "low".equalsIgnoreCase(nullToEmpty(level).strip()) ? "medium" : level;
-  }
-
-  private static String quoted(Matcher quote) {
-    return quote.group(quote.group(1) != null ? 1 : 2);
   }
 
   private static String foldQuotes(String text) {
