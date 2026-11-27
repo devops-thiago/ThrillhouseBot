@@ -51,6 +51,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -2575,8 +2576,20 @@ class ReviewOrchestratorTest {
         verify(session, never()).setStatus(ReviewSession.STATUS_FAILED);
         assertEquals(1, lifecycleBroadcasts().size());
         // #73: the verdict is on the PR, so a failed session write still announces a completion.
-        verify(notifier).reviewCompleted(any(), anyString(), any(), any());
+        // The open findings are built on demand, from the threads the review opened.
+        var open = new AtomicReference<OpenFindings>();
+        verify(notifier)
+            .reviewCompleted(
+                any(),
+                anyString(),
+                any(),
+                argThat(
+                    findings -> {
+                      open.set(findings.get());
+                      return true;
+                    }));
         verifyNoMoreInteractions(notifier);
+        assertEquals(0, open.get().omitted());
       }
     }
 
