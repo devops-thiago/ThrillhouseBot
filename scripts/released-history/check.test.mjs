@@ -41,6 +41,23 @@ test('a section heading inside a fenced code block is text of its section', () =
     ['CHANGELOG.md: the released section [1.1.0] was changed']);
 });
 
+test('a fence left open hides no released section', () => {
+  const base = '## [Unreleased]\n\n```sh\nexample\n\n## [1.0.0] - 2026-01-01\n\n- Added a.\n';
+  assert.deepEqual([...changelogSections(base).keys()], ['Unreleased', '1.0.0']);
+  assert.deepEqual(changelogViolations(base, base.replace('- Added a.', '- Edited.'), new Set(['1.0.0'])),
+    ['CHANGELOG.md: the released section [1.0.0] was changed']);
+  // Closing the fence in the head would otherwise hide the edit behind a section that now exists.
+  assert.deepEqual(
+    changelogViolations(base, base.replace('example\n', 'example\n```\n').replace('- Added a.', '- Edited.'), new Set(['1.0.0'])),
+    ['CHANGELOG.md: the released section [1.0.0] was changed']);
+  // A head that opens a fence over a released section still loses nothing.
+  const closed = '## [Unreleased]\n\n## [1.0.0] - 2026-01-01\n\n- Added a.\n';
+  assert.deepEqual(changelogViolations(closed, closed.replace('## [Unreleased]\n', '## [Unreleased]\n\n```\n'), new Set(['1.0.0'])), []);
+  assert.deepEqual(
+    changelogViolations(closed, closed.replace('## [Unreleased]\n', '## [Unreleased]\n\n```\n').replace('- Added a.', '- Edited.'), new Set(['1.0.0'])),
+    ['CHANGELOG.md: the released section [1.0.0] was changed']);
+});
+
 test('a new release section and unreleased edits pass', () => {
   const head = CHANGELOG.replace('## [Unreleased]\n', '## [Unreleased]\n\n- Fixed c.\n\n## [1.2.0] - 2026-03-01\n\n- Added c.\n');
   assert.deepEqual(changelogViolations(CHANGELOG, head, new Set(['1.0.0', '1.1.0'])), []);

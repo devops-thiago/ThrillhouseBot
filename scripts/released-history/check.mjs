@@ -24,25 +24,34 @@ const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 
 /**
  * Each `## [name]` section of a changelog, keyed by name, with trailing blank lines dropped. A
- * `## [name]` line inside a fenced code block is text of the section around it, not a heading.
+ * `## [name]` line inside a fenced code block is text of the section around it, not a heading. A
+ * fence that is never closed hides nothing: every heading then counts, so a stray fence cannot
+ * take the released sections after it out of the check.
  */
 export function changelogSections(text) {
+  const lines = text.split(/\r?\n/);
+  return sectionsOf(lines, true) ?? sectionsOf(lines, false);
+}
+
+/** The sections of {@code lines}, or null when fences are honoured and one is left open. */
+function sectionsOf(lines, honourFences) {
   const sections = new Map();
   let name = null;
-  let lines = [];
+  let body = [];
   let fence = null;
-  const close = () => { if (name !== null) sections.set(name, lines.join('\n').trimEnd()); };
-  for (const line of text.split(/\r?\n/)) {
-    const marker = FENCE.exec(line)?.[1];
+  const close = () => { if (name !== null) sections.set(name, body.join('\n').trimEnd()); };
+  for (const line of lines) {
+    const marker = honourFences ? FENCE.exec(line)?.[1] : undefined;
     if (fence === null) {
       const match = SECTION.exec(line);
-      if (match) { close(); name = match[1]; lines = []; }
+      if (match) { close(); name = match[1]; body = []; }
       if (marker) fence = marker;
     } else if (marker && marker[0] === fence[0] && marker.length >= fence.length && line.trim() === marker) {
       fence = null;
     }
-    if (name !== null) lines.push(line);
+    if (name !== null) body.push(line);
   }
+  if (fence !== null) return null;
   close();
   return sections;
 }
