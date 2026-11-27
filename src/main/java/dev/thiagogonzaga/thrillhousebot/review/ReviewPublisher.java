@@ -44,8 +44,9 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 /**
  * Posts a review's outcome to GitHub — inline finding comments, the review verdict (or no-issues
- * body), dismissal of the bot's stale pending review, and resolution of addressed finding threads.
- * The write side of the pipeline.
+ * body), dismissal of the bot's stale pending review, withdrawal of the bot's earlier approvals
+ * when a round does not approve, and resolution of addressed finding threads. The write side of the
+ * pipeline.
  */
 @ApplicationScoped
 public class ReviewPublisher {
@@ -60,6 +61,7 @@ public class ReviewPublisher {
   private static final String EVENT_COMMENT = "COMMENT";
   private static final String CI_PENDING = "pending";
   private static final String REVIEW_PENDING = "PENDING";
+  private static final String REVIEW_APPROVED = "APPROVED";
 
   private final GitHubReviewClient reviewClient;
   private final GitHubCommentClient commentClient;
@@ -665,6 +667,12 @@ public class ReviewPublisher {
     // #918: no finding is posted naming the prompt's own guidance blocks.
     var result = PromptLabelScrubber.scrub(post.result());
     var lineResolver = post.lineResolver();
+    if (result.hasIssues() || result.reviewState() != ReviewState.APPROVE) {
+      // Every round that will not end in an APPROVE review: one with findings posts COMMENT or
+      // REQUEST_CHANGES whatever its verdict. Before the round's own post, so a review GitHub
+      // refuses or loses cannot skip it.
+      withdrawStandingApprovals(post);
+    }
     if (!result.hasIssues()) {
       // Summary-only re-run: skip restating a clean verdict when the summary re-posted and the
       // bot's latest review already approved this head (#1144); first review, unresolved
@@ -815,8 +823,100 @@ public class ReviewPublisher {
       }
     }
     return latest != null
-        && "APPROVED".equals(latest.state())
+        && REVIEW_APPROVED.equals(latest.state())
         && java.util.Objects.equals(commitSha, latest.commitId());
+  }
+
+  /**
+   * Dismisses the approvals this bot still has on the pull request, for a round that does not end
+   * in an approving review. GitHub goes on counting an {@code APPROVED} review after its author
+   * posts a later {@code COMMENT} one, so without this an approval of an earlier head would keep
+   * satisfying a required-review rule for code the bot has since declined to approve.
+   *
+   * <p>Only a review that is still {@code APPROVED} and whose author is one of the bot's own logins
+   * is touched: a person's review, another app's, and one GitHub already dismissed are left alone.
+   * Every such approval is dismissed, newest first, not only the latest, so an older one cannot
+   * count again once the newest is gone.
+   *
+   * <p>The approvals come from the run's one listing of the pull request's reviews, which {@link
+   * GitHubReviewClient#listReviews} pages through (up to 1,000 reviews). A listing that failed
+   * reaches here empty, so that round dismisses nothing; the next one reads the reviews again.
+   *
+   * <p>Best-effort: a dismissal GitHub refuses (on a protected branch its API reference asks for a
+   * repository administrator or a place on the rule's list of who may dismiss reviews) or that
+   * fails is logged and the round is published as usual. The walk stops at a refusal (a 4xx
+   * answer), since the same refusal would meet every other call. A failure of any other kind (a
+   * timeout, a 5xx) says nothing about the next call, so the older approvals are still tried. An
+   * approval that could not be dismissed stays until a later round withdraws it or a person
+   * dismisses it.
+   */
+  private void withdrawStandingApprovals(PostReviewRequest post) {
+    var reviews = post.priorReviews();
+    for (int i = reviews.size() - 1; i >= 0; i--) {
+      var review = reviews.get(i);
+      if (isStandingBotApproval(review) && dismissApproval(post, review) == Dismissal.REFUSED) {
+        return;
+      }
+    }
+  }
+
+  /** A submitted approval by this bot that GitHub has not already dismissed. */
+  private boolean isStandingBotApproval(GitHubReviewClient.ReviewResponse review) {
+    // A review from a since-deleted account serializes as user:null.
+    return REVIEW_APPROVED.equals(review.state())
+        && review.user() != null
+        && botIdentity.matches(review.user().login());
+  }
+
+  /** How one dismissal call ended. */
+  private enum Dismissal {
+    DONE,
+    /** GitHub answered with a 4xx: the App may not dismiss reviews here. */
+    REFUSED,
+    /** No answer, or a server error: the next call may still succeed. */
+    FAILED
+  }
+
+  /** Dismisses one approval, logging a call GitHub refused or that failed. */
+  private Dismissal dismissApproval(
+      PostReviewRequest post, GitHubReviewClient.ReviewResponse approval) {
+    try {
+      reviewClient.dismissReview(
+          post.auth(),
+          ACCEPT,
+          post.owner(),
+          post.repo(),
+          post.prNumber(),
+          approval.id(),
+          approvalWithdrawnMessage(post.commitSha()));
+      Log.infof(
+          "Dismissed approval %d on %s/%s #%d — the round for %s did not approve",
+          approval.id(), post.owner(), post.repo(), post.prNumber(), post.commitSha());
+      return Dismissal.DONE;
+    } catch (RuntimeException e) {
+      Log.warnf(
+          e,
+          "Could not dismiss approval %d on %s/%s #%d although the round for %s did not approve —"
+              + " it still counts towards the pull request's approvals until someone dismisses it."
+              + " Check that the App has Pull requests: write and that branch protection lets it"
+              + " dismiss reviews",
+          approval.id(),
+          post.owner(),
+          post.repo(),
+          post.prNumber(),
+          post.commitSha());
+      return isRefusal(e) ? Dismissal.REFUSED : Dismissal.FAILED;
+    }
+  }
+
+  /**
+   * The reason GitHub shows on the timeline beside a dismissed approval. It names the round, not a
+   * review, because a round held on CI can withdraw an approval without posting a review.
+   */
+  static String approvalWithdrawnMessage(String commitSha) {
+    return "ThrillhouseBot withdrew this approval: its review round for "
+        + commitSha
+        + " did not approve the pull request.";
   }
 
   /** One coverage notice for the outcome, including verification-only delta disclosures. */

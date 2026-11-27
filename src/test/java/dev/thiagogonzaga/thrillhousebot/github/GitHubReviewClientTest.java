@@ -37,6 +37,8 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.PullRequestCom
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.ReplyToReviewCommentRequest;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.ReviewResponse;
 import jakarta.ws.rs.POST;
+import jakarta.ws.rs.PUT;
+import jakarta.ws.rs.Path;
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Response;
 import java.lang.reflect.Method;
@@ -336,6 +338,46 @@ class GitHubReviewClientTest {
             long.class,
             GitHubReviewClient.SubmitReviewRequest.class);
     assertTrue(method.isAnnotationPresent(POST.class));
+  }
+
+  @Test
+  void dismissReviewSendsTheMessageWithTheDismissEvent() {
+    var client = mock(GitHubReviewClient.class);
+    when(client.dismissReview(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), anyLong(), anyString()))
+        .thenCallRealMethod();
+    var dismissed = new ReviewResponse(9L, "", "DISMISSED", "sha", null, "PRR_9");
+    when(client.dismissReviewOnce(
+            "auth",
+            "json",
+            "o",
+            "r",
+            7,
+            9L,
+            new GitHubReviewClient.DismissReviewRequest("no longer approved", "DISMISS")))
+        .thenReturn(dismissed);
+
+    assertSame(
+        dismissed, client.dismissReview("auth", "json", "o", "r", 7, 9L, "no longer approved"));
+  }
+
+  @Test
+  void dismissReviewOnceIsAPutOnTheDismissalsRoute() throws Exception {
+    Method method =
+        GitHubReviewClient.class.getMethod(
+            "dismissReviewOnce",
+            String.class,
+            String.class,
+            String.class,
+            String.class,
+            int.class,
+            long.class,
+            GitHubReviewClient.DismissReviewRequest.class);
+
+    assertTrue(method.isAnnotationPresent(PUT.class));
+    assertEquals(
+        "/repos/{owner}/{repo}/pulls/{pullNumber}/reviews/{reviewId}/dismissals",
+        method.getAnnotation(Path.class).value());
   }
 
   @Test

@@ -3379,6 +3379,17 @@ class ReviewOrchestratorTest {
         verify(followUpAnalyzer)
             .dropRepliedDuplicates(
                 any(), eq(List.of("{\"round\":2}", "{\"round\":1}")), any(), eq(BOT_ID), any());
+        // The round did not approve the new head, so the bot's approval of the old one is
+        // withdrawn.
+        verify(reviewClient)
+            .dismissReview(
+                "Bearer test",
+                "application/vnd.github+json",
+                "owner",
+                "repo",
+                42,
+                1L,
+                ReviewPublisher.approvalWithdrawnMessage("abcdefgh"));
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
       }
     }
