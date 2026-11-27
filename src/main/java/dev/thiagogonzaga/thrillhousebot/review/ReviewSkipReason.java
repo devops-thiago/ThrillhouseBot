@@ -37,7 +37,11 @@ public enum ReviewSkipReason {
   MISSING_REQUIRED_LABEL,
   /** The PR was opened by a login in {@code webhook.triggers.excluded-authors}. */
   EXCLUDED_AUTHOR,
-  /** An automatic review completed within {@code review.auto-review-min-interval}. */
+  /**
+   * An automatic review of the same head completed within {@code review.auto-review-min-interval}.
+   * An event for another head is not skipped: it is reviewed when the window closes ({@link
+   * DeferredReviews}), and counted here only when it could not be kept.
+   */
   RATE_LIMITED,
   /** The review executor rejected the task (saturated or shutting down). */
   DISPATCH_REJECTED,
@@ -48,7 +52,8 @@ public enum ReviewSkipReason {
   HEAD_MOVED,
   /**
    * As many automatic reviews of the repository were waiting for a slot as {@code
-   * review.auto-review-max-queued-per-repo} allows.
+   * review.auto-review-max-queued-per-repo} allows, and the review could not be kept to ask again
+   * later ({@link DeferredReviews}).
    */
   REPOSITORY_QUEUE_FULL
 }
