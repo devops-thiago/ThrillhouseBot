@@ -123,6 +123,21 @@ jobs:
       - name: Lint workflows and composite actions
         run: ./actionlint -color
 
+  # The released-history check runs from the base branch under pull_request_target and never
+  # executes pull request code, so the checker's own tests run here, against the pull request.
+  released-history-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - run: node --test scripts/released-history/check.test.mjs
+
   test:
     runs-on: ubuntu-latest
     permissions:

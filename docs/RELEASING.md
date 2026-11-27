@@ -114,6 +114,12 @@ cd .. && git restore --source HEAD -- README.md CONTRIBUTING.md docs/ website/sr
 Then set `current.label` in `website/versions.json` to `vX.Y.Z`, the version
 being released, and check that `npm run build` picks up the new pages.
 
+The archive is locked once this pull request merges: for a tagged version, the
+`released-history` check fails any later pull request that changes an archive
+that already exists, so review the new archive here. The same check locks each
+tagged version's `CHANGELOG.md` section. A correction afterwards goes into the
+next release as an Errata entry.
+
 Run `git status` after the second restore. Restoring from a tag brings back any
 file deleted since that tag, so a change outside the new archive directories and
 `versions.json` is a file the release should not bring back.
