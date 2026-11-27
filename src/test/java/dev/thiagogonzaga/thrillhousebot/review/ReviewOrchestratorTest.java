@@ -3077,7 +3077,7 @@ class ReviewOrchestratorTest {
             .thenReturn(session);
 
         when(reviewConfig.showEvidence()).thenReturn(true);
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
