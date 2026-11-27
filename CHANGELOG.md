@@ -298,6 +298,10 @@ cannot resolve its review threads.
   `REVIEW_AGENT_PROMPT_ENABLED`, the block came after the comment's hidden finding marker and
   printed the file name, so a crafted file name could stand in for the marker and detach the thread
   from its finding. The block is now placed before the marker.
+- **Nine patterns over model-written text read each run once**: the URL pattern in finding text, the
+  quoted-passage patterns and the file-name, trailing-stop and omission patterns of the
+  description-gap screen took quadratic time on a long run of one kind of character, so 64,000 such
+  characters could hold a review worker for several seconds per pattern. The matches are unchanged.
 
 ## [0.9.3] - 2026-11-26
 
