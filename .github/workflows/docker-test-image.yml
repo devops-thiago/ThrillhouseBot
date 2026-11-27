@@ -78,8 +78,8 @@ jobs:
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
   # The builds below run the selected commit's own build scripts, which for a pull request is
-  # code nobody has merged. They hold a read-only token and no registry login, and hand the
-  # result to build-push as an artifact.
+  # code nobody has merged, and so does image-build, whose Dockerfile comes from that commit.
+  # They hold a read-only token and no registry login, and hand the result on as an artifact.
   #
   # With pr_number set, the run's ref is still the branch picked in the form (usually main), so
   # anything a build job saved to the Actions cache would land in that branch's scope, where
@@ -204,10 +204,10 @@ jobs:
           path: ~/.m2
           key: ${{ steps.m2.outputs.cache-primary-key }}
 
-  # The only job that can write to the registry and to the pull request. It runs no build
-  # script from the selected commit: it takes the built application as an artifact and the
-  # commit's tree as the Docker build context, and nothing else.
-  build-push:
+  # Builds the image from the selected commit's Dockerfile and tree, into an OCI archive. The
+  # Dockerfile's RUN steps are that commit's code, so this job holds a read-only token and no
+  # registry login either.
+  image-build:
     needs: [source, native-build, jvm-build]
     # The build job of the other variant is skipped; run then too, but never after a failure.
     if: >-
@@ -217,14 +217,69 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
-      pull-requests: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.source.outputs.sha }}
           persist-credentials: false
 
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: inputs.variant == 'jvm'
+        with:
+          name: test-jvm-app
+          path: target/quarkus-app/
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: inputs.variant == 'native'
+        with:
+          name: test-native-amd64
+          path: target/amd64/
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: inputs.variant == 'native'
+        with:
+          name: test-native-arm64
+          path: target/arm64/
+
+      - name: Make the native binaries executable
+        if: inputs.variant == 'native'
+        run: chmod +x target/amd64/*-runner target/arm64/*-runner
+
+      - uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
+
+      - name: Build the image into an OCI archive
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ${{ inputs.variant == 'native' && 'src/main/docker/Dockerfile.runtime' || 'src/main/docker/Dockerfile.jvm' }}
+          push: false
+          outputs: type=oci,dest=${{ runner.temp }}/test-image.tar
+          platforms: ${{ inputs.variant == 'native' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
+          cache-from: type=gha,scope=docker-test-${{ inputs.variant }}
+          # A pull request build reads the layer cache and writes none (see the note above the build jobs).
+          cache-to: ${{ inputs.pr_number == '' && format('type=gha,mode=max,scope=docker-test-{0}', inputs.variant) || '' }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ needs.source.outputs.sha }}
+            thrillhousebot.image.purpose=test
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-image
+          path: ${{ runner.temp }}/test-image.tar
+          retention-days: 1
+
+  # The only job that can write to the registry and to the pull request. It checks nothing out
+  # and builds nothing: it takes the finished image as an archive and copies it to the registry.
+  build-push:
+    needs: [source, image-build]
+    if: always() && needs.image-build.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: write
+    steps:
       - name: Derive tags
         id: tags
         env:
@@ -292,51 +347,27 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        if: inputs.variant == 'jvm'
         with:
-          name: test-jvm-app
-          path: target/quarkus-app/
+          name: test-image
+          path: ${{ runner.temp }}/image
 
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        if: inputs.variant == 'native'
-        with:
-          name: test-native-amd64
-          path: target/amd64/
-
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        if: inputs.variant == 'native'
-        with:
-          name: test-native-arm64
-          path: target/arm64/
-
-      - name: Make the native binaries executable
-        if: inputs.variant == 'native'
-        run: chmod +x target/amd64/*-runner target/arm64/*-runner
-
-      - uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
-
-      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
-        with:
-          registry: ghcr.io
-          username: devops-thiago
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push
-        id: push
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          file: ${{ inputs.variant == 'native' && 'src/main/docker/Dockerfile.runtime' || 'src/main/docker/Dockerfile.jvm' }}
-          push: true
-          platforms: ${{ inputs.variant == 'native' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
-          tags: ${{ steps.tags.outputs.list }}
-          cache-from: type=gha,scope=docker-test-${{ inputs.variant }}
-          # A pull request build reads the layer cache and writes none (see the note above the build jobs).
-          cache-to: ${{ inputs.pr_number == '' && format('type=gha,mode=max,scope=docker-test-{0}', inputs.variant) || '' }}
-          labels: |
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ steps.tags.outputs.sha }}
-            thrillhousebot.image.purpose=test
+      - name: Push the image under each tag
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARCHIVE: ${{ runner.temp }}/image/test-image.tar
+          PRIMARY: ${{ steps.tags.outputs.primary }}
+          TAGS: ${{ steps.tags.outputs.list }}
+        run: |
+          printf '%s' "$REGISTRY_TOKEN" | skopeo login ghcr.io --username devops-thiago --password-stdin
+          # --all carries every platform of the archive; the other tags are copies of the first.
+          skopeo copy --all --retry-times 3 "oci-archive:${ARCHIVE}" "docker://${PRIMARY}"
+          IFS=',' read -ra tags <<< "$TAGS"
+          for tag in "${tags[@]}"; do
+            if [ "$tag" != "$PRIMARY" ]; then
+              skopeo copy --all --retry-times 3 "docker://${PRIMARY}" "docker://${tag}"
+            fi
+          done
+          skopeo logout ghcr.io
 
       - name: Comment on PR
         if: inputs.pr_number != ''

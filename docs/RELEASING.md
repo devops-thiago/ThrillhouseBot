@@ -67,7 +67,8 @@ The release workflow makes the same check before it publishes anything. It
 reads the SSH signing keys GitHub lists for the accounts named in
 `RELEASE_TAG_SIGNERS` in `release.yml`, and accepts a tag only when one of
 those keys signed it. To let another maintainer cut releases, add their login
-there; the key has to be registered on their account as a signing key. A GPG
+there, separated from the others by a comma (`alice,bob`); the key has to be
+registered on their account as a signing key. A GPG
 signature is not accepted. Removing a key from the account makes the tags it
 signed fail this check from then on.
 

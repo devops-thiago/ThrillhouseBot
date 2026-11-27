@@ -134,6 +134,10 @@ test('the test image job that can write to the registry runs no build from the c
   const job = jobs.get('build-push');
   assert.doesNotMatch(job, /mvnw|\bnpm\b|setup-java|setup-node|uses: \.\//, 'build-push runs build tooling or a local action');
   assert.doesNotMatch(job, /gh pr checkout/);
+  // A Dockerfile's RUN steps are the commit's code too: the image is built where nothing can be written.
+  assert.doesNotMatch(job, /actions\/checkout@|docker\/build-push-action@|docker build|buildx/, 'build-push checks out or builds the commit');
+  assert.match(jobs.get('image-build'), /push: false/);
+  assert.doesNotMatch(jobs.get('image-build'), /docker\/login-action|skopeo login|secrets\./, 'image-build holds a registry credential');
   for (const [name, text] of jobs) {
     for (const step of stepsOf(text).filter((s) => s.includes('actions/checkout@'))) {
       assert.match(step, /persist-credentials: false/, `${name} leaves the token in the checkout`);
