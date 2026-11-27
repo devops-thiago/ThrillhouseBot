@@ -198,6 +198,80 @@ cannot resolve its review threads.
   (#1314), with the same tokens and to `GITHUB_API_URL`. A job log's address now costs three
   requests instead of one, as the repository and the job are read first. These calls follow
   `HTTP_CONNECT_TIMEOUT` and `HTTP_REQUEST_TIMEOUT` rather than the REST client's settings.
+
+
+### Fixed
+
+- **A review names the earlier findings it says are still open** (#1436): a review with no new
+  findings used to state only how many remain unresolved. Its body now lists each of them by
+  `path:line` and title, most severe first, with a link to its review thread or a mark saying it
+  has none (a "Things to double-check" item, or no thread found). A review that also raises
+  findings lists them under its delta section (`REVIEW_FOLLOW_UP_SUMMARY_ENABLED`), which states
+  the still-open count. A list too long for GitHub's comment limit ends with the number of rows
+  left out.
+- **A clear or decline comment says what it matched** (#1463): the reply lists the open findings
+  the comment names by `path:line` and title, and gives the title on record for a `path:line` named
+  with another one, where it used to promise to close whatever was named even when nothing was. A
+  title containing a backtick, `<` or `|` now also matches as the summary's source escapes it.
+- **GitHub Enterprise Server can be used.** The bot called `https://api.github.com` and linked to
+  `https://github.com` whatever the deployment: the REST and GraphQL clients, the GitHub App
+  extension, dashboard sign-in and sign-out, pull request links in notifications and learnings, and
+  the App install page were all fixed to github.com. `GITHUB_URL`, `GITHUB_API_URL` and
+  `GITHUB_GRAPHQL_URL` now set the web, REST and GraphQL endpoints (for example
+  `https://ghes.example.com`, `https://ghes.example.com/api/v3` and
+  `https://ghes.example.com/api/graphql`), and `GITHUB_OAUTH_URL` follows `GITHUB_URL` unless set.
+  The defaults are unchanged.
+- **A refused thread resolve says why** (#1471): GitHub's reason is logged instead of being
+  discarded, and a missing permission is named in the reply to a `resolved` directive and to
+  `/resolve`, which no longer answers that there is nothing to resolve.
+- **Dashboard links and issue URLs follow `GITHUB_URL`** (#1491): the two pull request links in the
+  dashboard's session history pointed at `github.com` whatever was configured, and a linked issue
+  written as a full URL was only recognised there. The session payloads now carry
+  `pullRequestUrl`, and only issue URLs on the configured web address are read.
+- **A one-line private key no longer stops the application at start** (#1314): the extension, which
+  reads `GITHUB_PRIVATE_KEY` too, rejected the form `.env.example` asks for (one line with literal
+  `\n` escapes) and a key without its PEM header and footer. Every key the start-up check accepts
+  is now handed to the extension in a form it can read, and a padded `GITHUB_APP_ID` is stripped
+  for it as the bot's own signer did.
+- **The summary comment follows a verdict held on CI** (#1462): when CI turns green and the held
+  approval is posted, the summary no longer says it cannot be approved or lists the checks as
+  pending. While the hold stays, its table shows the checks' current state. The Agent next steps
+  section, when on, follows it too. A summary posted before this change is not rewritten.
+- **A push inside the automatic review window is reviewed when the window closes**: a push that
+  arrived inside `AUTO_REVIEW_MIN_INTERVAL` was skipped and never reviewed, so an approval of the
+  previous commit could stay on code the bot had not read. The bot now keeps the latest pushed head
+  and reviews it when the window closes. Only a reopen or a repeated ready-for-review of the commit
+  just reviewed is skipped. The waiting review is held in memory, so a restart loses it.
+- **A failed read of a pull request's reviews is logged as a warning**: it was a debug line that
+  read as a normal first review. Reaching the limit of 1,000 reviews read per pull request is logged
+  too.
+- **A review does not approve when no earlier review of the pull request can be read**: when the
+  stored results of every earlier review were missing or unreadable, a follow-up review had nothing
+  to check them against and approved if it found nothing new. It now ends as `COMMENT`, and the
+  summary, the review body and the check run say that the earlier reviews could not be read. A
+  first review, and a pull request with at least one readable earlier review, are unchanged.
+- **A re-raised finding that quotes unchanged code is a repeat, not a gap (#1397)**: a finding
+  raised again after its fix was kept as "a gap the fix left" even when its quote sat only on lines
+  the pull request did not change. It is now dropped as a repeat of the answered finding.
+- **An added line that starts with `++` is read as added (#1396)**: a line such as `++i;` was
+  mistaken for the diff's file header when the bot collected changed names and configuration keys,
+  so what it declared was missed.
+- **A suggestion's new code loses a copied line number (#1364)**: when the quoted old code kept its
+  diff markers and a new line dropped them, the copied line number stayed in the suggestion.
+- **An environment read named in a docstring is not a read (#1473)**: a read named inside a
+  multi-line docstring or block comment counted as one when the bot chose which changed files to
+  fetch for configuration-key context.
+- **The findings manifest's `thread` value follows the threads that were opened (#1465)**: when
+  GitHub refused a thread, or a refusal let a finding past the comment cap take the freed slot, the
+  summary's manifest still carried the value announced before the review posted. The bot now
+  corrects the manifest line after the review posts.
+- **`/resolve` says when it could not read or resolve the threads (#1471)**: it answered that there
+  were no open finding threads when GitHub failed to return the pull request's review threads, and
+  reported nothing when every resolve attempt failed. It now says the threads could not be read, or
+  how many it tried and GitHub left open.
+
+### Security
+
 - **An approval is withdrawn when a later review does not approve**: the bot approved a pull
   request, more commits were pushed, and the review of the new head ended as `COMMENT` (findings,
   an earlier finding still open, a CI hold, a partly reviewed diff). GitHub goes on counting an

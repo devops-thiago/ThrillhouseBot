@@ -781,7 +781,8 @@ findings and review bodies stay per round. With `REVIEW_FOLLOW_UP_SUMMARY_ENABLE
 the review body also carries new, resolved and still-open counts, naming each closed
 finding once instead of posting a second delta comment. It also names the threads a
 round posted for earlier "Things to double-check" items, and says how many new findings
-went only under "Things to double-check". The review keeps its verdict;
+went only under "Things to double-check". A review that raises findings while
+earlier ones are open then lists the open ones under those counts. The review keeps its verdict;
 a definite review refusal preserves the same outcome as a regular comment.
 
 The comment also carries one hidden, machine-readable line listing the open
@@ -815,7 +816,10 @@ is computed over the same open set, so an earlier CRITICAL still open keeps a
 follow-up round at `REQUEST_CHANGES` under the configured strictness. When a
 follow-up opens nothing new while earlier findings are open, its review body
 leads with "No new issues in this revision, but N previous finding(s) remain
-unresolved".
+unresolved" and lists those N by `path:line` and title, most severe first, each
+with a link to its review thread or a mark saying it has none. A list too long for
+GitHub's comment limit says how many rows it left out. A round with no stored
+response to read the findings from states only the count.
 
 The Description vs. Implementation section appears only when the PR
 description and the change disagree. A summary with model prose ("What this PR
