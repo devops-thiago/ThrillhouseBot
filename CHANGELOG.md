@@ -323,6 +323,11 @@ cannot resolve its review threads.
   quoted-passage patterns and the file-name, trailing-stop and omission patterns of the
   description-gap screen took quadratic time on a long run of one kind of character, so 64,000 such
   characters could hold a review worker for several seconds per pattern. The matches are unchanged.
+- **The secret-scan marker is keyed from the GitHub App private key**: the hidden marker a
+  secret-scan finding carries was keyed from the webhook secret, so a pull request author could use
+  posted markers to test guesses of a short webhook secret. Declines recorded under earlier markers
+  keep matching. A `GITHUB_WEBHOOK_SECRET` shorter than 16 characters now logs a warning at start.
+  If yours is short, replace it: markers already posted stay public.
 
 ## [0.9.3] - 2026-11-26
 
