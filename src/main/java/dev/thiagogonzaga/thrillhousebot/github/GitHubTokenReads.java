@@ -41,7 +41,8 @@ import org.kohsuke.github.connector.GitHubConnector;
  * <p>The client is built here with hub4j's own builder: the Quarkiverse GitHub App extension's
  * {@code GitHubClientProvider} only hands out clients for the App and for tokens it mints itself,
  * which reach the whole installation. This goes away once the extension can build a client for a
- * caller's token.
+ * caller's token (<a href="https://github.com/quarkiverse/quarkus-github-app/issues/915">
+ * quarkiverse/quarkus-github-app#915</a>).
  *
  * <p>Calls go to {@code thrillhousebot.github.api-url} through {@link GitHubAppConnector}, which
  * gives them the REST clients' failures, one attempt and {@code HTTP_REQUEST_TIMEOUT}. hub4j
