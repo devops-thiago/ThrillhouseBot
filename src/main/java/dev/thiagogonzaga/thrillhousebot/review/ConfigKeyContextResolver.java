@@ -330,11 +330,16 @@ public class ConfigKeyContextResolver {
     return word.contains("://") || word.contains("www.");
   }
 
-  /** The patch's added content ({@code +} lines, excluding the {@code +++} file header). */
+  /**
+   * The patch's added content: its {@code +} lines, without the {@code +++} file header a patch may
+   * carry before its first hunk. Inside a hunk a line starting {@code +++} is added content.
+   */
   private static String addedLines(String patch) {
     var added = new StringBuilder();
+    var inHunk = false;
     for (var line : patch.split("\n", -1)) {
-      if (line.startsWith("+") && !line.startsWith("+++")) {
+      inHunk = inHunk || line.startsWith("@@");
+      if (ChangeSymbols.isAddedLine(line, inHunk)) {
         added.append(line, 1, line.length()).append('\n');
       }
     }
