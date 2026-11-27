@@ -106,7 +106,10 @@ public interface ThrillhouseConfig {
     @WithName("private-key")
     String privateKey();
 
-    /** The GitHub App's webhook secret, used to check each delivery's HMAC signature. Required. */
+    /**
+     * The GitHub App's webhook secret, used to check each delivery's HMAC signature. Required. Use
+     * a long random value; one shorter than 16 characters logs a warning at start.
+     */
     @WithName("webhook-secret")
     String webhookSecret();
 

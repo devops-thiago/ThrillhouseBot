@@ -64,7 +64,7 @@ has to accept the new ones on each installation.
 
 | Setting | Used for | Needed |
 |---|---|---|
-| `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY` | The calls the bot makes as the app | Always |
+| `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY` | The calls the bot makes as the app. The private key also keys the hidden marker a secret-scan finding carries | Always |
 | `GITHUB_WEBHOOK_SECRET` | Checking the signature of each delivery | Always |
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | Dashboard sign-in only: starting it, exchanging the code and revoking the token at sign-out | Only for the dashboard |
 

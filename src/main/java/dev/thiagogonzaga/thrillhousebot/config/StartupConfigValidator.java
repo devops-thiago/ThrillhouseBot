@@ -66,6 +66,9 @@ public class StartupConfigValidator {
    */
   private static final String EFFECTIVE_OUTPUT_BUFFER = "the effective output buffer (";
 
+  /** Below this many characters the webhook secret draws a boot warning. */
+  static final int WEBHOOK_SECRET_MIN_LENGTH = 16;
+
   /**
    * The remedy carried by every {@code GITHUB_PRIVATE_KEY} problem. A fresh clone fails here with
    * placeholder text copied straight out of {@code .env.example} (#593), and the refusal is where
@@ -167,6 +170,7 @@ public class StartupConfigValidator {
     logDashboardStatus();
     logGitHubAddresses();
     spendCeilingWarning(config.review()).ifPresent(log::warn);
+    shortWebhookSecretWarning(config.github().webhookSecret()).ifPresent(log::warn);
     logReasoningStatus();
     logCiGatingStatus();
     logNotificationStatus();
@@ -285,6 +289,26 @@ public class StartupConfigValidator {
               + " reviews wait (thrillhousebot.review.auto-review-max-queued-per-repo): "
               + review.autoReviewMaxQueuedPerRepo());
     }
+  }
+
+  /**
+   * The boot warning for a webhook secret shorter than {@value #WEBHOOK_SECRET_MIN_LENGTH}
+   * characters. Whoever learns the secret can sign deliveries the bot accepts, and a short one can
+   * be found by trying candidates against any signed delivery or, on a server that ran a version
+   * before 0.9.4 with the secret scan on, against the markers its findings carry. A warning and not
+   * a refusal, so a running deployment keeps starting. Length is all that is read, and the secret
+   * is never repeated.
+   */
+  static Optional<String> shortWebhookSecretWarning(String webhookSecret) {
+    if (webhookSecret.strip().length() >= WEBHOOK_SECRET_MIN_LENGTH) {
+      return Optional.empty();
+    }
+    return Optional.of(
+        "GITHUB_WEBHOOK_SECRET is shorter than "
+            + WEBHOOK_SECRET_MIN_LENGTH
+            + " characters. Anyone who finds it out can send webhook deliveries the bot accepts"
+            + " as GitHub's. Generate a random one (for example: openssl rand -hex 32), set it in"
+            + " the GitHub App's settings and here, then restart.");
   }
 
   /**

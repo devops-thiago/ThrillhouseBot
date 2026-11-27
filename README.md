@@ -288,7 +288,7 @@ Create the GitHub App before starting the bot; its credentials go in `.env`.
 | Setting | Value |
 |---|---|
 | Webhook URL | `https://<your-host>/api/webhook` |
-| Webhook secret | Random string |
+| Webhook secret | Random string, for example from `openssl rand -hex 32` |
 | Repository permissions | Pull requests: R/W, Checks: R/W, Contents: R/W, Issues: R/W, Actions: Read, Commit statuses: Read |
 | Organization permissions | Members: Read (shows installation-wide dashboard counters to organization members) |
 | Subscribe to events | Pull request, Issue comment, Pull request review comment, Check suite, Status, Repository |
@@ -325,7 +325,7 @@ bounds at boot while it is on.
 | `AI_MODEL` | Chat model name. It also selects the model's entry in the per-model settings and the pricing map. | `deepseek-chat` |
 | `GITHUB_APP_ID` | GitHub App ID, from the App's settings page. Required. | _(none)_ |
 | `GITHUB_PRIVATE_KEY` | GitHub App private key (PEM), on one line with each newline written as `\n`, unquoted. Required. | _(none)_ |
-| `GITHUB_WEBHOOK_SECRET` | The GitHub App's webhook secret, used to check each delivery's HMAC signature. Required. | _(none)_ |
+| `GITHUB_WEBHOOK_SECRET` | The GitHub App's webhook secret, used to check each delivery's HMAC signature. Required. Use a long random value; one shorter than 16 characters logs a warning at start. | _(none)_ |
 | `GITHUB_CLIENT_ID` | OAuth client ID for dashboard login, from the GitHub App's settings. Leave it and `GITHUB_CLIENT_SECRET` unset to disable login. | _(none)_ |
 | `GITHUB_CLIENT_SECRET` | OAuth client secret for dashboard login, from the GitHub App's settings. | _(none)_ |
 | `DASHBOARD_URL` | Public dashboard URL, used for the OAuth callback and the session links posted to GitHub. | `http://localhost:8080` |
@@ -1157,14 +1157,20 @@ finding is not raised again while the rule matches the same content (same file,
 title and anchor, and for a secret the same line). A secret finding ends with a
 hidden `thrillhousebot:scan-content` marker holding the first eight hex digits
 of an HMAC-SHA-256 of the flagged line (for a private key, its block), keyed
-from `GITHUB_WEBHOOK_SECRET`, which is how a later round tells a new value with
+from `GITHUB_PRIVATE_KEY`, which is how a later round tells a new value with
 the same prefix and length from the declined one. The key means a reader of the
-pull request cannot test a guessed value against the marker. The same secret
-gives the same marker across rounds and restarts; changing the webhook secret
+pull request cannot test a guessed value against the marker. The same App
+private key gives the same marker across rounds and restarts; replacing it
 makes each declined secret finding come back once, and the next decline stores
-the new marker. A decline recorded under the unkeyed marker of 0.7.0 keeps
-matching its line. A new value, or any other change to the line apart from
-leading and trailing whitespace, is raised again. A secret finding declined
+the new marker. A GitHub App can hold several private keys; instances that
+share a database must be given the same one, for the same reason. Before 0.9.4
+the marker was keyed from `GITHUB_WEBHOOK_SECRET`. A decline recorded under
+such a marker keeps matching its line while the webhook secret stays the same,
+and so does one recorded under the unkeyed marker of 0.7.0. Those older markers
+stay in the comments they were posted in, and a short webhook secret can be
+guessed from them, so replace a short one (see "Startup checks" below). A new
+value, or any other change to the line apart from leading and trailing
+whitespace, is raised again. A secret finding declined
 before 0.7.0 has no fingerprint, so its decline holds only until the head moves;
 it is then raised once more, with the marker.
 
@@ -1505,7 +1511,11 @@ only at a receiver you trust with the metadata above.
 The app checks its configuration at startup and fails fast, naming every
 problem in one message, when `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY`,
 `GITHUB_WEBHOOK_SECRET` or `AI_API_KEY` is missing, or the private key is not a
-valid PEM RSA key. Dashboard OAuth is optional: with `GITHUB_CLIENT_ID` and
+valid PEM RSA key. A `GITHUB_WEBHOOK_SECRET` shorter than 16 characters does not
+stop the start; it logs a warning, because whoever finds the secret out can
+send deliveries the bot accepts as GitHub's. Generate one with
+`openssl rand -hex 32`, set it in the GitHub App's settings and in the bot's
+environment, then restart. Dashboard OAuth is optional: with `GITHUB_CLIENT_ID` and
 `GITHUB_CLIENT_SECRET` unset, dashboard login is disabled.
 
 ### Cost tracking
@@ -2088,7 +2098,8 @@ GITHUB_PRIVATE_KEY=-----BEGIN RSA PRIVATE KEY-----\nMIIEow...\n-----END RSA PRIV
 ```
 
 `GITHUB_WEBHOOK_SECRET` and `AI_API_KEY` only need to be non-empty to boot, but
-webhooks and reviews need the real values. Dashboard OAuth is optional. Then:
+webhooks and reviews need the real values. A webhook secret shorter than 16
+characters logs a warning at start. Dashboard OAuth is optional. Then:
 
 ```bash
 # Terminal 1: Smee proxy
