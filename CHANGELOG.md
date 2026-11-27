@@ -139,6 +139,13 @@ cannot resolve its review threads.
 
 ### Fixed
 
+- **A review names the earlier findings it says are still open** (#1436): a review with no new
+  findings used to state only how many remain unresolved. Its body now lists each of them by
+  `path:line` and title, most severe first, with a link to its review thread or a mark saying it
+  has none (a "Things to double-check" item, or no thread found). A review that also raises
+  findings lists them under its delta section (`REVIEW_FOLLOW_UP_SUMMARY_ENABLED`), which states
+  the still-open count. A list too long for GitHub's comment limit ends with the number of rows
+  left out.
 - **A clear or decline comment says what it matched** (#1463): the reply lists the open findings
   the comment names by `path:line` and title, and gives the title on record for a `path:line` named
   with another one, where it used to promise to close whatever was named even when nothing was. A

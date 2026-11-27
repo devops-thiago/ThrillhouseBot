@@ -167,7 +167,8 @@ final class ClosedFindingNames {
     return describe(finding.file(), finding.line(), finding.title());
   }
 
-  private static String describe(String file, int line, String rawTitle) {
+  /** The row naming one finding, shared with the still-open list ({@link OpenFindingNames}). */
+  static String describe(String file, int line, String rawTitle) {
     var locator = MarkdownSafe.inlineCode(file + ":" + line);
     var title = MarkdownSafe.inline(rawTitle);
     return title.isBlank() ? "`" + locator + "`" : "`" + locator + "` — " + title;
