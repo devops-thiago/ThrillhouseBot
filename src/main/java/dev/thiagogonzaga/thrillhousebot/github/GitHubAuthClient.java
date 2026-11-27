@@ -35,8 +35,6 @@ public class GitHubAuthClient {
 
   private static final String BEARER = "Bearer ";
 
-  private static final String ACCEPT = "application/vnd.github+json";
-
   /**
    * How long GitHub itself honours an installation token. Not ours to choose — every duration below
    * is reasoned against it, so it is written down once rather than repeated as a literal.

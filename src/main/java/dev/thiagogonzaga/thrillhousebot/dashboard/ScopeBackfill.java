@@ -145,7 +145,7 @@ public class ScopeBackfill {
       var repositories = new HashMap<String, Long>();
       var createdAt = new HashMap<Long, Instant>();
       for (var repo : tokenReads.installationRepositories(auth)) {
-        if (repo.id() > 0 && repo.fullName() != null && repo.fullName().indexOf('/') > 0) {
+        if (repo.id() > 0 && namesAnOwner(repo.fullName())) {
           repositories.put(lower(repo.fullName()), repo.id());
           if (repo.createdAt() != null) {
             createdAt.put(repo.id(), repo.createdAt());
@@ -161,6 +161,11 @@ public class ScopeBackfill {
           e.getMessage());
       return Optional.empty();
     }
+  }
+
+  /** Whether {@code fullName} is {@code owner/repo} with an owner in front of the slash. */
+  private static boolean namesAnOwner(String fullName) {
+    return fullName != null && fullName.contains("/") && !fullName.startsWith("/");
   }
 
   private static void index(

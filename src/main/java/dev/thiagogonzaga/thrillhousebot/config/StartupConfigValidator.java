@@ -66,6 +66,9 @@ public class StartupConfigValidator {
    */
   private static final String EFFECTIVE_OUTPUT_BUFFER = "the effective output buffer (";
 
+  /** Joins the two bounds of a range in a refusal. */
+  private static final String AND = " and ";
+
   /** Below this many characters the webhook secret draws a boot warning. */
   static final int WEBHOOK_SECRET_MIN_LENGTH = 16;
 
@@ -787,7 +790,7 @@ public class StartupConfigValidator {
       problems.add(
           "REVIEW_CI_CONTEXT_MAX_CHARS must be between "
               + ThrillhouseConfig.CiContextConfig.MIN_MAX_CHARS
-              + " and "
+              + AND
               + ThrillhouseConfig.CiContextConfig.MAX_MAX_CHARS
               + " (thrillhousebot.review.ci-context.max-chars): "
               + maxChars);
@@ -810,7 +813,7 @@ public class StartupConfigValidator {
       problems.add(
           "REVIEW_STATIC_ANALYSIS_MAX_CHARS must be between "
               + ThrillhouseConfig.StaticAnalysisConfig.MIN_MAX_CHARS
-              + " and "
+              + AND
               + ThrillhouseConfig.StaticAnalysisConfig.MAX_MAX_CHARS
               + " (thrillhousebot.review.static-analysis.max-chars): "
               + maxChars);
@@ -858,7 +861,7 @@ public class StartupConfigValidator {
   private static void requireWithin(
       List<String> problems, int value, int min, int max, String env, String key) {
     if (value < min || value > max) {
-      problems.add(env + " must be between " + min + " and " + max + " (" + key + "): " + value);
+      problems.add(env + " must be between " + min + AND + max + " (" + key + "): " + value);
     }
   }
 

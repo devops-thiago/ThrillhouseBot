@@ -51,6 +51,9 @@ public class ReviewThreadService {
   // Stops a malformed pageInfo from looping forever.
   private static final int MAX_THREAD_PAGES = 20;
 
+  /** The field of a GraphQL answer that lists what GitHub refused. */
+  private static final String ERRORS = "errors";
+
   private static final String RESOLVE_MUTATION =
       """
       mutation($threadId: ID!) {
@@ -123,7 +126,7 @@ public class ReviewThreadService {
               auth, new GitHubGraphQLClient.GraphQLRequest(THREADS_QUERY, variables));
       var reviewThreads =
           response.path("data").path("repository").path("pullRequest").path("reviewThreads");
-      var errors = response.path("errors");
+      var errors = response.path(ERRORS);
       if (reviewThreads.isMissingNode() && !errors.isEmpty()) {
         throw GitHubGraphQLException.from(errors);
       }
@@ -206,7 +209,7 @@ public class ReviewThreadService {
     if (created.isTextual()) {
       return created.asText();
     }
-    var refusal = GitHubGraphQLException.from(response.path("errors"));
+    var refusal = GitHubGraphQLException.from(response.path(ERRORS));
     throw refusal.isThrottled() ? refusal.asHttpThrottle() : refusal;
   }
 
@@ -234,7 +237,7 @@ public class ReviewThreadService {
             .path("isResolved")
             .asBoolean(false);
     if (!resolved) {
-      var errors = response.path("errors");
+      var errors = response.path(ERRORS);
       if (!errors.isEmpty()) {
         throw GitHubGraphQLException.from(errors);
       }
