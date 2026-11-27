@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -187,6 +188,83 @@ class DiffBudgetPlannerTest {
     assertEquals(
         List.of("src/test/java/AlphaTest.java", "src/test/java/BravoTest.java"),
         plan.omittedFiles());
+  }
+
+  /**
+   * A decoy with no test, then {@code pairs} sources, then their tests, in packing order (every
+   * file has the same size, so the name decides). Six files fill a batch, so first-fit leaves the
+   * last source and its test in different batches both before and after the earlier pairs are
+   * regrouped, while a batch holding the two together is always within the batch count.
+   */
+  private List<FileDiff> decoyThenPairs(int pairs) {
+    var files = new ArrayList<FileDiff>();
+    files.add(file("src/main/java/Aaa.java", 8, patch(8)));
+    for (var i = 1; i <= pairs; i++) {
+      files.add(file(String.format("src/main/java/C%03d.java", i), 8, patch(8)));
+    }
+    for (var i = 1; i <= pairs; i++) {
+      files.add(file(String.format("src/test/java/C%03dTest.java", i), 8, patch(8)));
+    }
+    return files;
+  }
+
+  /** A budget that fits six of {@code files} in a batch and never seven. */
+  private int budgetForSixOf(List<FileDiff> files) {
+    var sizes = files.stream().mapToInt(this::sectionTokens).summaryStatistics();
+    var budget = 6 * sizes.getMax();
+    assertTrue(budget < 7 * sizes.getMin(), "a batch must hold exactly six files");
+    return budget;
+  }
+
+  /** The index of the batch that holds {@code name}. */
+  private static int batchOf(DiffBudgetPlanner.BudgetPlan plan, String name) {
+    var names = batchNames(plan);
+    for (var i = 0; i < names.size(); i++) {
+      if (names.get(i).contains(name)) {
+        return i;
+      }
+    }
+    throw new AssertionError(name + " is in no batch");
+  }
+
+  private static void assertPairsShareABatch(DiffBudgetPlanner.BudgetPlan plan, int pairs) {
+    for (var i = 1; i <= pairs; i++) {
+      assertEquals(
+          batchOf(plan, String.format("src/main/java/C%03d.java", i)),
+          batchOf(plan, String.format("src/test/java/C%03dTest.java", i)),
+          "pair " + i);
+    }
+  }
+
+  @Test
+  void everyPairUpToTheRegroupingCapSharesABatch() {
+    var files = decoyThenPairs(200);
+
+    var plan = planner.plan(files, budgetForSixOf(files), 100);
+
+    assertPairsShareABatch(plan, 200);
+    assertEquals(67, plan.batches().size());
+    assertEquals(401, new HashSet<>(coveredFilenames(plan)).size());
+    assertFalse(plan.truncated());
+  }
+
+  @Test
+  void aPairPastTheRegroupingCapStaysApartAndIsStillReviewed() {
+    var files = decoyThenPairs(201);
+
+    var plan = planner.plan(files, budgetForSixOf(files), 100);
+
+    // #1480: the 200 highest-priority pairs are tried; the 201st is left where packing put it.
+    assertPairsShareABatch(plan, 200);
+    assertNotEquals(
+        batchOf(plan, "src/main/java/C201.java"),
+        batchOf(plan, "src/test/java/C201Test.java"),
+        "the pair past the cap is not regrouped");
+    assertEquals(68, plan.batches().size(), "no batch is added");
+    assertEquals(403, new HashSet<>(coveredFilenames(plan)).size(), "every file is in a batch");
+    assertEquals(403, coveredFilenames(plan).size(), "and in one batch only");
+    assertTrue(plan.omittedFiles().isEmpty());
+    assertFalse(plan.truncated());
   }
 
   @Test
