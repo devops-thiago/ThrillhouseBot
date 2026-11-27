@@ -492,6 +492,55 @@ class ConfigKeyContextResolverTest {
       assertTrue(ConfigKeyContextResolver.environmentReaders(List.of(file)).isEmpty());
     }
 
+    /**
+     * A read named on an inner line of a docstring or block comment the hunk opens and closes is
+     * named, not made (#1473).
+     */
+    @ParameterizedTest
+    @ValueSource(
+        strings = {
+          "+def home():\n+    \"\"\"Returns the home directory.\n+\n"
+              + "+    Defaults to os.getenv(\"HOME\") when unset.\n+    \"\"\"\n+    return HOME",
+          " doc = '''\n+reads os.environ at boot\n-old line\n '''",
+          "+/* The limit used to come from\n+   os.Getenv(\"X\"), and still falls back to\n"
+              + "+   os.Getenv(\"Y\") */\n+limit := 3",
+          "+<!--\n+import.meta.env.VITE_X\n+-->",
+          "+x = 1 --[[ was\n+os.getenv(\"X\")\n+]]",
+          "+doc = \"\"\"a\n+{os.environ} and {getenv(1)}\n+\"\"\"",
+          "+/* a\n+*/ x = 1 /* b\n+getenv(1)\n+*/"
+        })
+    void shouldNotTakeAReadNamedInsideAMultiLineLiteralOrCommentForOne(String lines) {
+      var file = new FileDiff("a.py", "modified", 1, 0, 1, "@@ -1 +1,6 @@\n" + lines);
+
+      assertTrue(ConfigKeyContextResolver.environmentReaders(List.of(file)).isEmpty());
+    }
+
+    /**
+     * A read made beside a multi-line literal or comment still counts: after its closer, in an
+     * interpolation on an inner line, in another hunk, or where the hunk shows only one end of it,
+     * so its opener cannot be told from its closer.
+     */
+    @ParameterizedTest
+    @ValueSource(
+        strings = {
+          "+\"\"\"Summary.\n+\n+Details.\n+\"\"\" + os.getenv(\"X\")",
+          "+/* a\n+   b */ v := os.Getenv(\"X\")",
+          "+v = f\"\"\"\n+  {os.environ['X']}\n+\"\"\"",
+          "+v = \"\"\"\n+  ${process.env.X}\n+\"\"\"",
+          "     the end of a docstring that began above the hunk.\n     \"\"\"\n"
+              + "+    return os.getenv(\"X\")",
+          "+    return os.getenv(\"X\")\n+\n+def next():\n+    \"\"\"A docstring the hunk cuts.",
+          "+/* open\n@@ -9 +9 @@\n+v = os.getenv(\"X\")\n+# */",
+          "+rm -rf build/*\n+v = os.getenv(\"X\")",
+          "+v = os.getenv(\"X\")\n@@ -9 +9 @@\n+x = 1"
+        })
+    void shouldKeepAReadMadeBesideAMultiLineLiteralOrComment(String lines) {
+      var file = new FileDiff("a.py", "modified", 1, 0, 1, "@@ -1 +1,6 @@\n" + lines);
+
+      assertEquals(
+          java.util.Set.of("a.py"), ConfigKeyContextResolver.environmentReaders(List.of(file)));
+    }
+
     /** Lines that open like a comment in one language but are code in another still count. */
     @ParameterizedTest
     @ValueSource(
