@@ -66,11 +66,9 @@ class ScopeBackfillTest extends ReviewSessionTestSupport {
   @BeforeEach
   void setUp() {
     backfill = new ScopeBackfill(store, authClient, installationClient);
-    when(authClient.generateAppJwt()).thenReturn("jwt");
     when(authClient.getAuthHeader(10L)).thenReturn("Bearer acme");
     when(authClient.getAuthHeader(20L)).thenReturn("Bearer other");
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
-        .thenReturn(List.of(installation(10L, "acme"), installation(20L, "other")));
+    when(authClient.listInstallationIds()).thenReturn(List.of(10L, 20L));
     when(installationClient.listInstallationRepositories(
             eq("Bearer acme"), anyString(), eq(100), eq(1)))
         .thenReturn(repositories(new Repo(100L, "acme", "app")));
@@ -187,9 +185,9 @@ class ScopeBackfillTest extends ReviewSessionTestSupport {
   @Test
   void aGitHubErrorWritesNothingAndTheNextStartTriesAgain() throws Exception {
     var session = legacySession("acme/app");
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
+    when(authClient.listInstallationIds())
         .thenThrow(new IllegalStateException("GitHub is down"))
-        .thenReturn(List.of(installation(10L, "acme")));
+        .thenReturn(List.of(10L));
 
     assertDoesNotThrow(() -> backfill.onStart(mock(StartupEvent.class)));
     assertEquals(1, ReviewSession.count("installationId is null"));
@@ -291,33 +289,45 @@ class ScopeBackfillTest extends ReviewSessionTestSupport {
   }
 
   @Test
-  void installationsArePagedUntilAShortPage() throws Exception {
-    legacySession("acme/app");
-    var fullPage = new java.util.ArrayList<GitHubInstallationClient.Installation>();
-    fullPage.add(installation(10L, "acme"));
-    for (var i = 1; i < 100; i++) {
-      fullPage.add(installation(1000L + i, "filler" + i));
-    }
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
-        .thenReturn(fullPage);
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(2)))
-        .thenReturn(null);
-
-    assertEquals(new ScopeBackfill.Result(1, 0, 1), backfill.backfill());
-    verify(installationClient).listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(2));
-  }
-
-  @Test
-  void aListingThatNeverEndsIsAnError() throws Exception {
+  void repositoriesArePagedUntilAShortPage() throws Exception {
     legacySession("acme/app");
     var fullPage =
         java.util.stream.LongStream.rangeClosed(1, 100)
-            .mapToObj(id -> installation(id, "filler" + id))
+            .mapToObj(
+                id ->
+                    new InstallationRepositoriesResponse.Repository(
+                        1000L + id,
+                        "filler" + id,
+                        new InstallationRepositoriesResponse.Repository.Owner("acme")))
             .toList();
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), anyInt()))
-        .thenReturn(fullPage);
+    when(installationClient.listInstallationRepositories(
+            eq("Bearer acme"), anyString(), eq(100), eq(1)))
+        .thenReturn(new InstallationRepositoriesResponse(101, fullPage));
+    when(installationClient.listInstallationRepositories(
+            eq("Bearer acme"), anyString(), eq(100), eq(2)))
+        .thenReturn(new InstallationRepositoriesResponse(101, null));
 
-    assertThrows(IllegalStateException.class, backfill::backfill);
+    assertEquals(new ScopeBackfill.Result(0, 1, 0), backfill.backfill());
+    verify(installationClient)
+        .listInstallationRepositories(eq("Bearer acme"), anyString(), eq(100), eq(2));
+  }
+
+  @Test
+  void aRepositoryListingThatNeverEndsMatchesNothing() throws Exception {
+    legacySession("acme/app");
+    var fullPage =
+        java.util.Collections.nCopies(
+            100,
+            new InstallationRepositoriesResponse.Repository(
+                100L,
+                "app",
+                new InstallationRepositoriesResponse.Repository.Owner("acme"),
+                CREATED));
+    when(installationClient.listInstallationRepositories(
+            eq("Bearer acme"), anyString(), eq(100), anyInt()))
+        .thenReturn(new InstallationRepositoriesResponse(100_000, fullPage));
+
+    assertEquals(new ScopeBackfill.Result(0, 1, 0), backfill.backfill());
     assertEquals(1, ReviewSession.count("installationId is null"));
   }
 
@@ -335,8 +345,7 @@ class ScopeBackfillTest extends ReviewSessionTestSupport {
     tx.commit();
 
     assertEquals(new ScopeBackfill.Result(0, 0, 0), backfill.backfill());
-    verify(installationClient, never())
-        .listInstallations(anyString(), anyString(), anyInt(), anyInt());
+    verify(authClient, never()).listInstallationIds();
   }
 
   private static final String ACCEPT = "application/vnd.github+json";
@@ -345,11 +354,6 @@ class ScopeBackfillTest extends ReviewSessionTestSupport {
     Repo(long id, String owner, String name) {
       this(id, owner, name, CREATED);
     }
-  }
-
-  private static GitHubInstallationClient.Installation installation(long id, String account) {
-    return new GitHubInstallationClient.Installation(
-        id, new GitHubInstallationClient.Installation.Account(account, "Organization"), null);
   }
 
   private static InstallationRepositoriesResponse repositories(Repo... repos) {

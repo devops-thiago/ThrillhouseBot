@@ -409,6 +409,27 @@ public class ReviewPublisher {
   }
 
   /**
+   * Rewrites the CI hold the summary comment still shows after a CI completion released or kept it
+   * (#1462). A summary with nothing marked, or none at all, is left as it is.
+   */
+  void refreshCiState(String auth, String owner, String repo, int prNumber, ReviewResult ci) {
+    latestBotSummaryComment(auth, owner, repo, prNumber)
+        .ifPresent(
+            comment -> {
+              var body = CiSummarySections.refresh(comment.body(), ci);
+              if (!body.equals(comment.body())) {
+                commentClient.updateComment(
+                    auth,
+                    ACCEPT,
+                    owner,
+                    repo,
+                    comment.id(),
+                    new GitHubCommentClient.CreateCommentRequest(body));
+              }
+            });
+  }
+
+  /**
    * Applies or suggests the model's labels (best-effort; never blocks the review). The suggested
    * labels come from the model summary and are reconciled against the repo's existing labels.
    */

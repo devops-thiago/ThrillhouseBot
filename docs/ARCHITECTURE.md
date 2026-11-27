@@ -45,9 +45,10 @@ flowchart LR
     RO --> NOTE --> HOOK
 ```
 
-The `github/` clients handle app authentication, installation tokens and GitHub API calls for
-pull request files, reviews and review comments, issue comments, check runs, labels, reactions,
-thread resolution over GraphQL, the instructions file and the repository settings file.
+The `github/` package handles app authentication and installation tokens (through the Quarkiverse
+GitHub App extension's application client) and GitHub API calls for pull request files, reviews and
+review comments, issue comments, check runs, labels, reactions, thread resolution over GraphQL, the
+instructions file and the repository settings file.
 
 ## Request flow
 
@@ -528,7 +529,9 @@ critical finding with high confidence. APPROVE drops to COMMENT when an earlier 
 is pending, failing, missing or unreadable; `warn` approves and notes the CI state; `off` ignores
 CI. When pending CI was the only thing between the round and APPROVE, the verdict is held in
 `CiHoldRegistry` and the check run ends `neutral`. The `check_suite` or `status` event that reports
-the head green then posts the approval (`CiHoldRevisit`) without another model call.
+the head green then posts the approval (`CiHoldRevisit`) without another model call. The same
+events rewrite the CI lines of the summary comment: the checks still holding it, or the approval
+once it is posted.
 
 A follow-up round with no new findings but earlier findings still open says how many remain
 unresolved instead of calling the PR clean. Findings are posted as individual inline comments, with

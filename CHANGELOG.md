@@ -50,6 +50,14 @@ cannot resolve its review threads.
   under the description what the review established for it: the path-scoped rules covering the
   file, the failing check the finding cites, the second pass's verdict, and the review learning
   that demoted it. Each line is a name, path, id or fixed phrase, and is left out when empty.
+- **GitHub App authentication goes through the Quarkiverse GitHub App extension** (#1314): the
+  extension signs the App JWT, and its application client mints installation tokens and lists the
+  App's installations, so the bot's own JWT signing and the `nimbus-jose-jwt` dependency are gone.
+  Minting a token now takes three GitHub requests instead of one (the App, the installation, then
+  the token), and the installation listing adds one for the App. These calls follow
+  `HTTP_CONNECT_TIMEOUT` and `HTTP_REQUEST_TIMEOUT` (10s each by default) rather than the REST
+  client's settings. They go to `GITHUB_API_URL`. hub4j's response logger is capped at `INFO`: below
+  that it writes out an answer it cannot parse, which for a token request holds the token.
 
 ### Fixed
 
@@ -72,6 +80,15 @@ cannot resolve its review threads.
   dashboard's session history pointed at `github.com` whatever was configured, and a linked issue
   written as a full URL was only recognised there. The session payloads now carry
   `pullRequestUrl`, and only issue URLs on the configured web address are read.
+- **A one-line private key no longer stops the application at start** (#1314): the extension, which
+  reads `GITHUB_PRIVATE_KEY` too, rejected the form `.env.example` asks for (one line with literal
+  `\n` escapes) and a key without its PEM header and footer. Every key the start-up check accepts
+  is now handed to the extension in a form it can read, and a padded `GITHUB_APP_ID` is stripped
+  for it as the bot's own signer did.
+- **The summary comment follows a verdict held on CI** (#1462): when CI turns green and the held
+  approval is posted, the summary no longer says it cannot be approved or lists the checks as
+  pending. While the hold stays, its table shows the checks' current state. The Agent next steps
+  section, when on, follows it too. A summary posted before this change is not rewritten.
 
 ### Security
 

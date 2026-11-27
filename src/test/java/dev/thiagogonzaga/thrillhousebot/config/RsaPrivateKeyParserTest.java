@@ -18,13 +18,16 @@ package dev.thiagogonzaga.thrillhousebot.config;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.Optional;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 
 class RsaPrivateKeyParserTest {
 
   // Throwaway PKCS#1 RSA test key with \n escape sequences, as delivered through an env var.
-  private static final String PRIVATE_KEY_WITH_ESCAPES =
+  static final String PRIVATE_KEY_WITH_ESCAPES =
       "-----BEGIN RSA PRIVATE KEY-----\\n"
           + "MIIEowIBAAKCAQEAqEcn0Wmzxjw+MTxPpYpetynJEC+u5dV87wWx2m6Xs8TJB3dn\\n"
           + "GRemwG/x1/DZMLk5WzMOIxYBBYUQ3HQlB+tobP3EyD9TwQDsR9/CMhvMbZ4IQlBD\\n"
@@ -93,5 +96,24 @@ class RsaPrivateKeyParserTest {
     assertThrows(
         IllegalArgumentException.class,
         () -> RsaPrivateKeyParser.parse("aGVsbG8gd29ybGQgdGhpcyBpcyBub3QgYSBrZXk="));
+  }
+
+  @Test
+  void theCanonicalFormIsAnArmoredPemOfTheSameKey() {
+    var canonical = RsaPrivateKeyParser.canonicalPem(PRIVATE_KEY_WITH_ESCAPES).orElseThrow();
+
+    var lines = canonical.split("\n");
+    assertEquals("-----BEGIN RSA PRIVATE KEY-----", lines[0]);
+    assertEquals("-----END RSA PRIVATE KEY-----", lines[lines.length - 1]);
+    assertTrue(Stream.of(lines).allMatch(line -> line.length() <= 64));
+    assertEquals(
+        RsaPrivateKeyParser.parse(PRIVATE_KEY_WITH_ESCAPES).getModulus(),
+        RsaPrivateKeyParser.parse(canonical).getModulus());
+  }
+
+  @Test
+  void aRejectedKeyHasNoCanonicalForm() {
+    assertEquals(Optional.empty(), RsaPrivateKeyParser.canonicalPem(null));
+    assertEquals(Optional.empty(), RsaPrivateKeyParser.canonicalPem("not a key"));
   }
 }
