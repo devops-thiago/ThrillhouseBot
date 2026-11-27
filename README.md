@@ -368,6 +368,13 @@ already there. It makes no model call. File-level threads do not get the block.
 The description is repeated up to 1,000 characters, and a comment the block
 would push past GitHub's size limit is posted without it.
 
+`REVIEW_SHOW_EVIDENCE=true` adds a **Basis** block under each finding's
+description on its inline or file-level comment: the path-scoped rules covering
+the file, the failing check the finding cites, what the second pass did with it,
+and the review learning that demoted it. A line is left out when the review has
+nothing for it. It says what the review had, not what the model was thinking, and
+makes no model call.
+
 `REVIEW_BATCHED_INLINE_REVIEW_ENABLED=true` opens one pending pull request review
 per round, attaches each inline finding to it and submits it once, instead of
 posting each inline comment on its own. If GitHub does not take the submit, the
@@ -1632,9 +1639,10 @@ token figures come from the database, so they still work.
 ## Restricted-network deployment
 
 To keep code inside your network, run the model yourself and allow only the
-connections the bot needs. The bot is a GitHub App for GitHub.com, so it can
-never be fully offline: it must reach GitHub. GitHub Enterprise Server is not
-supported.
+connections the bot needs. The bot is a GitHub App, so it can never be fully
+offline: it must reach your GitHub. The table below names the `github.com`
+addresses. For GitHub Enterprise, including the settings for Enterprise Server,
+see [GitHub Enterprise](https://github.com/devops-thiago/ThrillhouseBot/blob/main/docs/GITHUB_ENTERPRISE.md).
 
 ### Outbound connections
 
