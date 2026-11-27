@@ -122,7 +122,7 @@ public class GitHubAddressInterceptor implements ConfigSourceInterceptor {
     if (host.equals(DOTCOM_HOST)) {
       return DOTCOM_API_URL;
     }
-    return host.endsWith(GHE_COM_SUFFIX) ? apiSubdomain(web) : webUrl + "/api/v3";
+    return apiSubdomain(web, host).orElse(webUrl + "/api/v3");
   }
 
   private static String graphqlUrl(String webUrl) {
@@ -131,33 +131,34 @@ public class GitHubAddressInterceptor implements ConfigSourceInterceptor {
     if (host.equals(DOTCOM_HOST)) {
       return DOTCOM_API_URL + "/graphql";
     }
-    return host.endsWith(GHE_COM_SUFFIX) ? apiSubdomain(web) + "/graphql" : webUrl + "/api/graphql";
+    return apiSubdomain(web, host).map(api -> api + "/graphql").orElse(webUrl + "/api/graphql");
   }
 
-  private static String apiSubdomain(URI web) {
-    var port = web.getPort() < 0 ? "" : ":" + web.getPort();
-    return web.getScheme() + "://api." + web.getHost() + port;
+  /** The {@code api.} address of a GitHub Enterprise Cloud tenant, empty for any other host. */
+  private static Optional<String> apiSubdomain(Optional<URI> web, String host) {
+    return web.filter(uri -> host.endsWith(GHE_COM_SUFFIX))
+        .map(
+            uri -> {
+              var port = uri.getPort() < 0 ? "" : ":" + uri.getPort();
+              return uri.getScheme() + "://api." + uri.getHost() + port;
+            });
   }
 
   /** The host to compare: lower case, without the dot a fully qualified name may end with. */
-  private static String host(URI web) {
-    if (web == null || web.getHost() == null) {
-      return "";
-    }
-    var host = web.getHost().toLowerCase(Locale.ROOT);
+  private static String host(Optional<URI> web) {
+    var host = web.map(URI::getHost).map(name -> name.toLowerCase(Locale.ROOT)).orElse("");
     return host.endsWith(".") ? host.substring(0, host.length() - 1) : host;
   }
 
   /**
-   * {@code null} for text that is not an absolute URI. The GitHub Enterprise Server rule then
-   * applies, and the startup validator is left to refuse the address.
+   * Empty for text that is not an absolute URI. The GitHub Enterprise Server rule then applies, and
+   * the startup validator is left to refuse the address.
    */
-  private static URI parse(String url) {
+  private static Optional<URI> parse(String url) {
     try {
-      var uri = new URI(url);
-      return uri.isAbsolute() ? uri : null;
+      return Optional.of(new URI(url)).filter(URI::isAbsolute);
     } catch (URISyntaxException _) {
-      return null;
+      return Optional.empty();
     }
   }
 }
