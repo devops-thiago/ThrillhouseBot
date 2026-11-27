@@ -381,8 +381,8 @@ public final class DiffLineResolver {
 
   /**
    * Whether {@code quote} sits in {@code file}'s diff ({@link #locateQuote} for {@code citedLine})
-   * on lines the pull request left as they were: no line from its first to its last is an added one
-   * (#1397). {@code false} when the quote is not located: nothing is known about it then.
+   * on lines the pull request left as they were: no line from its first to its last is an added
+   * one. {@code false} when the quote is not located: nothing is known about it then.
    */
   public boolean quotesOnlyUnchangedLines(String file, String quote, int citedLine) {
     var at = locateQuote(file, quote, citedLine);

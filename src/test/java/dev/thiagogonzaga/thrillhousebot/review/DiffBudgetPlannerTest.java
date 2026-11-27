@@ -254,7 +254,7 @@ class DiffBudgetPlannerTest {
 
     var plan = planner.plan(files, budgetForSixOf(files), 100);
 
-    // #1480: the 200 highest-priority pairs are tried; the 201st is left where packing put it.
+    // The 200 highest-priority pairs are tried; the 201st is left where packing put it.
     assertPairsShareABatch(plan, 200);
     assertNotEquals(
         batchOf(plan, "src/main/java/C201.java"),

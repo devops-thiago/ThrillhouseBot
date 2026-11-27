@@ -177,7 +177,7 @@ class GapLeftByFixTest {
 
   @Test
   void aQuoteOfCodeThePullRequestLeftAsItWasIsARestatement() throws Exception {
-    // #1397: the fix leaves its gap in the code it wrote, not in the unchanged line beside it.
+    // The fix leaves its gap in the code it wrote, not in the unchanged line beside it.
     var neighbour = finding(269, gap.title(), "    var referred = candidates(changed);");
     var response =
         new ReviewResponse(List.of(neighbour), List.of(status("resolved", priorKey)), null);
