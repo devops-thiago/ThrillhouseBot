@@ -554,7 +554,9 @@ unresolved instead of calling the PR clean, and lists them: one row per finding 
 delta section on, a review that raises findings lists the open ones too. Findings are posted as individual inline comments, with
 a committable suggestion where the range resolves. A comment GitHub refuses is retried without the
 suggestion, then as a file-level comment. Low-confidence medium and low findings go to the
-summary's "Things to double-check" list instead. At most `thrillhousebot.review.max-review-comments` (default 50)
+summary's "Things to double-check" list instead. The review body lists them too, and every other
+finding without a thread, with the confidence note and with indented code fenced inside its bullet;
+it names the summary only when this round's summary comment was written with those items. At most `thrillhousebot.review.max-review-comments` (default 50)
 findings are posted inline. With `REVIEW_BATCHED_INLINE_REVIEW_ENABLED` (off by default), the round
 opens one pending review, attaches every inline comment to it (GraphQL `addPullRequestReviewThread`)
 and submits it once with the verdict. When the submit is refused, or fails without an answer and

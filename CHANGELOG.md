@@ -158,6 +158,12 @@ cannot resolve its review threads.
   an option given without a value was dropped without a word, so `--host` given last wrote the
   `<your-host>` placeholder. The script now stops with a message and writes no `.env`. `--host=...`
   is accepted too.
+- **The review body's list of findings without a thread renders like the summary** (#1438): code
+  quoted in a description, indented by two spaces or more, shows as a code block inside its bullet,
+  each bullet carries the finding's confidence note, and a bare carriage return can no longer end a
+  bullet. The list of lower-confidence items sends the reader to **Things to double-check** only
+  when this round's summary comment was written with them, and otherwise says the review itself
+  lists them.
 
 ### Security
 

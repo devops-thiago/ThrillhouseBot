@@ -169,7 +169,9 @@ public class ReviewPublisher {
       boolean forceSummary,
       String prText) {
     return publishSummary(
-        new SummaryRequest(auth, owner, repo, prNumber, result, forceSummary, prText, null, null));
+            new SummaryRequest(
+                auth, owner, repo, prNumber, result, forceSummary, prText, null, null))
+        .standsIn();
   }
 
   /**
@@ -177,7 +179,7 @@ public class ReviewPublisher {
    * is the round's diff, from which the manifest decides which findings {@link #postReview} will
    * open a thread for (#1433); {@code null} falls back to {@link Finding#postsInline}.
    */
-  boolean publishSummary(
+  SummaryOutcome publishSummary(
       String auth,
       ReviewOrchestrator.ReviewRequest req,
       ReviewResult result,
@@ -210,8 +212,24 @@ public class ReviewPublisher {
       DiffLineResolver lineResolver,
       String commitSha) {}
 
+  /**
+   * What a round's summary write left on the pull request.
+   *
+   * @param standsIn whether the summary comment stands in for the round's outcome, the value the
+   *     {@code boolean} overloads of {@code publishSummary} return
+   * @param listsDoubleCheck whether the comment now carries this round's render with every finding
+   *     of the round that is routed to "Things to double-check" listed there. An edit in place sets
+   *     it too, although it does not stand in for the outcome. It is unset when an earlier finding
+   *     raised again at a lower severity is listed at its earlier one instead
+   */
+  record SummaryOutcome(boolean standsIn, boolean listsDoubleCheck) {
+
+    /** No summary comment was written for the round. */
+    static final SummaryOutcome NONE = new SummaryOutcome(false, false);
+  }
+
   /** See {@link #publishSummary(String, String, String, int, ReviewResult, boolean, String)}. */
-  boolean publishSummary(SummaryRequest summary) {
+  SummaryOutcome publishSummary(SummaryRequest summary) {
     var auth = summary.auth();
     var owner = summary.owner();
     var repo = summary.repo();
@@ -221,7 +239,7 @@ public class ReviewPublisher {
     var commitSha = summary.commitSha();
     summaryOfRound.remove(summaryKey(owner, repo, prNumber));
     if (result.summaryMarkdown().isBlank()) {
-      return false;
+      return SummaryOutcome.NONE;
     }
     var scrubbed = PromptLabelScrubber.scrub(result);
     var state = PrSummaryGenerator.currentState(scrubbed);
@@ -247,12 +265,14 @@ public class ReviewPublisher {
                 + manifestLine
                 + "\n"
                 + prose);
+    var listsDoubleCheck =
+        state.result().doubleCheckFindings().containsAll(scrubbed.doubleCheckFindings());
     if (postingNew) {
       createSummaryComment(auth, owner, repo, prNumber, request);
-      return true;
+      return new SummaryOutcome(true, listsDoubleCheck);
     }
     upsertSummaryComment(auth, owner, repo, prNumber, request, existing);
-    return result.hasSupersededPrevious();
+    return new SummaryOutcome(result.hasSupersededPrevious(), listsDoubleCheck);
   }
 
   private String summaryProse(
@@ -584,6 +604,9 @@ public class ReviewPublisher {
    * @param priorReviews the PR's reviews as this run's context load fetched them, oldest first; the
    *     summary-only skip reads the bot's latest one to tell whether this head is already approved
    *     (#1144). Empty when the fetch failed, which reads as "not approved", so the review posts.
+   * @param summaryListsDoubleCheck {@link SummaryOutcome#listsDoubleCheck()} of this run's summary
+   *     write; {@code false} when it failed or was skipped, so the review body does not send the
+   *     reader to a summary that lacks the items
    * @param inlineComments the PR's inline comments as this run's context load fetched them, which
    *     the still-open list links its rows to (#1436)
    */
@@ -600,6 +623,7 @@ public class ReviewPublisher {
       String followUpDeltaSection,
       List<GitHubReviewClient.ReviewResponse> priorReviews,
       Function<Finding, String> basis,
+      boolean summaryListsDoubleCheck,
       List<GitHubReviewClient.PullRequestComment> inlineComments) {
     PostReviewRequest {
       followUpDeltaSection = java.util.Objects.requireNonNullElse(followUpDeltaSection, "");
@@ -633,6 +657,37 @@ public class ReviewPublisher {
           followUpDeltaSection,
           priorReviews,
           basis,
+          false);
+    }
+
+    PostReviewRequest(
+        String auth,
+        String owner,
+        String repo,
+        int prNumber,
+        String commitSha,
+        ReviewResult result,
+        DiffLineResolver lineResolver,
+        boolean summaryPosted,
+        List<ReviewResponse.Finding> previousFindings,
+        String followUpDeltaSection,
+        List<GitHubReviewClient.ReviewResponse> priorReviews,
+        Function<Finding, String> basis,
+        boolean summaryListsDoubleCheck) {
+      this(
+          auth,
+          owner,
+          repo,
+          prNumber,
+          commitSha,
+          result,
+          lineResolver,
+          summaryPosted,
+          previousFindings,
+          followUpDeltaSection,
+          priorReviews,
+          basis,
+          summaryListsDoubleCheck,
           List.of());
     }
 
@@ -841,7 +896,7 @@ public class ReviewPublisher {
     if (result.reviewState() == ReviewState.REQUEST_CHANGES) {
       bodyParts.add("ThrillhouseBot requested changes — see inline comments on the diff.");
     }
-    bodyParts.addAll(skippedFindingsBodyParts(inline));
+    bodyParts.addAll(skippedFindingsBodyParts(inline, post));
     appendPreviousOutcome(bodyParts, result, post);
     bodyParts.addAll(reopenedDeclineNotes(result));
     appendReviewNotice(bodyParts, result, post);
@@ -886,7 +941,7 @@ public class ReviewPublisher {
     if (!unpublished.isEmpty()) {
       parts.add(unpublishedFindingsBody(unpublished));
     }
-    parts.addAll(skippedFindingsBodyParts(inline));
+    parts.addAll(skippedFindingsBodyParts(inline, post));
     appendPreviousOutcome(parts, result, post);
     parts.addAll(reopenedDeclineNotes(result));
     appendReviewNotice(parts, result, post);
@@ -1005,7 +1060,8 @@ public class ReviewPublisher {
    * Review-body sections for findings not posted inline — un-anchored, cap-skipped, and/or
    * confidence-routed to the summary's "Things to double-check" section.
    */
-  private static List<String> skippedFindingsBodyParts(InlineCommentResult inline) {
+  private static List<String> skippedFindingsBodyParts(
+      InlineCommentResult inline, PostReviewRequest post) {
     var parts = new ArrayList<String>();
     if (!inline.unanchored().isEmpty()) {
       parts.add(unanchoredFindingsBody(inline));
@@ -1014,7 +1070,9 @@ public class ReviewPublisher {
       parts.add(capSkippedFindingsBody(inline.capSkipped()));
     }
     if (!inline.confidenceSkipped().isEmpty()) {
-      parts.add(confidenceSkippedFindingsBody(inline.confidenceSkipped()));
+      parts.add(
+          confidenceSkippedFindingsBody(
+              inline.confidenceSkipped(), post.summaryListsDoubleCheck()));
     }
     return parts;
   }
@@ -1134,20 +1192,29 @@ public class ReviewPublisher {
     return sb.toString();
   }
 
-  private static String confidenceSkippedFindingsBody(List<Finding> findings) {
+  /**
+   * The findings routed away from inline threads. The header sends the reader to the PR summary
+   * only when this round's summary comment lists them; otherwise this list is their record.
+   */
+  private static String confidenceSkippedFindingsBody(
+      List<Finding> findings, boolean summaryListsThem) {
     var sb = new StringBuilder();
     sb.append("ThrillhouseBot noted ")
         .append(findings.size())
+        .append(" lower-confidence item(s)")
         .append(
-            """
-             lower-confidence item(s) under **Things to double-check** in the PR summary \
-            (not posted as inline threads):
-
-            """);
+            summaryListsThem
+                ? " under **Things to double-check** in the PR summary (not posted as inline threads)"
+                : ", listed here and not posted as inline threads")
+        .append(":\n\n");
     appendFindingList(sb, findings);
     return sb.toString();
   }
 
+  /**
+   * One bullet per finding, with the title and path neutralised as the summary does them, the
+   * confidence disclaimer, and the description nested under the bullet.
+   */
   private static void appendFindingList(StringBuilder sb, List<Finding> findings) {
     for (Finding f : findings) {
       sb.append("- **")
@@ -1159,14 +1226,25 @@ public class ReviewPublisher {
           .append(":")
           .append(f.line())
           .append("`)");
+      var disclaimer = SuggestionFormatter.confidenceDisclaimer(f.confidence());
+      if (!disclaimer.isEmpty()) {
+        sb.append(' ').append(disclaimer);
+      }
       if (f.description() != null && !f.description().isBlank()) {
-        sb.append("\n  ")
-            .append(
-                SecurityScan.postedDescription(f.title(), f.description().strip())
-                    .replace("\n", "\n  "));
+        sb.append("\n  ").append(listItemDescription(f));
       }
       sb.append("\n");
     }
+  }
+
+  /**
+   * A finding's description as the content of its bullet. Every kind of line break is made a plain
+   * one first, so that each line gets the item's indentation and none can end the item.
+   */
+  private static String listItemDescription(Finding f) {
+    var text = f.description().replaceAll("\\R", "\n");
+    var fenced = MarkdownSafe.fenceIndentedCode(text).strip();
+    return SecurityScan.postedDescription(f.title(), fenced).replace("\n", "\n  ");
   }
 
   /**

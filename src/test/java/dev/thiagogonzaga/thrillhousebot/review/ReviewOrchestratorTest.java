@@ -4162,6 +4162,99 @@ class ReviewOrchestratorTest {
       }
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void shouldNameTheSummaryInTheReviewBodyOnlyWhenItWasWritten(boolean summaryFails) {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = mock(ReviewSession.class);
+        session.id = 1L;
+        when(session.getRepository()).thenReturn("owner/repo");
+        when(session.getPrNumber()).thenReturn(42);
+        when(session.getPrTitle()).thenReturn("Test PR");
+        when(session.getCommitSha()).thenReturn("abcdefgh");
+        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+        mockedStatic
+            .when(
+                () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
+        when(checkRunClient.createCheckRun(
+                anyString(), anyString(), anyString(), anyString(), any()))
+            .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
+        doNothing()
+            .when(checkRunClient)
+            .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
+        when(prClient.getPullRequestFiles(
+                anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of(fileDiffWithLine("src/Main.java", 10)));
+        when(checkRunClient.getRequiredStatusChecks(
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new GitHubCheckRunClient.RequiredStatusChecks(List.of(), List.of()));
+        when(prClient.compareCommits(
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+        when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(
+                List.of(
+                    new GitHubReviewClient.ReviewResponse(
+                        1L,
+                        "",
+                        "APPROVED",
+                        "abc12345",
+                        new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]"))));
+        when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
+            .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
+        when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any(), any()))
+            .thenReturn(PrSummaryGenerator.SUMMARY_HEADING);
+        when(aiReviewService.review(any(ReviewSession.class), any()))
+            .thenReturn(
+                new ReviewResponse(
+                    List.of(
+                        new ReviewResponse.Finding(
+                            "medium",
+                            "low",
+                            "src/Main.java",
+                            10,
+                            "Possible NPE",
+                            "verify the caller",
+                            null,
+                            null)),
+                    List.of(),
+                    null));
+        if (summaryFails) {
+          doThrow(new RuntimeException("summary post failed"))
+              .when(commentClient)
+              .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+        }
+
+        orchestrator.review(
+            new ReviewOrchestrator.ReviewRequest(
+                "owner",
+                "repo",
+                42,
+                "abcdefgh",
+                "(manual summary)",
+                "",
+                "base1234567",
+                "main",
+                123L,
+                TestScopes.REPOSITORY_ID,
+                true,
+                "main",
+                true));
+
+        var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+        verify(reviewClient)
+            .createReview(
+                anyString(), anyString(), eq("owner"), eq("repo"), eq(42), captor.capture());
+        var posted = captor.getValue().body();
+        assertTrue(posted.contains("Possible NPE"), posted);
+        assertEquals(!summaryFails, posted.contains("in the PR summary"), posted);
+        assertEquals(summaryFails, posted.contains("listed here"), posted);
+      }
+    }
+
     @Test
     void shouldEditTheSummaryInPlaceWhenABotSummaryCommentAlreadyExistsButNoReviewDoes() {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
@@ -6189,7 +6282,7 @@ class ReviewOrchestratorTest {
               argThat(
                   req ->
                       "COMMENT".equals(req.event())
-                          && req.body().contains("Things to double-check")
+                          && req.body().contains("listed here and not posted as inline threads")
                           && req.body().contains("Possible NPE")
                           && req.body().contains("verify the caller")
                           && req.body().contains("lower-confidence")));
@@ -6253,7 +6346,7 @@ class ReviewOrchestratorTest {
               anyInt(),
               argThat(
                   req ->
-                      req.body().contains("Things to double-check")
+                      req.body().contains("lower-confidence item(s), listed here")
                           && req.body().contains("Maybe nit")
                           && !req.body().contains("GitHub accepted no review thread")));
     }
