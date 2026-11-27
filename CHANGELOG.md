@@ -207,6 +207,17 @@ cannot resolve its review threads.
   to check them against and approved if it found nothing new. It now ends as `COMMENT`, and the
   summary, the review body and the check run say that the earlier reviews could not be read. A
   first review, and a pull request with at least one readable earlier review, are unchanged.
+- **A re-raised finding that quotes unchanged code is a repeat, not a gap (#1397)**: a finding
+  raised again after its fix was kept as "a gap the fix left" even when its quote sat only on lines
+  the pull request did not change. It is now dropped as a repeat of the answered finding.
+- **An added line that starts with `++` is read as added (#1396)**: a line such as `++i;` was
+  mistaken for the diff's file header when the bot collected changed names and configuration keys,
+  so what it declared was missed.
+- **A suggestion's new code loses a copied line number (#1364)**: when the quoted old code kept its
+  diff markers and a new line dropped them, the copied line number stayed in the suggestion.
+- **An environment read named in a docstring is not a read (#1473)**: a read named inside a
+  multi-line docstring or block comment counted as one when the bot chose which changed files to
+  fetch for configuration-key context.
 
 ### Security
 
