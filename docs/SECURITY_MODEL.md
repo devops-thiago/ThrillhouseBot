@@ -169,4 +169,8 @@ lowest threshold, and the SonarCloud quality gate, which requires an A security
 rating on new code.
 
 Release images and binaries are signed with keyless cosign and carry build
-provenance attestations; the README explains how to verify them.
+provenance attestations; the README explains how to verify them. The release
+workflow publishes only a signed tag on `main`, and only images whose provenance
+shows CI built them on `main` from that commit; it scans, tags and signs them by
+digest. [RELEASING.md](RELEASING.md) lists these checks and the repository
+settings they depend on.

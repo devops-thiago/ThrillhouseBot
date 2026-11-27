@@ -1,8 +1,12 @@
 version: 2
 updates:
   # GitHub Actions
+  # "/" covers .github/workflows only. Each composite action under .github/actions/ is
+  # its own directory and is listed here, or its pinned actions are never updated.
   - package-ecosystem: "github-actions"
-    directory: "/"
+    directories:
+      - "/"
+      - "/.github/actions/trivy-scan"
     schedule:
       interval: "weekly"
     commit-message:

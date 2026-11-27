@@ -72,7 +72,9 @@ touches `pom.xml`, `src/main/**`, the native integration tests or
 binary. To build a
 throwaway test image for a branch or pull request without touching `latest`, run
 the Docker test image workflow (`.github/workflows/docker-test-image.yml`) from
-the Actions tab.
+the Actions tab. It builds same-repository pull requests only, compiles them in
+jobs that cannot write to the registry, and saves no build cache from a pull
+request.
 
 CI enforces this bar:
 
