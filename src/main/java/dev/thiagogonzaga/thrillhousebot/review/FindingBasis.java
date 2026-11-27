@@ -48,7 +48,7 @@ final class FindingBasis implements FindingVerificationService.Outcomes {
   }
 
   @Override
-  public void record(ReviewResponse.Finding finding, String outcome) {
+  public void recordOutcome(ReviewResponse.Finding finding, String outcome) {
     var key = FindingKey.of(finding);
     if (recording && key != null) {
       verdicts.put(key, outcome);

@@ -152,25 +152,8 @@ public class ReviewPublisher {
       ReviewResult result,
       boolean forceSummary,
       String prText) {
-    return publishSummary(auth, owner, repo, prNumber, result, forceSummary, prText, null);
-  }
-
-  /**
-   * {@link #publishSummary(String, String, String, int, ReviewResult, boolean, String)}, with the
-   * reviewed head for the opt-in Agent next steps subsection (#1442).
-   */
-  boolean publishSummary(
-      String auth,
-      String owner,
-      String repo,
-      int prNumber,
-      ReviewResult result,
-      boolean forceSummary,
-      String prText,
-      String commitSha) {
     return publishSummary(
-        new SummaryRequest(
-            auth, owner, repo, prNumber, result, forceSummary, prText, null, commitSha));
+        new SummaryRequest(auth, owner, repo, prNumber, result, forceSummary, prText, null, null));
   }
 
   /**
@@ -196,6 +179,10 @@ public class ReviewPublisher {
             req.commitSha()));
   }
 
+  /**
+   * One summary to publish. {@code commitSha} is the reviewed head for the opt-in Agent next steps
+   * subsection (#1442).
+   */
   record SummaryRequest(
       String auth,
       String owner,

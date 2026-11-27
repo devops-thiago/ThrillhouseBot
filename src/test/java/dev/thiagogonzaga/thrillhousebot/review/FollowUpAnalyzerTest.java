@@ -2285,7 +2285,7 @@ class FollowUpAnalyzerTest {
 
   @Test
   void buildPreviousFindingsContextShouldReturnEmptyForNull() {
-    assertEquals("", analyzer.buildPreviousFindingsContext(null, BOT_ID, KnownWriters.ALL));
+    assertEquals("", analyzer.buildPreviousFindingsContext(null, BOT_ID));
   }
 
   @Test
@@ -2295,12 +2295,12 @@ class FollowUpAnalyzerTest {
             new GitHubReviewClient.ReviewResponse(
                 1L, null, "COMMENTED", "abc", new GitHubReviewClient.ReviewResponse.User(BOT)));
 
-    assertEquals("", analyzer.buildPreviousFindingsContext(reviews, BOT_ID, KnownWriters.ALL));
+    assertEquals("", analyzer.buildPreviousFindingsContext(reviews, BOT_ID));
   }
 
   @Test
   void buildPreviousFindingsContextShouldReturnEmptyForEmptyList() {
-    assertEquals("", analyzer.buildPreviousFindingsContext(List.of(), BOT_ID, KnownWriters.ALL));
+    assertEquals("", analyzer.buildPreviousFindingsContext(List.of(), BOT_ID));
   }
 
   @Test
@@ -2314,7 +2314,7 @@ class FollowUpAnalyzerTest {
                 "abc",
                 new GitHubReviewClient.ReviewResponse.User("other-user")));
 
-    assertEquals("", analyzer.buildPreviousFindingsContext(reviews, BOT_ID, KnownWriters.ALL));
+    assertEquals("", analyzer.buildPreviousFindingsContext(reviews, BOT_ID));
   }
 
   @Test
@@ -2334,7 +2334,7 @@ class FollowUpAnalyzerTest {
                 "def",
                 new GitHubReviewClient.ReviewResponse.User(BOT)));
 
-    var context = analyzer.buildPreviousFindingsContext(reviews, BOT_ID, KnownWriters.ALL);
+    var context = analyzer.buildPreviousFindingsContext(reviews, BOT_ID);
 
     assertTrue(context.contains("second review body"));
     assertFalse(context.contains("first review"));
@@ -2486,33 +2486,31 @@ class FollowUpAnalyzerTest {
     assertEquals(
         "",
         analyzer.buildPreviousFindingsContext(
-            botReviews(PrSummaryGenerator.ZERO_ISSUES_MESSAGE), BOT_ID, KnownWriters.ALL));
+            botReviews(PrSummaryGenerator.ZERO_ISSUES_MESSAGE), BOT_ID));
     assertEquals(
         "",
         analyzer.buildPreviousFindingsContext(
             botReviews(ReviewResult.NO_ISSUES_CI_PENDING_LEAD_IN + "\n- Check **build** is failed"),
-            BOT_ID,
-            KnownWriters.ALL));
+            BOT_ID));
     assertEquals(
         "",
         analyzer.buildPreviousFindingsContext(
-            botReviews(ReviewResult.NO_ISSUES_CI_UNREADABLE_LEAD_IN), BOT_ID, KnownWriters.ALL));
+            botReviews(ReviewResult.NO_ISSUES_CI_UNREADABLE_LEAD_IN), BOT_ID));
     assertEquals(
         "",
         analyzer.buildPreviousFindingsContext(
-            botReviews(ReviewResult.truncationNotice(3)), BOT_ID, KnownWriters.ALL));
-    assertEquals(
-        "", analyzer.buildPreviousFindingsContext(botReviews("   \n\n"), BOT_ID, KnownWriters.ALL));
+            botReviews(ReviewResult.truncationNotice(3)), BOT_ID));
+    assertEquals("", analyzer.buildPreviousFindingsContext(botReviews("   \n\n"), BOT_ID));
     assertEquals(
         "1. [HIGH] src/A.java:10 — Unsafe regex",
         analyzer.buildPreviousFindingsContext(
-            botReviews("1. [HIGH] src/A.java:10 — Unsafe regex"), BOT_ID, KnownWriters.ALL),
+            botReviews("1. [HIGH] src/A.java:10 — Unsafe regex"), BOT_ID),
         "a legacy body carrying real findings is still the only context such a session has");
 
     var humanEcho = "No new issues in this revision, but the null check on line 12 is still wrong.";
     assertEquals(
         humanEcho,
-        analyzer.buildPreviousFindingsContext(botReviews(humanEcho), BOT_ID, KnownWriters.ALL),
+        analyzer.buildPreviousFindingsContext(botReviews(humanEcho), BOT_ID),
         "a body that only opens like the generated sentence carries a real finding and is kept");
   }
 
@@ -4927,8 +4925,7 @@ class FollowUpAnalyzerTest {
                     "CHANGES_REQUESTED",
                     "sha",
                     new GitHubReviewClient.ReviewResponse.User(BOT))),
-            BOT_ID,
-            KnownWriters.ALL);
+            BOT_ID);
 
     assertFalse(
         context.contains("Missing null check"),
@@ -7233,8 +7230,7 @@ class FollowUpAnalyzerTest {
                     "CHANGES_REQUESTED",
                     "sha",
                     new GitHubReviewClient.ReviewResponse.User(BOT))),
-            BOT_ID,
-            KnownWriters.ALL);
+            BOT_ID);
     assertFalse(context.contains("Closed bug"), context);
     assertFalse(context.contains("findings resolved"), context);
     assertTrue(context.contains("Actual open bug"), context);

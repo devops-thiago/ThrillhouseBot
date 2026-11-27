@@ -226,14 +226,9 @@ final class AgentNextSteps {
     sb.append("**Suggested commands:**\n");
     var mention = botIdentity.primaryMention();
     sb.append("- After addressing findings: `/review` or @").append(mention).append(" review\n");
-    int hints = 0;
-    for (Finding f : findings) {
-      if (f.postsInline()) {
-        continue;
-      }
-      if (hints >= MAX_LISTED_FINDINGS) {
-        break;
-      }
+    var listed =
+        findings.stream().filter(f -> !f.postsInline()).limit(MAX_LISTED_FINDINGS).toList();
+    for (Finding f : listed) {
       sb.append("- @")
           .append(mention)
           .append(" resolved `")
@@ -243,9 +238,8 @@ final class AgentNextSteps {
           .append("` — ")
           .append(MarkdownSafe.inline(f.title()))
           .append('\n');
-      hints++;
     }
-    if (hints == 0) {
+    if (listed.isEmpty()) {
       sb.append("- To clear a finding: `@")
           .append(mention)
           .append(" resolved <path>:<line> — <title>` on this pull request.\n");

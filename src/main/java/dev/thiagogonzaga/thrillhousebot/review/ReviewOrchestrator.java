@@ -383,17 +383,8 @@ public class ReviewOrchestrator {
       var inlineComments = ctx.inlineComments();
       var lineResolver = ctx.lineResolver();
       var earlyReading = ciFuture == null ? null : ciFuture.join();
-      var ciFailures =
-          earlyReading == null
-              ? ""
-              : ciFailureContext.resolve(auth, req.owner(), req.repo(), earlyReading);
-      // #34: the annotations completed checks attached to the changed files; "" when the feature
-      // is off or there are none.
-      var staticFindings =
-          earlyReading == null
-              ? ""
-              : staticAnalysis.resolve(
-                  auth, req.owner(), req.repo(), earlyReading, ctx.reviewableFiles());
+      var ciFailures = ciFailuresIn(auth, req, earlyReading);
+      var staticFindings = staticFindingsIn(auth, req, earlyReading, ctx);
       // #58: the linked issues' text, read-only and best-effort; "" when the feature is off.
       var linkedIssues =
           ticketContext.resolve(
@@ -617,6 +608,29 @@ public class ReviewOrchestrator {
       }
     }
     return resultSurfaced;
+  }
+
+  /** The failed checks of the early CI reading (#59); "" when CI was not read early. */
+  private String ciFailuresIn(
+      String auth, ReviewRequest req, CiStatusEvaluator.CiEvaluation earlyReading) {
+    return earlyReading == null
+        ? ""
+        : ciFailureContext.resolve(auth, req.owner(), req.repo(), earlyReading);
+  }
+
+  /**
+   * The annotations completed checks attached to the changed files (#34); "" when CI was not read
+   * early, the feature is off or there are none.
+   */
+  private String staticFindingsIn(
+      String auth,
+      ReviewRequest req,
+      CiStatusEvaluator.CiEvaluation earlyReading,
+      ReviewContextLoader.ReviewContext ctx) {
+    return earlyReading == null
+        ? ""
+        : staticAnalysis.resolve(
+            auth, req.owner(), req.repo(), earlyReading, ctx.reviewableFiles());
   }
 
   /** Tells the dashboard's live activity page which step the review is on (#66). */
