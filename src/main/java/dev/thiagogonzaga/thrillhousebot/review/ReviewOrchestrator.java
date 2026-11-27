@@ -39,6 +39,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 @ApplicationScoped
 public class ReviewOrchestrator {
@@ -565,10 +566,11 @@ public class ReviewOrchestrator {
       // #73: the verdict is final for this run once it is on the pull request. A superseded run
       // returned above without reaching here, and a verdict held on CI is announced now, not again
       // when CiHoldRevisit posts the approval.
+      var openFindings = openFindingsOf(reviewPublisher, result, ctx.lineResolver());
       runPostResultStep(
           doneReq,
           "send the outcome notification",
-          () -> notifier.reviewCompleted(doneReq, sessionUrl(session), result));
+          () -> notifier.reviewCompleted(doneReq, sessionUrl(session), result, openFindings));
 
       Log.infof(
           "Review complete for %s/%s #%d: %d findings, state=%s",
@@ -846,6 +848,15 @@ public class ReviewOrchestrator {
     return String.join(
         ", ",
         evaluation.offendingChecks().stream().map(check -> LogSafe.oneLine(check.name())).toList());
+  }
+
+  /**
+   * The open findings, computed when asked. Static so the supplier holds only what it reads, not
+   * the orchestrator and everything it references.
+   */
+  private static Supplier<OpenFindings> openFindingsOf(
+      ReviewPublisher publisher, ReviewResult result, DiffLineResolver lineResolver) {
+    return () -> publisher.openFindings(result, lineResolver);
   }
 
   /**

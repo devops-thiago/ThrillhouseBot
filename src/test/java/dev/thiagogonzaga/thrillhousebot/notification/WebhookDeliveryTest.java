@@ -101,6 +101,7 @@ class WebhookDeliveryTest {
         secret,
         Set.of(ReviewOutcome.Event.COMPLETED),
         false,
+        false,
         Duration.ofSeconds(5),
         maxAttempts);
   }

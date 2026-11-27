@@ -280,11 +280,18 @@ Create the GitHub App before starting the bot; its credentials go in `.env`.
 |---|---|
 | Webhook URL | `https://<your-host>/api/webhook` |
 | Webhook secret | Random string |
-| Repository permissions | Pull requests: R/W, Checks: R/W, Contents: Read, Issues: R/W, Actions: Read, Commit statuses: Read |
+| Repository permissions | Pull requests: R/W, Checks: R/W, Contents: R/W, Issues: R/W, Actions: Read, Commit statuses: Read |
 | Organization permissions | Members: Read (shows installation-wide dashboard counters to organization members) |
 | Subscribe to events | Pull request, Issue comment, Pull request review comment, Check suite, Status, Repository |
 | Identifying and authorizing users | Enabled (for dashboard login) |
 | Callback URL | `https://<your-host>/api/auth/callback` |
+
+Contents R/W is there for one operation: GitHub refuses to resolve a review
+thread without it, although its documentation does not say so. The bot writes no
+file, commit or branch. An app registered with Contents: Read keeps reviewing,
+but cannot resolve its own threads; change it under **Settings → Developer
+settings → GitHub Apps → your app → Permissions & events → Repository
+permissions**, then accept the new permission on each installation.
 
 ## Configuration
 
@@ -1271,6 +1278,25 @@ PR title is sent. `NOTIFICATIONS_WEBHOOK_INCLUDE_CONTENT=true` adds
 first, each with `severity`, `file`, `line` and `title`); descriptions and code
 are never sent. `session_url` is built from `DASHBOARD_URL`.
 
+`NOTIFICATIONS_WEBHOOK_INCLUDE_OPEN_FINDINGS=true` adds `review.openFindings`
+to the `json` format, with or without content: every finding still open on the pull request, including ones carried from earlier
+rounds, as the summary comment's findings manifest lists them.
+
+```json
+"openFindings": {
+  "v": 1,
+  "entries": [
+    { "key": "1a2b3c4d", "file": "src/A.java", "line": 12, "risk": "high",
+      "confidence": "high", "status": "open", "thread": true,
+      "hasSuggestion": false, "carried": false }
+  ]
+}
+```
+
+The entry fields, order and limits are the manifest's; `omitted` gives how many
+findings the limits left out, and is absent when none were. The entries hold file
+paths and lines but no titles.
+
 **Chat formats.** `slack` and `discord` send one message (verdict, counts, head
 commit, links to the PR and the dashboard session) to an incoming-webhook URL.
 With content on, the message also lists the PR title and up to five findings. PR
@@ -1606,9 +1632,10 @@ token figures come from the database, so they still work.
 ## Restricted-network deployment
 
 To keep code inside your network, run the model yourself and allow only the
-connections the bot needs. The bot is a GitHub App for GitHub.com, so it can
-never be fully offline: it must reach GitHub. GitHub Enterprise Server is not
-supported.
+connections the bot needs. The bot is a GitHub App, so it can never be fully
+offline: it must reach your GitHub. The table below names the `github.com`
+addresses. For GitHub Enterprise, including the settings for Enterprise Server,
+see [GitHub Enterprise](https://github.com/devops-thiago/ThrillhouseBot/blob/main/docs/GITHUB_ENTERPRISE.md).
 
 ### Outbound connections
 

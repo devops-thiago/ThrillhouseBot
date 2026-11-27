@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.notification;
 
 import dev.thiagogonzaga.thrillhousebot.config.ReviewExecutor;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.review.OpenFindings;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewOrchestrator.ReviewRequest;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewResult;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -27,6 +28,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
+import java.util.function.Supplier;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -86,20 +88,33 @@ public class ReviewNotifier {
     this.botVersion = botVersion;
   }
 
-  /** The review posted its verdict for {@code req}'s head. */
-  public void reviewCompleted(ReviewRequest req, String sessionUrl, ReviewResult result) {
+  /**
+   * The review posted its verdict for {@code req}'s head. {@code openFindings} is asked only when a
+   * subscriber of this event opted into them and its payload format carries them.
+   */
+  public void reviewCompleted(
+      ReviewRequest req,
+      String sessionUrl,
+      ReviewResult result,
+      Supplier<OpenFindings> openFindings) {
     if (settings.isEmpty()) {
       return;
     }
+    var configured = settings.get();
+    var wanted =
+        configured.includeOpenFindings()
+            && configured.format() == NotificationFormat.JSON
+            && configured.events().contains(ReviewOutcome.Event.COMPLETED);
     send(
         ReviewOutcome.completed(
-            req.owner(),
-            req.repo(),
-            req.prNumber(),
-            req.commitSha(),
-            req.prTitle(),
-            sessionUrl,
-            result));
+                req.owner(),
+                req.repo(),
+                req.prNumber(),
+                req.commitSha(),
+                req.prTitle(),
+                sessionUrl,
+                result)
+            .withOpenFindings(wanted ? openFindings.get() : null));
   }
 
   /** The review of {@code req}'s head failed with {@code failure} before its verdict was posted. */

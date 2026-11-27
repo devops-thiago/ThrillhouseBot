@@ -20,6 +20,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
@@ -53,6 +54,8 @@ import java.util.concurrent.Executors;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.ArgumentMatchers;
 import org.mockito.Mock;
@@ -2463,7 +2466,7 @@ class ReviewOrchestratorTest {
         verify(session, never()).setStatus(ReviewSession.STATUS_FAILED);
         assertEquals(1, lifecycleBroadcasts().size());
         // #73: the verdict is on the PR, so a failed session write still announces a completion.
-        verify(notifier).reviewCompleted(any(), anyString(), any());
+        verify(notifier).reviewCompleted(any(), anyString(), any(), any());
         verifyNoMoreInteractions(notifier);
       }
     }
@@ -2673,7 +2676,8 @@ class ReviewOrchestratorTest {
             .reviewCompleted(
                 argThat(r -> "abcdefgh".equals(r.commitSha())),
                 anyString(),
-                argThat(r -> r.reviewState() == ReviewState.APPROVE));
+                argThat(r -> r.reviewState() == ReviewState.APPROVE),
+                any());
         verifyNoMoreInteractions(notifier);
       }
     }
@@ -8157,6 +8161,34 @@ class ReviewOrchestratorTest {
       verify(reviewThreadService, never()).resolve(AUTH, "T3");
     }
 
+    // #1471: resolve raises GitHub's refusal, and one refused thread must not cost the rest.
+    @ParameterizedTest
+    @ValueSource(
+        strings = {"Resource not accessible by integration", "Could not resolve to a node"})
+    void shouldKeepResolvingAfterGitHubRefusesOneThread(String message) {
+      var statuses =
+          List.of(
+              new ReviewResult.PreviousFindingStatus(1, "resolved", "fixed"),
+              new ReviewResult.PreviousFindingStatus(2, "resolved", "fixed"));
+      when(followUpAnalyzer.matchFindingThreads(
+              ArgumentMatchers.<List<ReviewResponse.Finding>>any(), any(), any()))
+          .thenReturn(Map.of(1, 100L, 2, 200L));
+      when(reviewThreadService.threadsByRootComment(AUTH, "owner", "repo", 5))
+          .thenReturn(
+              Map.of(
+                  100L, new ReviewThreadService.ThreadRef("T1", false),
+                  200L, new ReviewThreadService.ThreadRef("T2", false)));
+      var errors = JsonNodeFactory.instance.arrayNode();
+      errors.addObject().put("message", message);
+      when(reviewThreadService.resolve(AUTH, "T1")).thenThrow(GitHubGraphQLException.from(errors));
+      when(reviewThreadService.resolve(AUTH, "T2")).thenReturn(true);
+
+      reviewPublisher.resolveAddressedThreads(
+          AUTH, request(), List.of(), List.of(rootComment()), statuses);
+
+      verify(reviewThreadService).resolve(AUTH, "T2");
+    }
+
     /**
      * #958: an earlier round's standing decline names no finding by id, so its thread is the one it
      * carries, never the effective round's finding 1 that id 0 or its round-relative id would name.
@@ -8574,7 +8606,8 @@ class ReviewOrchestratorTest {
             .reviewCompleted(
                 argThat(r -> r.prNumber() == 42),
                 eq(SESSION_URL),
-                argThat(ReviewResult::heldOnCiOnly));
+                argThat(ReviewResult::heldOnCiOnly),
+                any());
         verifyNoMoreInteractions(notifier);
       }
     }

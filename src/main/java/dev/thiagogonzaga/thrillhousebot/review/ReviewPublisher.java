@@ -289,6 +289,16 @@ public class ReviewPublisher {
   }
 
   /**
+   * The open set the summary comment's manifest lists for {@code result} (#1433), over the same
+   * scrubbed findings, so its keys match the comment's.
+   */
+  OpenFindings openFindings(ReviewResult result, DiffLineResolver lineResolver) {
+    var scrubbed = PromptLabelScrubber.scrub(result);
+    return FindingsManifest.collect(
+        PrSummaryGenerator.currentState(scrubbed), threadRule(scrubbed, lineResolver));
+  }
+
+  /**
    * Which manifest entries {@link #postReview} is set to open an inline thread for (#1433): of the
    * round's own findings, in the order they are posted, those that post inline on a changed file
    * ({@link DiffLineResolver#isChangedFile}), up to {@code maxReviewComments}, the same rules
@@ -2147,7 +2157,7 @@ public class ReviewPublisher {
         if (clearedByDirective(status)) {
           replyOnClearedThread(auth, req, rootCommentId);
         }
-        if (reviewThreadService.resolve(auth, thread.id())) {
+        if (resolveUnlessRefused(auth, req, thread.id())) {
           resolved++;
         }
       }
@@ -2158,6 +2168,26 @@ public class ReviewPublisher {
       }
     } catch (RuntimeException e) {
       Log.warn("Failed to resolve addressed review threads (continuing)", e);
+    }
+  }
+
+  /** Resolves one thread; a refusal is logged with GitHub's reason and costs only that thread. */
+  private boolean resolveUnlessRefused(
+      String auth, ReviewOrchestrator.ReviewRequest req, String threadId) {
+    try {
+      return reviewThreadService.resolve(auth, threadId);
+    } catch (GitHubGraphQLException e) {
+      Log.warnf(
+          "GitHub refused to resolve review thread %s on %s/%s #%d: %s%s",
+          threadId,
+          req.owner(),
+          req.repo(),
+          req.prNumber(),
+          e.refusal(),
+          e.isNotPermitted()
+              ? " (the App needs " + ReviewThreadService.RESOLVE_PERMISSION + ")"
+              : "");
+      return false;
     }
   }
 

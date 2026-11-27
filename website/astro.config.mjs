@@ -69,6 +69,7 @@ export default defineConfig({
       sidebar: [
         { label: "Home", slug: "index" },
         { label: "Getting started", slug: "getting-started" },
+        { label: "GitHub Enterprise", slug: "github-enterprise" },
         { label: "Commands", slug: "commands" },
         { label: "Configuration", slug: "configuration" },
         { label: "Configuration reference", slug: "configuration-reference" },

@@ -27,6 +27,9 @@ manifest is sent. The bot's support for other addresses is still in progress
 and untested on a real instance
 ([#1487](https://github.com/devops-thiago/ThrillhouseBot/issues/1487)).
 
+Installing for an organization on GitHub Enterprise? Read
+[GitHub Enterprise](/ThrillhouseBot/github-enterprise/) too.
+
 After GitHub creates the app:
 
 1. Note the **App ID** (app settings → About).
@@ -70,7 +73,7 @@ To register the app manually, open
 |---|---|
 | Webhook URL | `https://<your-host>/api/webhook` |
 | Webhook Secret | Random string |
-| Repository Permissions | Pull Requests: R/W, Checks: R/W, Contents: Read, Issues: R/W, Actions: Read, Commit Statuses: Read |
+| Repository Permissions | Pull Requests: R/W, Checks: R/W, Contents: R/W, Issues: R/W, Actions: Read, Commit Statuses: Read |
 | Organization Permissions | Members: Read (shows installation-wide dashboard counters to organization members) |
 | Subscribe to Events | Pull Request, Issue comment, Pull request review comment, Check suite, Status, Repository |
 | Identifying & authorizing users | Enabled (for dashboard login) |

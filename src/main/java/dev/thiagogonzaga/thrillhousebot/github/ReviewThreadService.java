@@ -74,6 +74,12 @@ public class ReviewThreadService {
       }
       """;
 
+  /**
+   * The App permission {@code resolveReviewThread} needs. GitHub does not document it: {@code Pull
+   * requests: Read & write} alone is answered with {@code Resource not accessible by integration}.
+   */
+  public static final String RESOLVE_PERMISSION = "`Contents: Read & write`";
+
   /** A review thread keyed by its root comment, with its GraphQL node id. */
   public record ThreadRef(String id, boolean resolved) {}
 
@@ -205,7 +211,11 @@ public class ReviewThreadService {
     }
   }
 
-  /** Resolves a review thread; returns whether GitHub reports it resolved afterwards. */
+  /**
+   * Resolves a review thread; returns whether GitHub reports it resolved afterwards.
+   *
+   * @throws GitHubGraphQLException when GitHub answers with {@code errors} and no confirmation
+   */
   public boolean resolve(String auth, String threadId) {
     var response =
         graphQLClient.execute(
@@ -219,6 +229,10 @@ public class ReviewThreadService {
             .path("isResolved")
             .asBoolean(false);
     if (!resolved) {
+      var errors = response.path("errors");
+      if (!errors.isEmpty()) {
+        throw GitHubGraphQLException.from(errors);
+      }
       log.warn("GitHub did not confirm resolution of review thread {}", threadId);
     }
     return resolved;

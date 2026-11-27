@@ -187,6 +187,33 @@ class ReviewThreadServiceTest {
     assertFalse(service.resolve("auth", "T1"));
   }
 
+  // #1471: a refusal arrives in the errors of an HTTP 200 and must not be discarded.
+  @Test
+  void resolveShouldRaiseGitHubsRefusalWithItsReason() throws Exception {
+    stubResponse(
+        """
+        {"data": {"resolveReviewThread": null},
+         "errors": [{"type": "FORBIDDEN", "message": "Resource not accessible by integration"}]}
+        """);
+
+    var refusal = assertThrows(GitHubGraphQLException.class, () -> service.resolve("auth", "T1"));
+
+    assertEquals("Resource not accessible by integration", refusal.refusal());
+    assertTrue(refusal.isNotPermitted());
+  }
+
+  @Test
+  void resolveShouldNotReadAnyOtherRefusalAsAMissingPermission() throws Exception {
+    stubResponse(
+        """
+        {"errors": [{"type": "NOT_FOUND", "message": "Could not resolve to a node"}]}
+        """);
+
+    var refusal = assertThrows(GitHubGraphQLException.class, () -> service.resolve("auth", "T1"));
+
+    assertFalse(refusal.isNotPermitted());
+  }
+
   // #1434: a batched round attaches each thread to its pending review through GraphQL.
   @Test
   void addPendingReviewThreadSendsTheLineAnchoredCommentAsMutationInput() throws Exception {

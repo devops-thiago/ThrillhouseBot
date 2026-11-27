@@ -16,11 +16,13 @@
 package dev.thiagogonzaga.thrillhousebot.notification;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.review.Confidence;
 import dev.thiagogonzaga.thrillhousebot.review.Finding;
+import dev.thiagogonzaga.thrillhousebot.review.OpenFindings;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewResult;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewState;
 import dev.thiagogonzaga.thrillhousebot.review.RiskLevel;
@@ -95,6 +97,47 @@ class NotificationPayloadsTest {
 
   private static JsonNode parse(byte[] body) throws Exception {
     return MAPPER.readTree(body);
+  }
+
+  private static final OpenFindings OPEN =
+      new OpenFindings(
+          "[{\"key\":\"0a1b2c3d\",\"file\":\"src/\\u003cA\\u003e.java\",\"line\":7}]", 0);
+
+  private static JsonNode jsonWithOpenFindings(OpenFindings open) throws Exception {
+    return parse(
+        NotificationPayloads.render(
+            completed(withFindings()).withOpenFindings(open),
+            NotificationFormat.JSON,
+            false,
+            NOW,
+            "0.7.0"));
+  }
+
+  @Test
+  void openFindingsCarryTheManifestEntriesWithoutNeedingTheContentOptIn() throws Exception {
+    var open = jsonWithOpenFindings(OPEN).at("/review/openFindings");
+
+    assertThat(open.get("v").asInt()).isEqualTo(1);
+    assertThat(open.has("omitted")).isFalse();
+    assertThat(open.at("/entries/0/key").asText()).isEqualTo("0a1b2c3d");
+    assertThat(open.at("/entries/0/file").asText()).isEqualTo("src/<A>.java");
+    assertThat(open.at("/entries/0/line").asInt()).isEqualTo(7);
+  }
+
+  @Test
+  void openFindingsSayHowManyTheManifestLeftOut() throws Exception {
+    var open = jsonWithOpenFindings(new OpenFindings("[]", 4)).at("/review/openFindings");
+
+    assertThat(open.get("omitted").asInt()).isEqualTo(4);
+    assertThat(open.get("entries").isEmpty()).isTrue();
+  }
+
+  @Test
+  void entriesThatAreNotJsonAreRefusedRatherThanSent() {
+    var broken = new OpenFindings("[{", 0);
+
+    assertThatThrownBy(() -> jsonWithOpenFindings(broken))
+        .isInstanceOf(IllegalStateException.class);
   }
 
   @Test

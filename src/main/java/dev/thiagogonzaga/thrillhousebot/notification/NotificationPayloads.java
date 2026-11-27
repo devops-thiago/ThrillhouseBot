@@ -15,9 +15,12 @@
  */
 package dev.thiagogonzaga.thrillhousebot.notification;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import dev.thiagogonzaga.thrillhousebot.review.Finding;
+import dev.thiagogonzaga.thrillhousebot.review.OpenFindings;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewResult;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -40,7 +43,9 @@ import java.util.Objects;
  * of the diff, the failure category, and the dashboard link. No code, diff text, finding prose,
  * model output or PR text is sent. {@link NotificationSettings#includeContent()} adds the PR title
  * and, per finding, its severity, file, line and title (at most {@value #MAX_CONTENT_FINDINGS}) —
- * never a finding's description or suggested code.
+ * never a finding's description or suggested code. A separate opt-in, {@link
+ * NotificationSettings#includeOpenFindings()}, adds {@code openFindings}, the summary comment's
+ * manifest entries, which hold no free text but the file path.
  */
 public final class NotificationPayloads {
 
@@ -60,6 +65,9 @@ public final class NotificationPayloads {
   static final int DISCORD_MAX_CONTENT = 2000;
 
   private static final JsonNodeFactory NODES = JsonNodeFactory.instance;
+
+  /** Reads the manifest's array into the tree, so no raw value needs reflection to serialize. */
+  private static final ObjectMapper MANIFEST_READER = new ObjectMapper();
 
   private static final String FIELD_EVENT = "event";
   private static final String FIELD_TITLE = "title";
@@ -103,7 +111,11 @@ public final class NotificationPayloads {
     }
     root.put("session_url", outcome.sessionUrl());
     if (outcome.result() != null) {
-      root.set("review", review(outcome.result(), includeContent));
+      var review = review(outcome.result(), includeContent);
+      if (outcome.openFindings() != null) {
+        addOpenFindings(review, outcome.openFindings());
+      }
+      root.set("review", review);
     }
     if (outcome.failure() != null) {
       root.putObject("failure").put("category", outcome.failure().wireName());
@@ -139,6 +151,20 @@ public final class NotificationPayloads {
       }
     }
     return review;
+  }
+
+  /** The summary comment's manifest entries, under the manifest's own version (#1443). */
+  private static void addOpenFindings(ObjectNode review, OpenFindings open) {
+    var node = review.putObject("openFindings");
+    node.put("v", 1);
+    if (open.omitted() > 0) {
+      node.put("omitted", open.omitted());
+    }
+    try {
+      node.set("entries", MANIFEST_READER.readTree(open.entries()));
+    } catch (JsonProcessingException e) {
+      throw new IllegalStateException("The findings manifest entries are not JSON", e);
+    }
   }
 
   /** A Slack incoming-webhook message. Visible for tests. */

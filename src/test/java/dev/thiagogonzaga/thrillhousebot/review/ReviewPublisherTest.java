@@ -556,6 +556,41 @@ class ReviewPublisherTest {
   }
 
   @Test
+  void theOpenFindingsHandedOutAreTheOnesTheSummaryManifestLists() {
+    var finding =
+        new Finding(RiskLevel.HIGH, Confidence.HIGH, "src/A.java", 12, "NPE", "d", null, null);
+    var firstReview =
+        new ReviewResult(
+            List.of(finding),
+            0,
+            1,
+            0,
+            0,
+            RiskLevel.HIGH,
+            ReviewState.REQUEST_CHANGES,
+            true,
+            "summary",
+            List.of(),
+            List.of(),
+            0);
+
+    publisher.publishSummary("auth", "o", "r", 1, firstReview, false);
+    var open = publisher.openFindings(firstReview, null);
+
+    var posted = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .createComment(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), posted.capture());
+    assertEquals(0, open.omitted());
+    assertTrue(open.entries().contains("\"file\":\"src/A.java\""));
+    assertTrue(
+        posted
+            .getValue()
+            .body()
+            .contains("<!-- thrillhousebot:findings v=1 " + open.entries() + " -->"));
+  }
+
+  @Test
   void followUpWithNoSummaryToPostTouchesNothing() {
     var blank =
         new ReviewResult(

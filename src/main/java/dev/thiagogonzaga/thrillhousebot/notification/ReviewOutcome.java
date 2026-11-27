@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.notification;
 
 import dev.thiagogonzaga.thrillhousebot.github.GitHubUrls;
+import dev.thiagogonzaga.thrillhousebot.review.OpenFindings;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewResult;
 import java.util.Locale;
 import java.util.Objects;
@@ -35,6 +36,8 @@ import java.util.Optional;
  * @param sessionUrl the dashboard session deep-link
  * @param result the posted verdict; present exactly when {@code event} is {@link Event#COMPLETED}
  * @param failure why the review failed; present exactly when {@code event} is {@link Event#FAILED}
+ * @param openFindings the findings still open on the pull request; {@code null} for a failed review
+ *     and unless the operator opted in to sending them
  */
 public record ReviewOutcome(
     Event event,
@@ -45,7 +48,8 @@ public record ReviewOutcome(
     String prTitle,
     String sessionUrl,
     ReviewResult result,
-    FailureCategory failure) {
+    FailureCategory failure,
+    OpenFindings openFindings) {
 
   /** The outcomes that fire a notification. */
   public enum Event {
@@ -104,7 +108,13 @@ public record ReviewOutcome(
       String sessionUrl,
       ReviewResult result) {
     return new ReviewOutcome(
-        Event.COMPLETED, owner, repo, prNumber, headSha, prTitle, sessionUrl, result, null);
+        Event.COMPLETED, owner, repo, prNumber, headSha, prTitle, sessionUrl, result, null, null);
+  }
+
+  /** This outcome carrying the open set its summary comment lists. */
+  public ReviewOutcome withOpenFindings(OpenFindings open) {
+    return new ReviewOutcome(
+        event, owner, repo, prNumber, headSha, prTitle, sessionUrl, result, failure, open);
   }
 
   /** A review that failed before its verdict was posted. */
@@ -117,7 +127,7 @@ public record ReviewOutcome(
       String sessionUrl,
       FailureCategory failure) {
     return new ReviewOutcome(
-        Event.FAILED, owner, repo, prNumber, headSha, prTitle, sessionUrl, null, failure);
+        Event.FAILED, owner, repo, prNumber, headSha, prTitle, sessionUrl, null, failure, null);
   }
 
   /** {@code owner/repo}. */
