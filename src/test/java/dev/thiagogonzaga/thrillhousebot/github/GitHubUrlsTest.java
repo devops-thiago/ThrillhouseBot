@@ -37,6 +37,18 @@ class GitHubUrlsTest {
   }
 
   @Test
+  void buildsAPullRequestPageFromTheFullRepositoryName() {
+    assertEquals("https://github.com/o/r/pull/7", GitHubUrls.pullRequest("o/r", 7));
+  }
+
+  @Test
+  void dropsOnlyTheScheme() {
+    assertEquals("h.example.com:8443", GitHubUrls.withoutScheme("https://h.example.com:8443"));
+    assertEquals("h.example.com/gh", GitHubUrls.withoutScheme("http://h.example.com/gh"));
+    assertEquals("h.example.com", GitHubUrls.withoutScheme("h.example.com"));
+  }
+
+  @Test
   void trimsOnlyTrailingSlashes() {
     assertEquals("https://h/api/v3", GitHubUrls.withoutTrailingSlash("https://h/api/v3/"));
     assertEquals("https://h", GitHubUrls.withoutTrailingSlash("https://h"));

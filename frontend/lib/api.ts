@@ -31,6 +31,8 @@ export interface SessionListItem {
   repository: string;
   prNumber: number;
   prTitle: string;
+  /** The pull request's page on the GitHub web address the server is configured with. */
+  pullRequestUrl: string;
   model: string;
   inputTokens: number;
   outputTokens: number;
