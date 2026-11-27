@@ -76,7 +76,7 @@ same diff.
   why in the pull request.
 - `scripts/release/check-tag.mjs` decides whether a tag may be released: `vX.Y.Z`, a signed
   annotated tag from an account in `RELEASE_TAG_SIGNERS`, on `main`, matching `pom.xml`. The
-  release workflow runs it from its own ref, never from the tag, and its `verify` job builds
+  release workflow runs the copy on `main`, never the tag's, and its `verify` job builds
   nothing from the tagged tree. Every check fails closed.
 - Both suites run with `node --test` in the `frontend` CI job. `docs/RELEASING.md` lists the
   repository settings the release checks assume.

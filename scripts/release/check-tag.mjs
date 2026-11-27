@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 // Checks a release tag before anything is promoted or signed from it. The release workflow runs
-// this from its own ref, with the tag checked out in the working directory, so a tag cannot bring
-// its own checker. Every check fails closed: a missing answer is a refusal.
+// the copy on main, with the tag checked out in the working directory, so a tag cannot bring its
+// own checker. Every check fails closed: a missing answer is a refusal.
 
 const VERSION = /^v\d+\.\d+\.\d+$/;
 const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;

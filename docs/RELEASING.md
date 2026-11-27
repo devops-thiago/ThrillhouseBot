@@ -87,8 +87,8 @@ is pushed. It can also be re-run with `workflow_dispatch` against an existing
 tag. Its jobs:
 
 1. `verify` decides whether the tag may be released and fixes what is
-   released. It runs `scripts/release/check-tag.mjs` from the workflow's own
-   ref, which checks that the tag is `vX.Y.Z`, is a signed annotated tag (see
+   released. It runs the copy of `scripts/release/check-tag.mjs` on `main`,
+   never the tag's own, which checks that the tag is `vX.Y.Z`, is a signed annotated tag (see
    [Verifying a release tag](#verifying-a-release-tag)), points at a commit on
    `main` and matches the `pom.xml` version. It builds nothing from the tagged
    tree. It then resolves the two images CI pushed for the commit to their

@@ -189,6 +189,9 @@ test('the release workflow judges the tag before anything else and with its own 
   assert.match(verify, /ref: refs\/tags\/\$\{\{ inputs\.version \|\| github\.ref_name \}\}/);
   assert.match(verify, /fetch-depth: 0/);
   assert.match(verify, /run: node \.workflow-ref\/scripts\/release\/check-tag\.mjs/);
+  // A tag push runs on the tag: a checkout without a ref would take the checker from it.
+  const scripts = stepsOf(verify).find((step) => step.includes('path: .workflow-ref'));
+  assert.match(scripts, /^\s+ref: refs\/heads\/main$/m, 'the release checker is not taken from main');
   assert.match(verify, /RELEASE_TAG_SIGNERS: \S+/);
   const check = verify.slice(verify.indexOf('gh attestation verify'));
   for (const flag of ['--signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/ci.yml"', '--source-ref refs/heads/main', '--source-digest "$SHA"', '--deny-self-hosted-runners']) {

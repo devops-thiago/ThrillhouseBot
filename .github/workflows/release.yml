@@ -52,11 +52,15 @@ jobs:
           ref: refs/tags/${{ inputs.version || github.ref_name }}
           fetch-depth: 0
           persist-credentials: false
-      # The checker comes from the workflow's own ref, not from the tag being judged. Nothing
-      # in this job runs code from the tagged tree: pom.xml is read, not built.
-      - name: Check out the release scripts from the workflow ref
+      # The checker comes from main, named in full, not from the tag being judged: a run a tag
+      # push starts has the tag as its own ref, so a checkout without a ref would bring the
+      # tag's copy. Nothing in this job runs code from the tagged tree: pom.xml is read, not
+      # built. A pushed tag still supplies this workflow file itself; the tag ruleset and the
+      # release environment's reviewers are what stand in front of that (docs/RELEASING.md).
+      - name: Check out the release scripts from main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: refs/heads/main
           path: .workflow-ref
           sparse-checkout: scripts/release
           persist-credentials: false
