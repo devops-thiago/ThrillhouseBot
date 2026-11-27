@@ -59,6 +59,7 @@ export const mockSessions: SessionListItem[] = [
     repository: 'devops-thiago/ThrillhouseBot',
     prNumber: 12,
     prTitle: 'Add dashboard charts',
+    pullRequestUrl: 'https://github.com/devops-thiago/ThrillhouseBot/pull/12',
     model: 'deepseek-chat',
     inputTokens: 4200,
     outputTokens: 890,

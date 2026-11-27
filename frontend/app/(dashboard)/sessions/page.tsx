@@ -159,7 +159,7 @@ export default function SessionsPage() {
                     </td>
                     <td style={styles.td}>
                       <a
-                        href={`https://github.com/${s.repository}/pull/${s.prNumber}`}
+                        href={s.pullRequestUrl}
                         target="_blank"
                         rel="noopener"
                         onClick={(e) => e.stopPropagation()}
@@ -263,7 +263,7 @@ export default function SessionsPage() {
                     label="Pull request"
                     value={
                       <a
-                        href={`https://github.com/${detail.repository}/pull/${detail.prNumber}`}
+                        href={detail.pullRequestUrl}
                         target="_blank"
                         rel="noopener"
                       >
