@@ -102,6 +102,15 @@ public final class MarkdownSafe {
     return value == null ? "" : MarkdownProse.block(value);
   }
 
+  /**
+   * A model field whose indented code blocks are rewritten as fenced ones, to run before {@link
+   * #prose} on text that is nested under a list item. Code left indented is read there as running
+   * text, and {@code prose} would escape what it holds.
+   */
+  public static String fenceIndentedCode(String value) {
+    return MarkdownProse.fenceIndentedCode(value);
+  }
+
   /** {@link #prose(String)} for a field rendered on one line, such as a list bullet. */
   public static String proseLine(String value) {
     return MarkdownProse.line(oneLine(value));

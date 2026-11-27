@@ -72,6 +72,15 @@ final class MarkdownProse {
   /** A line ending GitHub reads besides {@code \n}: a carriage return, alone or before one. */
   private static final Pattern CARRIAGE_RETURN = Pattern.compile("\r\n?");
 
+  /** A bulleted or numbered list item, at any depth. */
+  private static final Pattern LIST_ITEM = Pattern.compile("^\\s*+(?:[-*+]|\\d{1,9}[.)])(?:\\s|$)");
+
+  /** The columns of indentation that make a line code in markdown, whatever it starts with. */
+  private static final int CODE_INDENT = 4;
+
+  /** The indentation read as a quoted line of code when the line cannot be markdown of its own. */
+  private static final int QUOTED_INDENT = 2;
+
   private MarkdownProse() {}
 
   /** An open fenced block: its marker, and the nesting to take off each content line. */
@@ -104,6 +113,113 @@ final class MarkdownProse {
       emit(out, content, open);
     }
     return String.join("\n", out);
+  }
+
+  /**
+   * {@code text} with every indented code block rewritten as a fenced one, so it stays code
+   * wherever it is nested and {@link #block} keeps it byte for byte.
+   *
+   * <p>A block starts at the start of the text or after a blank line, outside a fence and a list,
+   * on a line indented by four columns, or by two when the line is not a list item, a quote or a
+   * table row: models quote code with two spaces too, which markdown alone would fold into running
+   * text. It runs while lines stay indented by two, and loses the indentation those lines share. A
+   * block quoted at only two columns therefore ends at a line that reads as a list item, a quote or
+   * a table row, such as a diff line starting with {@code -}; that is the price of keeping nested
+   * lists and quotes as markdown.
+   */
+  static String fenceIndentedCode(String text) {
+    var lines = text.split("\n", -1);
+    var out = new ArrayList<String>(lines.length);
+    Fence open = null;
+    boolean inList = false;
+    boolean afterBlank = true;
+    int i = 0;
+    while (i < lines.length) {
+      var line = lines[i];
+      int next = i + 1;
+      if (open != null) {
+        open = closes(line, open) ? null : open;
+        out.add(line);
+      } else if (line.isBlank()) {
+        out.add(line);
+      } else {
+        open = opened(line, new ArrayList<>());
+        if (open == null && afterBlank && !inList && startsCode(line)) {
+          next = codeEnd(lines, i);
+          emitDedented(out, List.of(lines).subList(i, next));
+        } else {
+          boolean ends = afterBlank && columns(line) < QUOTED_INDENT;
+          inList = LIST_ITEM.matcher(line).find() || (inList && !ends);
+          out.add(line);
+        }
+      }
+      afterBlank = open == null && line.isBlank();
+      i = next;
+    }
+    return String.join("\n", out);
+  }
+
+  private static boolean startsCode(String line) {
+    int columns = columns(line);
+    if (columns >= CODE_INDENT) {
+      return true;
+    }
+    var rest = line.strip();
+    return columns >= QUOTED_INDENT
+        && !LIST_ITEM.matcher(line).find()
+        && !rest.startsWith(">")
+        && !rest.startsWith("|");
+  }
+
+  /** The index after the last indented line of the block that starts at {@code from}. */
+  private static int codeEnd(String[] lines, int from) {
+    int end = from + 1;
+    for (int i = end; i < lines.length && (lines[i].isBlank() || startsCode(lines[i])); i++) {
+      if (!lines[i].isBlank()) {
+        end = i + 1;
+      }
+    }
+    return end;
+  }
+
+  /** The width of a line's indentation, a tab counting as four. */
+  private static int columns(String line) {
+    int columns = 0;
+    for (int i = 0; i < blanksEnd(line, 0); i++) {
+      columns += width(line.charAt(i));
+    }
+    return columns;
+  }
+
+  private static int width(char blank) {
+    return blank == '\t' ? CODE_INDENT : 1;
+  }
+
+  private static void emitDedented(List<String> out, List<String> block) {
+    int shared =
+        block.stream()
+            .filter(line -> !line.isBlank())
+            .mapToInt(MarkdownProse::columns)
+            .min()
+            .orElse(0);
+    var content = new ArrayList<String>(block.size());
+    for (var line : block) {
+      content.add(outdented(line, shared));
+    }
+    emit(out, content, new Fence('`', 3, 0, 0, ""));
+  }
+
+  /**
+   * {@code line} without its first {@code columns} columns of indentation. A tab that reaches past
+   * them leaves the rest as spaces.
+   */
+  private static String outdented(String line, int columns) {
+    int removed = 0;
+    int i = 0;
+    for (int end = blanksEnd(line, 0); i < end && removed < columns; i++) {
+      removed += width(line.charAt(i));
+    }
+    return " ".repeat(Math.max(0, removed - columns)) + line.substring(i);
   }
 
   /**

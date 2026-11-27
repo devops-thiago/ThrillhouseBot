@@ -252,7 +252,7 @@ class FollowUpReviewNoiseTest {
                 ReviewResult.TruncationDetail.EMPTY),
             false));
     var body = postedReview().body();
-    assertTrue(body.contains("Things to double-check"), body);
+    assertTrue(body.contains("lower-confidence item(s), listed here"), body);
     assertTrue(body.contains(finding.title()) && body.contains(finding.description()), body);
     closedOnce(body);
   }
