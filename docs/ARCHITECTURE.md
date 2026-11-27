@@ -364,7 +364,7 @@ The scan also tracks its own findings across rounds:
   not.
 - A detection that matches a scan finding a maintainer declined (a round recorded it `justified`)
   is not raised again while the content is the same: same file, title and anchor, and for a secret
-  the same line, compared through a short HMAC, keyed from `GITHUB_WEBHOOK_SECRET`, kept in a
+  the same line, compared through a short HMAC, keyed from `GITHUB_PRIVATE_KEY`, kept in a
   hidden `thrillhousebot:scan-content` marker in the finding's text. A new value on that line is
   raised again.
 

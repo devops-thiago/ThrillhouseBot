@@ -140,7 +140,9 @@ and decide dashboard access.
 
 `WebhookEvents` runs behind the Quarkiverse GitHub App extension's route, which rejects a
 request whose signature header is missing or does not match the body, and the application does
-not start without a webhook secret. With `GITHUB_ALLOWED_ACCOUNTS` set,
+not start without a webhook secret. It starts with a short one, and logs a warning when the
+secret has fewer than 16 characters: whoever learns the secret can send deliveries the bot
+accepts, so use a long random value. With `GITHUB_ALLOWED_ACCOUNTS` set,
 an event from an installation on any other account is ignored before any work,
 so a public App installed by a stranger never spends the operator's budget. The dashboard refuses a login it
 has never been able to check with GitHub, keeps a known login's last answer for
