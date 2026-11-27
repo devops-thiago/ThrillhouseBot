@@ -241,6 +241,30 @@ class ChangeSymbolsTest {
   }
 
   @Test
+  void anAddedLineStartingWithTwoPlusSignsIsReadInsideAHunk() {
+    // #1396: "+++retries;" is the added line "++retries;", not a file header, once a hunk opened.
+    var changed =
+        """
+        --- a/Mailer.java
+        +++ b/Mailer.java
+        @@ -20,4 +20,5 @@ public void send(String to) {
+             deliver(to);
+        +++retries;
+        """;
+    var declared =
+        """
+        @@ -1,2 +1,5 @@
+        +++count; /* a comment that
+        +def hidden():
+        +ends here */
+        +def real():
+        """;
+
+    assertEquals(List.of("send"), ChangeSymbols.changedNames(changed));
+    assertEquals(List.of("real"), ChangeSymbols.declaredNames(declared));
+  }
+
+  @Test
   void documentationAndDataFilesDeclareNothing() {
     // A README's example code or a YAML key is not the file's own declaration.
     var example = "+```python\n+def example():\n+```\n+class Foo is described above.";

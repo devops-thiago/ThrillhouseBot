@@ -284,6 +284,18 @@ class ConfigKeyContextResolverTest {
     }
 
     @Test
+    void shouldReadAnAddedLineWhoseContentStartsWithTwoPlusSigns() {
+      // #1396: inside a hunk "+++" is the added marker and content that starts with "++", such as
+      // a "+++" front-matter delimiter line, not the file header.
+      var patch = "@@ -1 +1,3 @@\n intro\n+++ `FRONT_MATTER_KEY` +++\n+`REAL_DOC_KEY` matters";
+      var doc = new FileDiff("README.md", "modified", 2, 0, 2, patch);
+
+      assertEquals(
+          List.of("FRONT_MATTER_KEY", "REAL_DOC_KEY"),
+          ConfigKeyContextResolver.extractTokens(List.of(doc)));
+    }
+
+    @Test
     void shouldIgnoreThePatchFileHeaderLine() {
       var withHeader =
           new FileDiff(
