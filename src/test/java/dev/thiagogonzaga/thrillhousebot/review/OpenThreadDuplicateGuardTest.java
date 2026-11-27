@@ -411,6 +411,7 @@ class OpenThreadDuplicateGuardTest {
             threads,
             List.of(roundOne),
             BOT,
+            KnownWriters.ALL,
             Set.of(),
             List.of(offByOne, pagination, offByOne));
 
@@ -450,6 +451,7 @@ class OpenThreadDuplicateGuardTest {
             answered,
             List.of(roundOne),
             BOT,
+            KnownWriters.ALL,
             Set.of(),
             List.of(offByOne, pagination));
 
@@ -463,7 +465,15 @@ class OpenThreadDuplicateGuardTest {
 
     var context =
         analyzer.buildPreviousFindingsContext(
-            List.of(), false, List.of(), threads, List.of(), BOT, Set.of(), List.of(pagination));
+            List.of(),
+            false,
+            List.of(),
+            threads,
+            List.of(),
+            BOT,
+            KnownWriters.ALL,
+            Set.of(),
+            List.of(pagination));
 
     assertTrue(context.contains("Still open from earlier rounds"), context);
     assertTrue(context.contains(CLIENT + ":1 — " + pagination.title()), context);

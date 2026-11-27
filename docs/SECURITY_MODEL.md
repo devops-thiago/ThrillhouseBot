@@ -61,8 +61,8 @@ Attackers considered:
   description, comments and any text the bot reads from the PR. They may try
   to inject instructions into the model prompt, make the bot leak data, approve
   a bad change, or run up the model bill.
-- A commenter without write access who tries to trigger paid reviews or to
-  make the bot post.
+- A commenter without write access who tries to trigger paid reviews, to make
+  the bot post, or to get a finding closed or declined so that the bot approves.
 - A model endpoint that returns malformed, oversized or hostile output.
 - A web visitor trying to reach the dashboard or ride on a signed-in session.
 
@@ -134,6 +134,17 @@ commits to several pull requests keeps the repository's four slots busy. Use
 `WEBHOOK_EXCLUDED_AUTHORS`, the label gates or `GITHUB_ALLOWED_ACCOUNTS`, and a
 spending limit at the model provider, where that is not acceptable. Setting a
 limit to `0` turns it off.
+
+Closing a finding is a maintainer's decision. A reply on a finding's thread and
+an `@thrillhousebot resolved` or `declined` directive count only when GitHub's
+collaborator-permission answer for the author is write, maintain or admin
+(`review/VerifiedWritersResolver`, asked once per author per review). The
+comment's `author_association` is a first check that spares the call and never
+grants anything: an organization member or invited collaborator with read or
+triage access is not a maintainer. A finding the model reports as declined
+stays open unless such a reply or directive is behind it, whatever any other
+reply on the thread says. When the permission cannot be read, nobody is
+confirmed and the finding stays open.
 
 ### Complete mediation
 

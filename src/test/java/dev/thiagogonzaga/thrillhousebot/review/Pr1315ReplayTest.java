@@ -235,32 +235,33 @@ class Pr1315ReplayTest {
     patches.forEach((path, patch) -> files.add(new FileDiff(path, "modified", 1, 1, 2, patch)));
     var roundChanges = roundChanges(heads, head, patches);
     return new ReviewContextLoader.ReviewContext(
-        files,
-        "",
-        "",
-        0,
-        List.of(),
-        jsons,
-        priorRounds,
-        false,
-        true,
-        jsons.get(0),
-        threads(priorRounds),
-        "",
-        new InstructionsResolver.ResolvedInstructions("", ""),
-        PathScopedInstructions.NONE,
-        List.of(),
-        "",
-        "",
-        "",
-        "",
-        files,
-        () ->
-            new DiffLineResolver(
-                patches, patches.keySet(), DiffLineResolver.HeadFiles.NONE, roundChanges),
-        null,
-        List.of(),
-        List.of());
+            files,
+            "",
+            "",
+            0,
+            List.of(),
+            jsons,
+            priorRounds,
+            false,
+            true,
+            jsons.get(0),
+            threads(priorRounds),
+            "",
+            new InstructionsResolver.ResolvedInstructions("", ""),
+            PathScopedInstructions.NONE,
+            List.of(),
+            "",
+            "",
+            "",
+            "",
+            files,
+            () ->
+                new DiffLineResolver(
+                    patches, patches.keySet(), DiffLineResolver.HeadFiles.NONE, roundChanges),
+            null,
+            List.of(),
+            List.of())
+        .withVerifiedWriters(KnownWriters.ALL);
   }
 
   /**

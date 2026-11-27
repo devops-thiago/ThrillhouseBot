@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -565,11 +566,38 @@ final class RebuttalContradiction {
   static final String REPLY_LEAD_IN = "Reply on this finding's thread weighed, finding kept open:";
 
   /**
+   * Lead-in of {@link #unconfirmedDeclineNote}: the finding was reported declined, but nobody with
+   * confirmed write access declined it. The review body surfaces it like the other two ({@link
+   * #explainsKeptFinding}).
+   */
+  static final String UNCONFIRMED_LEAD_IN = "Decline not accepted, finding kept open:";
+
+  /**
+   * The note on a finding reported declined with no maintainer behind the decline: which finding,
+   * why the replies on its thread did not count, and the two ways someone with write access keeps
+   * the decline. The location is the bot's own record of a path in the pull request, so it is
+   * rendered as inert inline code.
+   */
+  static String unconfirmedDeclineNote(ReviewResponse.Finding finding, BotIdentity botIdentity) {
+    return UNCONFIRMED_LEAD_IN
+        + " no reply on the thread of `"
+        + MarkdownSafe.inlineCode(finding.file() + ":" + finding.line())
+        + "` comes from someone whose write access to this repository was confirmed. A reply there"
+        + " from someone with write access keeps the decline, as does their `@"
+        + botIdentity.primaryMention()
+        + " declined <path>:<line> — <title>` comment on the PR conversation.";
+  }
+
+  /**
    * Whether {@code note} is one the review body shows as the reason a replied-on finding stays
-   * open: a re-checked decline ({@link #NOTE_LEAD_IN}) or a weighed reply ({@link #REPLY_LEAD_IN}).
+   * open: a re-checked decline ({@link #NOTE_LEAD_IN}), a weighed reply ({@link #REPLY_LEAD_IN}) or
+   * a decline nobody with write access made ({@link #UNCONFIRMED_LEAD_IN}).
    */
   static boolean explainsKeptFinding(String note) {
-    return note != null && (note.startsWith(NOTE_LEAD_IN) || note.startsWith(REPLY_LEAD_IN));
+    return note != null
+        && (note.startsWith(NOTE_LEAD_IN)
+            || note.startsWith(REPLY_LEAD_IN)
+            || note.startsWith(UNCONFIRMED_LEAD_IN));
   }
 
   /**

@@ -27,6 +27,7 @@ import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
 import dev.thiagogonzaga.thrillhousebot.github.*;
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import io.quarkiverse.githubapp.GitHubClientProvider;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -34,6 +35,9 @@ import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.kohsuke.github.GHPermissionType;
+import org.kohsuke.github.GHRepository;
+import org.kohsuke.github.GitHub;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
@@ -118,7 +122,8 @@ class ReviewContextLoaderTest {
             BotIdentity.from(List.of(BOT_LOGIN)),
             activeModel,
             carryover,
-            findingStates);
+            findingStates,
+            KnownWriters.resolver());
   }
 
   @Nested
@@ -923,7 +928,8 @@ class ReviewContextLoaderTest {
           BotIdentity.from(List.of(BOT_LOGIN)),
           activeModel,
           carryover,
-          findingStates);
+          findingStates,
+          KnownWriters.resolver());
     }
 
     private ReviewOrchestrator.ReviewRequest request() {
@@ -1741,7 +1747,15 @@ class ReviewContextLoaderTest {
       when(followUpAnalyzer.parsePreviousResponses(List.of(priorJson, olderJson)))
           .thenReturn(parsed);
       when(followUpAnalyzer.buildPreviousFindingsContext(
-              anyList(), anyBoolean(), any(), any(), any(), any(BotIdentity.class), any(), any()))
+              anyList(),
+              anyBoolean(),
+              any(),
+              any(),
+              any(),
+              any(BotIdentity.class),
+              any(),
+              any(),
+              any()))
           .thenReturn("ctx");
       stubLoad(
           List.of(
@@ -1767,6 +1781,7 @@ class ReviewContextLoaderTest {
               any(),
               eq(parsed.subList(1, parsed.size())),
               any(BotIdentity.class),
+              any(),
               any(),
               any());
     }
@@ -1838,6 +1853,10 @@ class ReviewContextLoaderTest {
     }
 
     private ReviewContextLoader realAnalyzerLoader() {
+      return realAnalyzerLoader(KnownWriters.resolver());
+    }
+
+    private ReviewContextLoader realAnalyzerLoader(VerifiedWritersResolver writersResolver) {
       return new ReviewContextLoader(
           prClient,
           reviewClient,
@@ -1855,7 +1874,8 @@ class ReviewContextLoaderTest {
           BotIdentity.from(List.of(BOT_LOGIN)),
           activeModel,
           carryover,
-          findingStates);
+          findingStates,
+          writersResolver);
     }
 
     /** Round 2 posted the bot's own "1 previous finding(s) remain unresolved" body, as on #449. */
@@ -1903,6 +1923,94 @@ class ReviewContextLoaderTest {
               TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
       return realAnalyzerLoader().load("auth", request(), session);
+    }
+
+    /** GitHub answers write for {@code keeper} and read for {@code sorter}, both org members. */
+    private VerifiedWritersResolver resolverAskingGitHub(GHRepository repository) throws Exception {
+      var clientProvider = mock(GitHubClientProvider.class);
+      var gitHub = mock(GitHub.class);
+      lenient().doReturn(gitHub).when(clientProvider).getInstallationClient(99L);
+      lenient().doReturn(repository).when(gitHub).getRepository("owner/repo");
+      lenient().doReturn(GHPermissionType.WRITE).when(repository).getPermission("keeper");
+      lenient().doReturn(GHPermissionType.READ).when(repository).getPermission("sorter");
+      return new VerifiedWritersResolver(clientProvider, BotIdentity.from(List.of(BOT_LOGIN)));
+    }
+
+    private static GitHubReviewClient.PullRequestComment threadComment(
+        long id, Long inReplyTo, String body, String login, String association) {
+      return new GitHubReviewClient.PullRequestComment(
+          id,
+          inReplyTo,
+          CARRIED_FILE,
+          body,
+          new GitHubReviewClient.ReviewResponse.User(login),
+          association);
+    }
+
+    @Test
+    void theContextCarriesOnlyTheCommentAuthorsGitHubConfirmedHoldWriteAccess() throws Exception {
+      var repository = mock(GHRepository.class);
+      var writersResolver = resolverAskingGitHub(repository);
+      stubRoundThree(List.of(ROUND_ONE_JSON));
+      when(reviewClient.listPullRequestComments(any(), any(), eq("owner"), eq("repo"), eq(1)))
+          .thenReturn(
+              List.of(
+                  threadComment(100L, null, "**MEDIUM — " + CARRIED_TITLE + "**", BOT_LOGIN, null),
+                  threadComment(101L, 100L, "By design, not changing it.", "sorter", "MEMBER"),
+                  threadComment(102L, 100L, "Agreed with the above.", "keeper", "MEMBER"),
+                  threadComment(103L, 100L, "Same here.", "keeper", "MEMBER")));
+      when(commentClient.listComments(any(), any(), eq("owner"), eq("repo"), eq(1)))
+          .thenReturn(
+              List.of(
+                  new GitHubCommentClient.IssueComment(
+                      900L,
+                      "looks fine",
+                      new GitHubReviewClient.ReviewResponse.User("drive-by"),
+                      "NONE")));
+      var session =
+          ReviewSession.create(
+              TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
+      session.id = 1L;
+
+      var ctx = realAnalyzerLoader(writersResolver).load("auth", request(), session);
+
+      assertTrue(ctx.verifiedWriters().isWriter("keeper", "MEMBER"));
+      assertFalse(
+          ctx.verifiedWriters().isWriter("sorter", "MEMBER"),
+          "an organization member with read access is not a maintainer of this repository");
+      verify(repository, times(1)).getPermission("keeper");
+      verify(repository, times(1)).getPermission("sorter");
+      verify(repository, never()).getPermission("drive-by");
+      assertTrue(
+          ctx.previousFindings()
+              .contains("- @sorter (no write access, context only): By design, not changing it."),
+          "previous-findings section was: " + ctx.previousFindings());
+      assertTrue(ctx.previousFindings().contains("- @keeper: Agreed with the above."));
+    }
+
+    @Test
+    void aReviewWhosePermissionLookupFailsConfirmsNobody() throws Exception {
+      var repository = mock(GHRepository.class);
+      var writersResolver = resolverAskingGitHub(repository);
+      doThrow(new java.io.IOException("502 from GitHub")).when(repository).getPermission("keeper");
+      stubRoundThree(List.of(ROUND_ONE_JSON));
+      when(reviewClient.listPullRequestComments(any(), any(), eq("owner"), eq("repo"), eq(1)))
+          .thenReturn(
+              List.of(
+                  threadComment(100L, null, "**MEDIUM — " + CARRIED_TITLE + "**", BOT_LOGIN, null),
+                  threadComment(101L, 100L, "By design, not changing it.", "keeper", "OWNER")));
+      var session =
+          ReviewSession.create(
+              TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
+      session.id = 1L;
+
+      var ctx = realAnalyzerLoader(writersResolver).load("auth", request(), session);
+
+      assertSame(VerifiedWriters.none(), ctx.verifiedWriters());
+      assertTrue(
+          ctx.previousFindings()
+              .contains("- @keeper (no write access, context only): By design, not changing it."),
+          "previous-findings section was: " + ctx.previousFindings());
     }
 
     @Test

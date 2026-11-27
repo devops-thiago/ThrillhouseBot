@@ -390,16 +390,21 @@ again.
 
 `VerdictBuilder.build` turns the model's statuses into the round's final statuses, in this order:
 
-1. A finding whose targeted code left the diff becomes `superseded`, unless the head is the one the
+1. A decline needs a maintainer behind it. A `justified` on a finding whose thread has no reply
+   from an author with confirmed write access (`VerifiedWriters`, the collaborator permission
+   resolved once per review in `ReviewContextLoader`) goes back to `unresolved`; a decline
+   directive from such an author on the PR conversation restores it in step 3. This runs whatever
+   `REVIEW_DECLINE_RECHECK_ENABLED` says.
+2. A finding whose targeted code left the diff becomes `superseded`, unless the head is the one the
    finding was raised on.
-2. A maintainer's decline is a claim, not ground truth (`REVIEW_DECLINE_RECHECK_ENABLED`, on by
+3. A maintainer's decline is a claim, not ground truth (`REVIEW_DECLINE_RECHECK_ENABLED`, on by
    default). When the only write-access reply on a thread rests on a premise the reviewed code
    contradicts, the finding goes back to `unresolved` for one more round. A second reply always
    stands. A finding without a thread is declined or cleared from the PR conversation with
    `@thrillhousebot declined <path>:<line> — <title>` or
    `@thrillhousebot resolved <path>:<line> — <title>`.
-3. An `unresolved` id that is repeated or names no finding is dropped, so nothing is counted twice.
-4. A "Things to double-check" item (a low-confidence medium or low finding, listed in the summary
+4. An `unresolved` id that is repeated or names no finding is dropped, so nothing is counted twice.
+5. A "Things to double-check" item (a low-confidence medium or low finding, listed in the summary
    without a thread) is replaced when this round or a later one raises the same defect at the same
    or higher severity. Same defect means, in the same file, the same title, a similar title within
    three lines, the same line with shared title words or a common identifier, or titles that restate
@@ -408,9 +413,9 @@ again.
    `file:line` and code. Two titles that name different identifiers, or different defect classes
    (a race and an off-by-one), are never the same defect. The summary's "Same issue as" note on a
    double-check item uses the same test.
-5. The approval backstop replays every earlier round, oldest first. It keeps open each finding that
+6. The approval backstop replays every earlier round, oldest first. It keeps open each finding that
    no round closed and the model did not report on, as long as its code is still in the diff. A
-   decline on a finding from an older round is weighed as in step 2: the finding stays open when
+   decline on a finding from an older round is weighed as in step 3: the finding stays open when
    the decline is contradicted or rests on an unconfirmed premise, and otherwise counts as
    justified without holding anything open; its thread, found by marker and content, is resolved
    and the decline is offered to the learnings capture. Every other older-round finding still gets

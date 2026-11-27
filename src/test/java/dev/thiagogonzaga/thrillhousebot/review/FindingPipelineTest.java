@@ -125,7 +125,7 @@ class FindingPipelineTest {
     when(findingVerificationService.verify(
             anyLong(), any(), any(), any(), any(), any(), any(), any()))
         .thenAnswer(inv -> inv.getArgument(1));
-    when(followUpAnalyzer.dropRepliedDuplicates(any(), any(), any(), any()))
+    when(followUpAnalyzer.dropRepliedDuplicates(any(), any(), any(), any(), any()))
         .thenAnswer(inv -> inv.getArgument(0));
     lenient()
         .when(
@@ -210,28 +210,29 @@ class FindingPipelineTest {
       ReviewContextLoader.PrTotals prTotals,
       List<ReviewResponse> priorAiResponses) {
     return new ReviewContextLoader.ReviewContext(
-        files,
-        "raw legacy diff",
-        "",
-        0,
-        List.of(),
-        List.of(),
-        priorAiResponses,
-        true,
-        false,
-        null,
-        List.of(),
-        "",
-        new InstructionsResolver.ResolvedInstructions("", ""),
-        PathScopedInstructions.NONE,
-        List.of(),
-        "",
-        "",
-        "",
-        "",
-        reviewableFiles,
-        () -> new DiffLineResolver(Map.of()),
-        prTotals);
+            files,
+            "raw legacy diff",
+            "",
+            0,
+            List.of(),
+            List.of(),
+            priorAiResponses,
+            true,
+            false,
+            null,
+            List.of(),
+            "",
+            new InstructionsResolver.ResolvedInstructions("", ""),
+            PathScopedInstructions.NONE,
+            List.of(),
+            "",
+            "",
+            "",
+            "",
+            reviewableFiles,
+            () -> new DiffLineResolver(Map.of()),
+            prTotals)
+        .withVerifiedWriters(KnownWriters.ALL);
   }
 
   private static DiffBudgetPlanner.BudgetPlan multiBatchPlan() {
@@ -501,29 +502,30 @@ class FindingPipelineTest {
       List<dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient.IssueComment>
           conversationComments) {
     return new ReviewContextLoader.ReviewContext(
-        List.of(),
-        "raw legacy diff",
-        "",
-        0,
-        List.of(),
-        List.of(),
-        priorRounds,
-        false,
-        true,
-        null,
-        List.of(),
-        "",
-        new InstructionsResolver.ResolvedInstructions("", ""),
-        PathScopedInstructions.NONE,
-        List.of(),
-        "",
-        "",
-        "",
-        "",
-        List.of(new FileDiff("a.java", "modified", 3, 0, 3, "")),
-        () -> new DiffLineResolver(Map.of()),
-        null,
-        conversationComments);
+            List.of(),
+            "raw legacy diff",
+            "",
+            0,
+            List.of(),
+            List.of(),
+            priorRounds,
+            false,
+            true,
+            null,
+            List.of(),
+            "",
+            new InstructionsResolver.ResolvedInstructions("", ""),
+            PathScopedInstructions.NONE,
+            List.of(),
+            "",
+            "",
+            "",
+            "",
+            List.of(new FileDiff("a.java", "modified", 3, 0, 3, "")),
+            () -> new DiffLineResolver(Map.of()),
+            null,
+            conversationComments)
+        .withVerifiedWriters(KnownWriters.ALL);
   }
 
   @Test
@@ -4399,7 +4401,8 @@ class FindingPipelineTest {
             listed.unmatchedIgnoreGlobs(),
             listed.carried(),
             listed.coverageArtifactRefusal(),
-            true);
+            true,
+            KnownWriters.ALL);
     var inputs =
         new AiReviewService.PromptInputs(
             "d",
@@ -4472,7 +4475,8 @@ class FindingPipelineTest {
         List.of(),
         SupersededFindingsCarryover.Carried.NONE,
         "",
-        true);
+        true,
+        KnownWriters.ALL);
   }
 
   @Test
@@ -4534,7 +4538,8 @@ class FindingPipelineTest {
             listed.unmatchedIgnoreGlobs(),
             listed.carried(),
             listed.coverageArtifactRefusal(),
-            false);
+            false,
+            KnownWriters.ALL);
 
     var result =
         pipeline.run(
@@ -4610,7 +4615,8 @@ class FindingPipelineTest {
             listed.unmatchedIgnoreGlobs(),
             listed.carried(),
             listed.coverageArtifactRefusal(),
-            false);
+            false,
+            KnownWriters.ALL);
     var prClient = mock(GitHubPullRequestClient.class);
     when(prClient.getTree(any(), any(), any(), any(), any(), any()))
         .thenReturn(
@@ -4788,7 +4794,8 @@ class FindingPipelineTest {
         List.of(),
         SupersededFindingsCarryover.Carried.NONE,
         "",
-        true);
+        true,
+        KnownWriters.ALL);
   }
 
   private static final ReviewResponse.Summary PRIOR_OVERVIEW =

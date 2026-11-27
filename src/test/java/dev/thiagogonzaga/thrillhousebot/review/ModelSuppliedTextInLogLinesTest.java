@@ -348,7 +348,8 @@ class ModelSuppliedTextInLogLinesTest {
                     reRaised,
                     List.of(priorJson),
                     List.of(botComment, maintainerReply),
-                    BotIdentity.of("thrillhousebot")));
+                    BotIdentity.of("thrillhousebot"),
+                    KnownWriters.ALL));
 
     assertRecordCannotBeForged(captured, "Missing null check");
   }
@@ -485,7 +486,8 @@ class ModelSuppliedTextInLogLinesTest {
                     List.of(new ReviewResponse(List.of(prior), List.of(), null)),
                     List.of(),
                     List.of(clearing),
-                    BotIdentity.of("thrillhousebot")));
+                    BotIdentity.of("thrillhousebot"),
+                    KnownWriters.ALL));
 
     assertRecordCannotBeForged(captured, "app.js");
   }

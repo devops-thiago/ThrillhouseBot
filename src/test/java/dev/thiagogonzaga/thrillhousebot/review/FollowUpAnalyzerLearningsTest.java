@@ -133,6 +133,7 @@ class FollowUpAnalyzerLearningsTest {
             thread(NESTED, 500L, FLAT_THREADS),
             List.of(),
             BOT_ID,
+            KnownWriters.ALL,
             () -> PLAIN_DIFF);
 
     assertEquals(1, surviving.size());
@@ -156,6 +157,7 @@ class FollowUpAnalyzerLearningsTest {
             thread(RACE, 700L, ASYNC_AFTER_ACK),
             List.of(),
             BOT_ID,
+            KnownWriters.ALL,
             () -> PLAIN_DIFF);
 
     assertTrue(surviving.isEmpty(), "a refutable no-concurrency premise is never remembered");
@@ -174,12 +176,19 @@ class FollowUpAnalyzerLearningsTest {
             comments,
             List.of(),
             BOT_ID,
+            KnownWriters.ALL,
             () -> DISPATCHING_DIFF);
     assertEquals("justified", statuses.get(0).status(), "precondition: the escape hatch won");
 
     var surviving =
         analyzer.survivingDeclines(
-            List.of(RACE), List.of(1), comments, List.of(), BOT_ID, () -> DISPATCHING_DIFF);
+            List.of(RACE),
+            List.of(1),
+            comments,
+            List.of(),
+            BOT_ID,
+            KnownWriters.ALL,
+            () -> DISPATCHING_DIFF);
 
     assertTrue(surviving.isEmpty());
   }
@@ -193,6 +202,7 @@ class FollowUpAnalyzerLearningsTest {
             thread(RACE, 700L, "Intentional — command handlers stay this way by house style."),
             List.of(),
             BOT_ID,
+            KnownWriters.ALL,
             () -> DISPATCHING_DIFF);
 
     assertEquals(1, surviving.size());
@@ -207,6 +217,7 @@ class FollowUpAnalyzerLearningsTest {
             thread(NESTED, 500L, FLAT_THREADS, "See the REST docs for review comments."),
             List.of(),
             BOT_ID,
+            KnownWriters.ALL,
             () -> PLAIN_DIFF);
 
     assertEquals(
@@ -226,7 +237,13 @@ class FollowUpAnalyzerLearningsTest {
 
     var surviving =
         analyzer.survivingDeclines(
-            List.of(NESTED), List.of(1), comments, List.of(), BOT_ID, () -> PLAIN_DIFF);
+            List.of(NESTED),
+            List.of(1),
+            comments,
+            List.of(),
+            BOT_ID,
+            KnownWriters.ALL,
+            () -> PLAIN_DIFF);
 
     assertTrue(surviving.isEmpty());
   }
@@ -255,6 +272,7 @@ class FollowUpAnalyzerLearningsTest {
                     "NONE"),
                 conversation(902L, directive)),
             BOT_ID,
+            KnownWriters.ALL,
             () -> PLAIN_DIFF);
 
     assertEquals(1, surviving.size());
@@ -276,6 +294,7 @@ class FollowUpAnalyzerLearningsTest {
                 List.of(),
                 List.of(conversation(903L, other)),
                 BOT_ID,
+                KnownWriters.ALL,
                 () -> PLAIN_DIFF)
             .isEmpty());
   }
@@ -291,6 +310,7 @@ class FollowUpAnalyzerLearningsTest {
             null,
             List.of(conversation(902L, directive)),
             BOT_ID,
+            KnownWriters.ALL,
             () -> PLAIN_DIFF);
 
     assertTrue(surviving.isEmpty(), "a bare decline, like a bare thumbs-down, carries no why");
@@ -309,12 +329,19 @@ class FollowUpAnalyzerLearningsTest {
                 List.of(),
                 null,
                 BOT_ID,
+                KnownWriters.ALL,
                 () -> PLAIN_DIFF)
             .isEmpty());
     assertTrue(
         analyzer
             .survivingDeclines(
-                List.of(noAnchor), List.of(1), List.of(), List.of(), BOT_ID, () -> PLAIN_DIFF)
+                List.of(noAnchor),
+                List.of(1),
+                List.of(),
+                List.of(),
+                BOT_ID,
+                KnownWriters.ALL,
+                () -> PLAIN_DIFF)
             .isEmpty());
   }
 
@@ -326,20 +353,41 @@ class FollowUpAnalyzerLearningsTest {
     assertTrue(
         recheckOff
             .survivingDeclines(
-                List.of(NESTED), List.of(1), comments, List.of(), BOT_ID, () -> PLAIN_DIFF)
+                List.of(NESTED),
+                List.of(1),
+                comments,
+                List.of(),
+                BOT_ID,
+                KnownWriters.ALL,
+                () -> PLAIN_DIFF)
             .isEmpty(),
         "without the #169 re-check no decline has survived anything");
     assertTrue(
         analyzer
-            .survivingDeclines(List.of(NESTED), List.of(1), comments, List.of(), BOT_ID, () -> " ")
+            .survivingDeclines(
+                List.of(NESTED),
+                List.of(1),
+                comments,
+                List.of(),
+                BOT_ID,
+                KnownWriters.ALL,
+                () -> " ")
             .isEmpty());
     assertTrue(
         analyzer
-            .survivingDeclines(List.of(NESTED), List.of(1), comments, List.of(), BOT_ID, () -> null)
+            .survivingDeclines(
+                List.of(NESTED),
+                List.of(1),
+                comments,
+                List.of(),
+                BOT_ID,
+                KnownWriters.ALL,
+                () -> null)
             .isEmpty());
     assertTrue(
         analyzer
-            .survivingDeclines(List.of(NESTED), List.of(1), comments, List.of(), BOT_ID, null)
+            .survivingDeclines(
+                List.of(NESTED), List.of(1), comments, List.of(), BOT_ID, KnownWriters.ALL, null)
             .isEmpty());
   }
 
@@ -349,27 +397,53 @@ class FollowUpAnalyzerLearningsTest {
 
     assertTrue(
         analyzer
-            .survivingDeclines(null, List.of(1), comments, List.of(), BOT_ID, () -> PLAIN_DIFF)
-            .isEmpty());
-    assertTrue(
-        analyzer
-            .survivingDeclines(List.of(NESTED), null, comments, List.of(), BOT_ID, () -> PLAIN_DIFF)
+            .survivingDeclines(
+                null, List.of(1), comments, List.of(), BOT_ID, KnownWriters.ALL, () -> PLAIN_DIFF)
             .isEmpty());
     assertTrue(
         analyzer
             .survivingDeclines(
-                List.of(NESTED), List.of(), comments, List.of(), BOT_ID, () -> PLAIN_DIFF)
+                List.of(NESTED),
+                null,
+                comments,
+                List.of(),
+                BOT_ID,
+                KnownWriters.ALL,
+                () -> PLAIN_DIFF)
             .isEmpty());
     assertTrue(
         analyzer
             .survivingDeclines(
-                List.of(NESTED), List.of(0, 2), comments, List.of(), BOT_ID, () -> PLAIN_DIFF)
+                List.of(NESTED),
+                List.of(),
+                comments,
+                List.of(),
+                BOT_ID,
+                KnownWriters.ALL,
+                () -> PLAIN_DIFF)
+            .isEmpty());
+    assertTrue(
+        analyzer
+            .survivingDeclines(
+                List.of(NESTED),
+                List.of(0, 2),
+                comments,
+                List.of(),
+                BOT_ID,
+                KnownWriters.ALL,
+                () -> PLAIN_DIFF)
             .isEmpty());
     assertEquals(
         1,
         analyzer
             .survivingDeclines(
-                List.of(NESTED), List.of(1, 1), comments, List.of(), BOT_ID, () -> PLAIN_DIFF)
+                List.of(NESTED),
+                List.of(1, 1),
+                comments,
+                List.of(),
+                BOT_ID,
+                KnownWriters.ALL,
+                () -> PLAIN_DIFF)
             .size(),
         "a repeated id is one decline");
   }
@@ -407,6 +481,7 @@ class FollowUpAnalyzerLearningsTest {
             thread(doubleInsert, 800L, "Not changed — it is only ever called from /pause."),
             List.of(),
             BOT_ID,
+            KnownWriters.ALL,
             () -> PLAIN_DIFF);
 
     assertTrue(surviving.isEmpty());

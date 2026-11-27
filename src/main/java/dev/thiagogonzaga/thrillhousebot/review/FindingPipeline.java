@@ -561,7 +561,11 @@ public class FindingPipeline {
             (file, line) -> lineResolver.getLineText(lineResolver.diffPathFor(file), line));
     refined =
         followUpAnalyzer.dropRepliedDuplicates(
-            refined, ctx.priorAiResponseJsons(), ctx.inlineComments(), botIdentity);
+            refined,
+            ctx.priorAiResponseJsons(),
+            ctx.inlineComments(),
+            botIdentity,
+            ctx.verifiedWriters());
     // #726: a novel lower-confidence hypothesis on an anchor the maintainer has already
     // dispositioned twice is a re-roll of the dice, not a finding to disposition again.
     refined =
@@ -570,7 +574,8 @@ public class FindingPipeline {
             ctx.priorAiResponses(),
             ctx.inlineComments(),
             ctx.conversationComments(),
-            botIdentity);
+            botIdentity,
+            ctx.verifiedWriters());
     // #60: as in the single-call lane, after every model stage and before the summary call.
     var mentions = pathMentions(ctx, promptInputs, evidence);
     refined = finish(refined, ctx, lineResolver, promptInputs.linkedIssues(), evidence, mentions);
@@ -1791,7 +1796,11 @@ public class FindingPipeline {
             (file, line) -> lineResolver.getLineText(lineResolver.diffPathFor(file), line));
     aiResponse =
         followUpAnalyzer.dropRepliedDuplicates(
-            aiResponse, ctx.priorAiResponseJsons(), ctx.inlineComments(), botIdentity);
+            aiResponse,
+            ctx.priorAiResponseJsons(),
+            ctx.inlineComments(),
+            botIdentity,
+            ctx.verifiedWriters());
     // #726: a novel lower-confidence hypothesis on an anchor the maintainer has already
     // dispositioned twice is a re-roll of the dice, not a finding to disposition again.
     aiResponse =
@@ -1800,7 +1809,8 @@ public class FindingPipeline {
             ctx.priorAiResponses(),
             ctx.inlineComments(),
             ctx.conversationComments(),
-            botIdentity);
+            botIdentity,
+            ctx.verifiedWriters());
     return aiResponse;
   }
 

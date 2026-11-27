@@ -457,6 +457,7 @@ class ReviewLearningsTest {
         List.of(new ReviewResult.PreviousFindingStatus(1, status, "note")),
         comments,
         List.of(),
+        KnownWriters.ALL,
         () -> code);
   }
 
@@ -543,6 +544,7 @@ class ReviewLearningsTest {
                             new ReviewResult.EarlierRound(NESTED, 500L))),
                     thread(NESTED, 500L, FLAT_THREADS),
                     List.of(),
+                    KnownWriters.ALL,
                     () -> PLAIN_DIFF));
 
     assertEquals(1, stored);
@@ -550,6 +552,37 @@ class ReviewLearningsTest {
     verify(store).save(input.capture(), anyInt());
     assertEquals(NESTED_TITLE, input.getValue().findingTitle());
     assertEquals("https://github.com/o/r/pull/161#discussion_r501", input.getValue().sourceUrl());
+  }
+
+  /**
+   * A capture that names no confirmed writer learns nothing, from the previous round's decline or
+   * an earlier round's: the replies on those threads are nobody's decision.
+   */
+  @Test
+  void aCaptureWithNoConfirmedWriterLearnsNothing() {
+    var capture =
+        new ReviewLearnings.DeclineCapture(
+            "token",
+            SCOPE,
+            "o",
+            "r",
+            161,
+            List.of(NESTED),
+            List.of(
+                new ReviewResult.PreviousFindingStatus(1, "justified", "n"),
+                new ReviewResult.PreviousFindingStatus(
+                    FollowUpAnalyzer.EARLIER_ROUND_ID,
+                    "justified",
+                    "settled",
+                    new ReviewResult.EarlierRound(NESTED, 500L))),
+            thread(NESTED, 500L, FLAT_THREADS),
+            List.of(),
+            null,
+            () -> PLAIN_DIFF);
+
+    assertSame(VerifiedWriters.none(), capture.verifiedWriters());
+    assertEquals(0, enabled().captureSurvivingDeclines(capture));
+    verifyNoInteractions(store, clientProvider);
   }
 
   @Test
@@ -576,6 +609,7 @@ class ReviewLearningsTest {
                 List.of(new ReviewResult.PreviousFindingStatus(1, "justified", "n")),
                 List.of(),
                 List.of(conversation(902L, directive)),
+                KnownWriters.ALL,
                 () -> PLAIN_DIFF));
 
     var input = ArgumentCaptor.forClass(LearningInput.class);
@@ -595,6 +629,7 @@ class ReviewLearningsTest {
             comments,
             List.of(),
             BOT_ID,
+            KnownWriters.ALL,
             () -> DISPATCHING_DIFF);
     assertEquals("unresolved", statuses.get(0).status());
 
@@ -690,20 +725,31 @@ class ReviewLearningsTest {
         enabled()
             .captureSurvivingDeclines(
                 new ReviewLearnings.DeclineCapture(
-                    "t", SCOPE, "o", "r", 1, List.of(), null, List.of(), List.of(), () -> "")));
+                    "t",
+                    SCOPE,
+                    "o",
+                    "r",
+                    1,
+                    List.of(),
+                    null,
+                    List.of(),
+                    List.of(),
+                    KnownWriters.ALL,
+                    () -> "")));
     assertEquals(
         0,
         enabled()
             .captureSurvivingDeclines(
                 new ReviewLearnings.DeclineCapture(
-                    "t", SCOPE, "o", "r", 1, null, null, null, null, () -> "")));
+                    "t", SCOPE, "o", "r", 1, null, null, null, null, KnownWriters.ALL, () -> "")));
     verifyNoInteractions(store, clientProvider);
   }
 
   @Test
   void aCaptureCopiesItsListsAndTreatsMissingOnesAsEmpty() {
     var capture =
-        new ReviewLearnings.DeclineCapture("t", SCOPE, "o", "r", 1, null, null, null, null, null);
+        new ReviewLearnings.DeclineCapture(
+            "t", SCOPE, "o", "r", 1, null, null, null, null, KnownWriters.ALL, null);
 
     assertTrue(capture.previous().isEmpty());
     assertTrue(capture.statuses().isEmpty());
