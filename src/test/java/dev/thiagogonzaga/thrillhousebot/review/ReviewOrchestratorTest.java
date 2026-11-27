@@ -8213,6 +8213,9 @@ class ReviewOrchestratorTest {
                 reviewCaptor.capture());
         assertEquals("COMMENT", reviewCaptor.getValue().event());
         assertTrue(reviewCaptor.getValue().body().contains("remain unresolved"));
+        assertTrue(
+            reviewCaptor.getValue().body().contains("/pull/42#discussion_r1))"),
+            "the still-open list links the thread the round loaded (#1436)");
 
         var resultCaptor = ArgumentCaptor.forClass(ReviewResult.class);
         verify(summaryGenerator)
