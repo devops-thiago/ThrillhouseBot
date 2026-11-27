@@ -33,7 +33,9 @@ import java.util.regex.Pattern;
  * <ul>
  *   <li>a fenced block, wherever it was nested, is emitted as a top-level backtick fence longer
  *       than any backtick run inside it, with its content byte for byte;
- *   <li>a code span that opens and closes on one line is kept byte for byte;
+ *   <li>a code span that opens and closes on one line and holds no {@code |} is kept byte for byte.
+ *       In a table row GitHub splits the cells at each {@code |} before it reads any span, so a
+ *       span holding one is code in a paragraph and text in a row; it is written as text;
  *   <li>every other backtick becomes {@code &#96;} and every other run of three or more tildes is
  *       escaped, so nothing else can open a span or a fence.
  * </ul>
@@ -59,17 +61,24 @@ final class MarkdownProse {
   /** What a fence's info string may carry over: a language tag, nothing else. */
   private static final Pattern LANGUAGE_TAG = Pattern.compile("[A-Za-z0-9+#._-]{1,20}");
 
+  /** A line ending GitHub reads besides {@code \n}: a carriage return, alone or before one. */
+  private static final Pattern CARRIAGE_RETURN = Pattern.compile("\r\n?");
+
   private MarkdownProse() {}
 
   /** An open fenced block: its marker, and the nesting to take off each content line. */
   private record Fence(char marker, int length, int indent, int quotes, String language) {}
 
-  /** Multi-line markdown, rewritten as the class comment describes. */
+  /**
+   * Multi-line markdown, rewritten as the class comment describes. Every line ending is read as
+   * GitHub reads it: a carriage return ends a line too, so text after one is not taken for the rest
+   * of the line before it.
+   */
   static String block(String text) {
     var out = new ArrayList<String>();
     var content = new ArrayList<String>();
     Fence open = null;
-    for (var line : text.split("\n", -1)) {
+    for (var line : CARRIAGE_RETURN.matcher(text).replaceAll("\n").split("\n", -1)) {
       if (open == null) {
         open = opened(line, out);
         if (open == null) {
@@ -213,6 +222,18 @@ final class MarkdownProse {
 
   /** One line of prose: its one-line code spans kept, everything else neutralized. */
   static String line(String text) {
+    return line(text, false);
+  }
+
+  /**
+   * {@link #line(String)} for the text of one table cell, whose every {@code |} the caller escapes
+   * afterwards: no cell can end inside a code span then, so a span holding one is kept.
+   */
+  static String cell(String text) {
+    return line(text, true);
+  }
+
+  private static String line(String text, boolean pipesEscaped) {
     var sb = new StringBuilder(text.length() + 16);
     int i = 0;
     while (i < text.length()) {
@@ -220,7 +241,7 @@ final class MarkdownProse {
       if (c == '\\' && i + 1 < text.length()) {
         i = escaped(text, i, sb);
       } else if (c == '`') {
-        i = backticks(text, i, sb);
+        i = backticks(text, i, sb, pipesEscaped);
       } else if (c == '~') {
         i = tildes(text, i, sb);
       } else if (c == '<') {
@@ -428,21 +449,34 @@ final class MarkdownProse {
     return i + 1;
   }
 
-  /** A backtick run: a code span when the same run closes it on this line, else literal. */
-  private static int backticks(String text, int i, StringBuilder sb) {
+  /**
+   * A backtick run: a code span when the same run closes it on this line, else literal. A span
+   * holding a {@code |} is literal as well unless the pipes are escaped later ({@link #cell}): its
+   * text is then read as prose like the rest of the line, and its backticks pair with no other.
+   */
+  private static int backticks(String text, int i, StringBuilder sb, boolean pipesEscaped) {
     int end = runEnd(text, i);
     int length = end - i;
-    int close = text.indexOf('`', end);
-    while (close >= 0) {
-      int closeEnd = runEnd(text, close);
-      if (closeEnd - close == length) {
-        sb.append(text, i, closeEnd);
-        return closeEnd;
-      }
-      close = text.indexOf('`', closeEnd);
+    int close = closingRun(text, end, length);
+    if (close >= 0 && (pipesEscaped || text.substring(end, close).indexOf('|') < 0)) {
+      sb.append(text, i, close + length);
+      return close + length;
     }
     sb.append("&#96;".repeat(length));
     return end;
+  }
+
+  /** Where the next run of exactly {@code length} backticks starts from {@code from} on, or -1. */
+  private static int closingRun(String text, int from, int length) {
+    int close = text.indexOf('`', from);
+    while (close >= 0) {
+      int closeEnd = runEnd(text, close);
+      if (closeEnd - close == length) {
+        return close;
+      }
+      close = text.indexOf('`', closeEnd);
+    }
+    return -1;
   }
 
   /** A run of three or more tildes could open a fence; shorter runs are strikethrough. */

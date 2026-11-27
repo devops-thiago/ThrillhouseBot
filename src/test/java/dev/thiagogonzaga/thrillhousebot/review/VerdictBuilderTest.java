@@ -240,7 +240,7 @@ class VerdictBuilderTest {
     assertTrue(
         summary.contains(
             "1 file(s) could not be reviewed because GitHub provided no diff content for them"
-                + " — binary files, or text diffs too large to display (assets/logo.png)"),
+                + " — binary files, or text diffs too large to display (`assets/logo.png`)"),
         summary);
     assertFalse(summary.contains("review budget"), summary);
     var checkSummary = VerdictBuilder.checkSummaryForResult(result);
@@ -271,11 +271,11 @@ class VerdictBuilderTest {
     var summary = result.summaryMarkdown();
     assertTrue(
         summary.contains(
-            "1 file(s) were omitted entirely (big.java) because the diff exceeded the review"
+            "1 file(s) were omitted entirely (`big.java`) because the diff exceeded the review"
                 + " budget"),
         summary);
     assertTrue(summary.contains("no diff content for them"), summary);
-    assertTrue(summary.contains("(assets/logo.png)"), summary);
+    assertTrue(summary.contains("(`assets/logo.png`)"), summary);
   }
 
   @Test
@@ -292,7 +292,7 @@ class VerdictBuilderTest {
     assertTrue(
         summary.contains(
             "12 file(s) were not reviewed because the review call for them did not complete: the"
-                + " call timed out (failed1.java"),
+                + " call timed out (`failed1.java`"),
         summary);
     assertTrue(summary.contains("+2 more"), summary);
     assertTrue(summary.contains("<summary>All 12 files not fully reviewed</summary>"), summary);
@@ -323,7 +323,7 @@ class VerdictBuilderTest {
             .summaryMarkdown()
             .contains(
                 "1 file(s) were not reviewed because the review call for them did not complete"
-                    + " (failed.java)"),
+                    + " (`failed.java`)"),
         result.summaryMarkdown());
     assertFalse(result.summaryMarkdown().contains("review budget"), result.summaryMarkdown());
     var checkSummary = VerdictBuilder.checkSummaryForResult(result);
@@ -348,7 +348,7 @@ class VerdictBuilderTest {
     assertTrue(
         result
             .summaryMarkdown()
-            .contains("not reviewed because the review call for them did not complete (f.java)"),
+            .contains("not reviewed because the review call for them did not complete (`f.java`)"),
         result.summaryMarkdown());
     assertFalse(result.summaryMarkdown().contains("partially analyzed"), result.summaryMarkdown());
   }
@@ -369,11 +369,11 @@ class VerdictBuilderTest {
     assertEquals(List.of("big.java"), result.truncation().omittedFileNames());
     assertEquals(List.of("failed.java"), result.truncation().callFailedFileNames());
     var summary = result.summaryMarkdown();
-    assertTrue(summary.contains("omitted entirely (big.java)"), summary);
+    assertTrue(summary.contains("omitted entirely (`big.java`)"), summary);
     assertTrue(
         summary.contains(
             "1 file(s) were not reviewed because the review call for them did not complete"
-                + " (failed.java)"),
+                + " (`failed.java`)"),
         summary);
   }
 
@@ -413,13 +413,14 @@ class VerdictBuilderTest {
     assertEquals(List.of("big.java"), result.truncation().omittedFileNames());
     assertEquals(List.of("skipped.java"), result.truncation().spendCeilingSkippedFileNames());
     assertTrue(
-        result.summaryMarkdown().contains("omitted entirely (big.java)"), result.summaryMarkdown());
+        result.summaryMarkdown().contains("omitted entirely (`big.java`)"),
+        result.summaryMarkdown());
     assertTrue(
         result
             .summaryMarkdown()
             .contains(
                 "1 file(s) were not reviewed because the review's token spend ceiling"
-                    + " (REVIEW_MAX_TOKENS_PER_REVIEW) was reached (skipped.java)"),
+                    + " (REVIEW_MAX_TOKENS_PER_REVIEW) was reached (`skipped.java`)"),
         result.summaryMarkdown());
     var checkSummary = VerdictBuilder.checkSummaryForResult(result);
     assertTrue(checkSummary.contains("1 file(s) skipped at the token spend ceiling"), checkSummary);
@@ -448,7 +449,7 @@ class VerdictBuilderTest {
             .contains(
                 "1 file(s) were only partially reviewed because the model's response was cut at"
                     + " its length cap (max-output-tokens) — findings up to the cut were kept"
-                    + " (cut.java)"),
+                    + " (`cut.java`)"),
         result.summaryMarkdown());
     var checkSummary = VerdictBuilder.checkSummaryForResult(result);
     assertTrue(
@@ -1135,9 +1136,10 @@ class VerdictBuilderTest {
     var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
 
     assertTrue(
-        result.summaryMarkdown().contains("omitted entirely (big.java)"), result.summaryMarkdown());
+        result.summaryMarkdown().contains("omitted entirely (`big.java`)"),
+        result.summaryMarkdown());
     assertTrue(
-        result.summaryMarkdown().contains("partially analyzed (huge.java)"),
+        result.summaryMarkdown().contains("partially analyzed (`huge.java`)"),
         result.summaryMarkdown());
     var checkSummary = VerdictBuilder.checkSummaryForResult(result);
     assertTrue(
@@ -1547,7 +1549,7 @@ class VerdictBuilderTest {
         summary.contains("2 file(s) were omitted because the diff exceeded the size budget"),
         summary);
     assertTrue(summary.contains("no diff content for them"), summary);
-    assertTrue(summary.contains("(assets/logo.png)"), summary);
+    assertTrue(summary.contains("(`assets/logo.png`)"), summary);
     var checkSummary = VerdictBuilder.checkSummaryForResult(result);
     assertTrue(checkSummary.contains("2 file(s) omitted"), checkSummary);
     assertTrue(checkSummary.contains("1 file(s) without diff content from GitHub"), checkSummary);
@@ -1594,7 +1596,7 @@ class VerdictBuilderTest {
     assertTrue(
         summary.contains(
             "1 file(s) could not be reviewed because GitHub provided no diff content for them"
-                + " — binary files, or text diffs too large to display (assets/logo.png)"),
+                + " — binary files, or text diffs too large to display (`assets/logo.png`)"),
         summary);
     assertFalse(summary.contains("size budget"), summary);
     var checkSummary = VerdictBuilder.checkSummaryForResult(result);
@@ -1989,7 +1991,7 @@ class VerdictBuilderTest {
             .startsWith(
                 PrSummaryGenerator.SUMMARY_HEADING
                     + "\n\n> **AI review scope:** 1 pure rename omitted from AI review "
-                    + "(old/Pure.java → new/Pure.java)\n\n"),
+                    + "(`old/Pure.java` → `new/Pure.java`)\n\n"),
         result.summaryMarkdown());
   }
 

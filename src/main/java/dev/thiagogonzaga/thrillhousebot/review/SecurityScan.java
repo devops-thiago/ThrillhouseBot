@@ -234,6 +234,20 @@ public class SecurityScan {
     return MarkdownSafe.prose(description);
   }
 
+  /**
+   * {@code description} with {@code block} as a paragraph under it. The hidden content marker a
+   * scan finding ends with stays the last line, which is where {@link #postedDescription} looks for
+   * it: text placed after it would have it posted as visible text.
+   */
+  static String withBlockAppended(String description, String block) {
+    var text = Objects.toString(description, "");
+    var marker = TRAILING_CONTENT_MARKER.matcher(text);
+    if (marker.find()) {
+      return text.substring(0, marker.start()) + "\n\n" + block + marker.group();
+    }
+    return text + "\n\n" + block;
+  }
+
   /** Hex digits of the content fingerprint kept: enough to tell two values apart, no more. */
   private static final int FINGERPRINT_HEX = 8;
 
