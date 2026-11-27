@@ -387,7 +387,7 @@ public final class ReviewDispatcher {
                   + " allows (a later push or a manual /review reviews it)");
       // Replaced by a newer request for the pull request, which the worker takes next, or
       // interrupted by a shutdown.
-      case INTERRUPTED, SUPERSEDED ->
+      default ->
           log.info(
               "Not running the review of {}/{} #{} that waited for a review slot: {}",
               req.owner(),
