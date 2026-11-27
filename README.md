@@ -150,7 +150,8 @@ deployment sets `REVIEW_LEARNINGS_ENABLED=true`; otherwise the bot replies that
 learnings are off. `/learnings` lists up to 30 entries.
 
 **Pause.** While a PR is paused, pushes are not reviewed and mentions get no
-answer. `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`,
+answer. A push still dismisses an approval the bot gave an earlier commit (see
+[Withdrawing an earlier approval](#withdrawing-an-earlier-approval)). `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`,
 `/improve` and `/generate-tests` reply with a short paused notice and do
 nothing else. `/help`, `/resolve`, `/resume` and the learnings commands keep
 working.
@@ -711,32 +712,47 @@ earlier review threads yourself before merging.
 
 ### Withdrawing an earlier approval
 
-GitHub keeps counting a reviewer's approval after the same reviewer posts a
-later `COMMENT` review. So when a review does not end in an approval, the bot
+The bot approves one commit. When commits are pushed to a pull request it
+approved, it dismisses that approval at once, with a message saying that
+commits were pushed after it and naming the new head as not reviewed yet. This
+happens on the push itself, with no model call, whether or not the new head
+will be reviewed: it also covers a draft, a pull request a label, author or
+branch setting excludes, a paused one, and a push the rate window or a full
+queue holds back. If the review of the new head approves, the bot approves
+again, so a pull request that stays clean shows a dismissal followed by a new
+approval for each push. A force-push back to the commit the bot approved
+dismisses nothing while that approval stands.
+
+GitHub also keeps counting a reviewer's approval after the same reviewer posts
+a later `COMMENT` review. So when a review does not end in an approval, the bot
 first dismisses every approval it still has on the pull request, with a message
 naming the head it just reviewed. This covers a review with findings, one with
-an earlier finding still open, a CI hold and a partly reviewed diff. Only the
-bot's own approvals are dismissed, never a person's or another app's, and a
-review that approves again dismisses nothing. An approval held on CI is
-dismissed too and comes back when the checks turn green.
+an earlier finding still open, a CI hold and a partly reviewed diff. An
+approval held on CI is dismissed too and comes back when the checks turn green.
+
+Only the bot's own approvals are dismissed, never a person's or another app's,
+and a review that approves again dismisses nothing.
 
 The call needs the `Pull requests: Read & write` permission the App already
 has. On a protected branch, GitHub's API reference says the caller must also be
 a repository administrator or on the rule's "Restrict who can dismiss pull
 request reviews" list, so GitHub may refuse the dismissal there. The bot then
-logs a warning naming the review, posts its own review as usual, and the old
-approval stays until someone dismisses it. If you see that warning, add the App
+logs a warning naming the review, goes on to review the new head as usual, and
+the old approval stays until someone dismisses it. If you see that warning, add the App
 to the rule's list. A dismissal that fails for another reason (a timeout, a
 rate limit, a review GitHub no longer has) is logged with a warning that says
 so, and the bot goes on to its older approvals.
 
-The approval is withdrawn when a review finishes, not when commits are pushed,
-and not at all when no review runs for the new head (a draft, a label or path
-skip, a paused bot, a failed run) or when the bot could not list the pull
-request's reviews, which it logs as a warning. Where the bot's approval counts towards a
-required review, also turn on "Dismiss stale pull request approvals when new
-commits are pushed" in the branch protection rule or ruleset, so GitHub drops
-it on the push itself.
+Each push costs one request that lists the pull request's reviews, one more
+that reads its head when the bot has an approval to withdraw, and one per
+approval dismissed. The dismissal runs after a review of the same pull request
+that is already in progress. The approval stays only when the bot cannot
+withdraw it: it never received the push event, it could not list the pull
+request's reviews (logged as a warning), or GitHub refused the dismissal.
+Where the bot's approval counts towards a required review, also turn on
+"Dismiss stale pull request approvals when new commits are pushed" in the
+branch protection rule or ruleset, so GitHub drops it on the push whatever
+happens to the bot.
 
 ### Summary comment
 

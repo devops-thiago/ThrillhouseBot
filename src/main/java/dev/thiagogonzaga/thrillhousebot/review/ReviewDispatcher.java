@@ -31,6 +31,7 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.function.Function;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -38,7 +39,9 @@ import org.slf4j.LoggerFactory;
  * Dispatches PR reviews on a dedicated executor with per-PR serialization. Rapid webhook events for
  * the same PR are coalesced so only the latest head SHA is reviewed after the in-flight run
  * completes. A CI re-evaluation of a held verdict (#825) rides the same per-PR worker, after any
- * review in flight, so it can never race a review of the pull request.
+ * review in flight, so it can never race a review of the pull request. So does the withdrawal of
+ * the bot's approval when commits are pushed ({@link ApprovalOnPush}), which the worker runs before
+ * the review the same push queued.
  *
  * <p>An automatic review also takes one of its repository's slots ({@link AutoReviewSlots}) and
  * waits on its worker for one while as many run as may, so the pull requests of one repository are
@@ -82,6 +85,7 @@ public final class ReviewDispatcher {
 
   static final String REVIEW_SPAN = "review";
   static final String CI_RECHECK_SPAN = "review.ci-recheck";
+  static final String APPROVAL_WITHDRAWAL_SPAN = "review.approval-withdrawal";
 
   private final ExecutorService reviewExecutor;
   private final ReviewOrchestrator orchestrator;
@@ -90,6 +94,7 @@ public final class ReviewDispatcher {
   private final DeferredReviews deferredReviews;
   private final ReviewSkipEmitter skipEmitter;
   private final CiHoldRevisit ciHoldRevisit;
+  private final ApprovalOnPush approvalOnPush;
   private final RunningReviewCoverage coverage;
   private final Tracer tracer;
 
@@ -104,6 +109,7 @@ public final class ReviewDispatcher {
       DeferredReviews deferredReviews,
       ReviewSkipEmitter skipEmitter,
       CiHoldRevisit ciHoldRevisit,
+      ApprovalOnPush approvalOnPush,
       RunningReviewCoverage coverage,
       OpenTelemetry openTelemetry) {
     this.reviewExecutor = reviewExecutor;
@@ -113,6 +119,7 @@ public final class ReviewDispatcher {
     this.deferredReviews = deferredReviews;
     this.skipEmitter = skipEmitter;
     this.ciHoldRevisit = ciHoldRevisit;
+    this.approvalOnPush = approvalOnPush;
     this.coverage = coverage;
     this.tracer = openTelemetry.getTracer("thrillhousebot");
   }
@@ -273,21 +280,47 @@ public final class ReviewDispatcher {
   public boolean dispatchCiRecheck(CiHoldRevisit.Recheck task) {
     var key = new PrKey(task.owner(), task.repo(), task.prNumber());
     var trigger = Span.current().getSpanContext();
+    return queueOnWorker(
+        key, "CI re-evaluation", task.headSha(), state -> state.onRecheck(task, trigger));
+  }
 
+  /**
+   * Queues the withdrawal of the bot's approval for a push ({@link ApprovalOnPush}), serialized
+   * with the pull request's reviews: the worker runs it after a review in flight, whose approval it
+   * must see, and before the review the same push queues, which may approve the new head. It makes
+   * no model call and takes no repository slot, and it runs whether or not a review follows: the
+   * rate window, a full queue and the trigger filters hold back reviews, not this. Pushes that
+   * arrive while one waits collapse into the latest head.
+   *
+   * @return {@code true} if the withdrawal was queued or coalesced; {@code false} if the executor
+   *     rejected the task, so the caller can roll back the webhook dedup state and a redelivery can
+   *     retry.
+   */
+  public boolean dispatchApprovalWithdrawal(ApprovalOnPush.Push task) {
+    var key = new PrKey(task.owner(), task.repo(), task.prNumber());
+    var trigger = Span.current().getSpanContext();
+    return queueOnWorker(
+        key, "Approval withdrawal", task.headSha(), state -> state.onWithdrawal(task, trigger));
+  }
+
+  /** Hands work other than a review to the pull request's worker, starting one when none runs. */
+  private boolean queueOnWorker(
+      PrKey key, String work, String headSha, Function<PerPrState, PerPrState.RecheckOutcome> add) {
     while (true) {
       var state = states.computeIfAbsent(key, ignored -> new PerPrState());
-      var outcome = state.onRecheck(task, trigger);
+      var outcome = add.apply(state);
       if (outcome == PerPrState.RecheckOutcome.RETRY) {
         states.remove(key, state);
         continue;
       }
       if (log.isInfoEnabled()) {
         log.info(
-            "CI re-evaluation for {}/{} #{} (sha: {}): {}",
-            task.owner(),
-            task.repo(),
-            task.prNumber(),
-            abbreviateSha(task.headSha()),
+            "{} for {}/{} #{} (sha: {}): {}",
+            work,
+            key.owner(),
+            key.repo(),
+            key.prNumber(),
+            abbreviateSha(headSha),
             outcome);
       }
       if (outcome == PerPrState.RecheckOutcome.STARTED) {
@@ -295,10 +328,11 @@ public final class ReviewDispatcher {
           reviewExecutor.execute(() -> runSerialized(key, state));
         } catch (RejectedExecutionException e) {
           log.warn(
-              "Failed to queue CI re-evaluation for {}/{} #{} — executor rejected task",
-              task.owner(),
-              task.repo(),
-              task.prNumber(),
+              "Failed to queue {} for {}/{} #{} — executor rejected task",
+              work,
+              key.owner(),
+              key.repo(),
+              key.prNumber(),
               e);
           retire(key, state);
           return false;
@@ -331,7 +365,15 @@ public final class ReviewDispatcher {
   private void drainReviews(PrKey key, PerPrState state) {
     while (true) {
       var next = state.takeNext();
-      if (next.recheck() != null) {
+      if (next.withdrawal() != null) {
+        var push = next.withdrawal();
+        inRunSpan(
+            APPROVAL_WITHDRAWAL_SPAN,
+            key,
+            push.headSha(),
+            next.served(),
+            () -> withdrawApproval(push));
+      } else if (next.recheck() != null) {
         var task = next.recheck();
         inRunSpan(CI_RECHECK_SPAN, key, task.headSha(), next.served(), () -> recheckCi(task));
       } else {
@@ -476,6 +518,23 @@ public final class ReviewDispatcher {
     }
   }
 
+  /** A withdrawal that fails is logged and never costs the pull request its queued review. */
+  private void withdrawApproval(ApprovalOnPush.Push push) {
+    try {
+      approvalOnPush.withdraw(push);
+    } catch (RuntimeException e) {
+      recordFailure(e);
+      log.warn(
+          "Could not withdraw the bot's approval on {}/{} #{} after the push of {} — an approval it"
+              + " gave still counts until a later push or review withdraws it",
+          push.owner(),
+          push.repo(),
+          push.prNumber(),
+          abbreviateSha(push.headSha()),
+          e);
+    }
+  }
+
   private void reviewBatch(
       PerPrState state, PerPrState.ReviewBatch batch, PerPrState.Served served) {
     logReviewStart(batch.request(), batch.coalesced(), batch.queueWaitMs());
@@ -583,11 +642,23 @@ public final class ReviewDispatcher {
     /** At most one CI re-evaluation waits per PR; it runs after every queued review (#825). */
     CiHoldRevisit.Recheck pendingRecheck;
 
+    /** At most one approval withdrawal waits per PR, for the latest push; it runs first. */
+    ApprovalOnPush.Push pendingWithdrawal;
+
+    /**
+     * Whether the worker has done nothing since it started but withdraw approvals. A review
+     * dispatched meanwhile replaces no other request, so it is not counted as coalesced.
+     */
+    private boolean onlyWithdrawing;
+
     /** The requests the next review serves, and the spans they were dispatched under (#1263). */
     private final Triggers reviewTriggers = new Triggers();
 
     /** The pending CI re-evaluation's requests and their dispatching spans (#1263). */
     private final Triggers recheckTriggers = new Triggers();
+
+    /** The pending approval withdrawal's requests and their dispatching spans. */
+    private final Triggers withdrawalTriggers = new Triggers();
 
     /**
      * The running review's span, invalid while no review runs. A {@code /review} it covers is
@@ -616,10 +687,14 @@ public final class ReviewDispatcher {
     record ReviewBatch(ReviewOrchestrator.ReviewRequest request, int coalesced, long queueWaitMs) {}
 
     /**
-     * What the worker runs next: a review batch, or a CI re-evaluation when no review waits, with
-     * the requests it serves.
+     * What the worker runs next: an approval withdrawal when one waits, else a review batch, or a
+     * CI re-evaluation when no review waits, with the requests it serves.
      */
-    record Next(ReviewBatch review, CiHoldRevisit.Recheck recheck, Served served) {}
+    record Next(
+        ReviewBatch review,
+        CiHoldRevisit.Recheck recheck,
+        ApprovalOnPush.Push withdrawal,
+        Served served) {}
 
     /**
      * The requests a run serves: how many, and the spans the first {@link #MAX_LINKED_TRIGGERS} of
@@ -663,10 +738,13 @@ public final class ReviewDispatcher {
         if (retired) {
           return new DispatchResult(true, false, 0, false);
         }
+        var first = latestRequest == null && onlyWithdrawing;
         latestRequest = req;
         reviewTriggers.add(trigger);
         if (running) {
-          coalesced++;
+          if (!first) {
+            coalesced++;
+          }
           return new DispatchResult(false, false, coalesced, false);
         }
         running = true;
@@ -750,25 +828,48 @@ public final class ReviewDispatcher {
       }
     }
 
+    RecheckOutcome onWithdrawal(ApprovalOnPush.Push task, SpanContext trigger) {
+      synchronized (lock) {
+        if (retired) {
+          return RecheckOutcome.RETRY;
+        }
+        pendingWithdrawal = task;
+        withdrawalTriggers.add(trigger);
+        if (running) {
+          return RecheckOutcome.QUEUED;
+        }
+        running = true;
+        onlyWithdrawing = true;
+        queuedAtMs = System.currentTimeMillis();
+        return RecheckOutcome.STARTED;
+      }
+    }
+
     Next takeNext() {
       synchronized (lock) {
+        if (pendingWithdrawal != null) {
+          var push = pendingWithdrawal;
+          pendingWithdrawal = null;
+          return new Next(null, null, push, withdrawalTriggers.drain());
+        }
+        onlyWithdrawing = false;
         if (latestRequest == null) {
           var task = pendingRecheck;
           pendingRecheck = null;
-          return new Next(null, task, recheckTriggers.drain());
+          return new Next(null, task, null, recheckTriggers.drain());
         }
         var req = latestRequest;
         latestRequest = null;
         var batch = new ReviewBatch(req, coalesced, System.currentTimeMillis() - queuedAtMs);
         coalesced = 0;
         queuedAtMs = System.currentTimeMillis();
-        return new Next(batch, null, reviewTriggers.drain());
+        return new Next(batch, null, null, reviewTriggers.drain());
       }
     }
 
     boolean tryRetireIfIdle() {
       synchronized (lock) {
-        if (latestRequest != null || pendingRecheck != null) {
+        if (latestRequest != null || pendingRecheck != null || pendingWithdrawal != null) {
           return false;
         }
         retired = true;

@@ -63,6 +63,7 @@ class ReviewDispatcherTracingTest {
   private OpenTelemetrySdk openTelemetry;
   private ReviewOrchestrator orchestrator;
   private CiHoldRevisit ciHoldRevisit;
+  private ApprovalOnPush approvalOnPush;
   private RunningReviewCoverage coverage;
   private ExecutorService executor;
   private ReviewDispatcher dispatcher;
@@ -78,6 +79,7 @@ class ReviewDispatcherTracingTest {
             .build();
     orchestrator = mock(ReviewOrchestrator.class);
     ciHoldRevisit = mock(CiHoldRevisit.class);
+    approvalOnPush = mock(ApprovalOnPush.class);
     coverage = mock(RunningReviewCoverage.class);
     executor = Executors.newSingleThreadExecutor();
     dispatcher =
@@ -89,6 +91,7 @@ class ReviewDispatcherTracingTest {
             new DeferredReviews(),
             mock(ReviewSkipEmitter.class),
             ciHoldRevisit,
+            approvalOnPush,
             coverage,
             openTelemetry);
   }
@@ -293,6 +296,25 @@ class ReviewDispatcherTracingTest {
     assertEquals(List.of(span.getSpanContext()), linkedContexts(recheck));
     assertEquals("sha9", attribute(recheck, "vcs.ref.head.revision"));
     assertEquals(StatusCode.ERROR, recheck.getStatus().getStatusCode());
+  }
+
+  @Test
+  void anApprovalWithdrawalRunsInItsOwnSpanLinkedToItsDelivery() {
+    var push = new ApprovalOnPush.Push("owner", "repo", 11, "sha9", 1L);
+    doThrow(new IllegalStateException("boom")).when(approvalOnPush).withdraw(push);
+
+    var span = openTelemetry.getTracer("test").spanBuilder("pull_request").startSpan();
+    try (var _ = span.makeCurrent()) {
+      assertTrue(dispatcher.dispatchApprovalWithdrawal(push));
+    } finally {
+      span.end();
+    }
+
+    var withdrawal = awaitSpan(ReviewDispatcher.APPROVAL_WITHDRAWAL_SPAN);
+    assertFalse(withdrawal.getParentSpanContext().isValid());
+    assertEquals(List.of(span.getSpanContext()), linkedContexts(withdrawal));
+    assertEquals("sha9", attribute(withdrawal, "vcs.ref.head.revision"));
+    assertEquals(StatusCode.ERROR, withdrawal.getStatus().getStatusCode());
   }
 
   /** Dispatches {@code req} with a span of {@code name} current, as the webhook thread does. */
