@@ -17,14 +17,11 @@ on:
       - "README.md"
       - "CONTRIBUTING.md"
       - ".github/workflows/docs.yml"
-  # Manual republish of the latest release tag (or any ref) without cutting a
-  # new version — useful after a docs hotfix on an already-published tag.
+  # Manual republish of a release without cutting a new version, for example after a docs
+  # fix: `gh workflow run docs.yml --ref vX.Y.Z`. The run builds the ref it was started on
+  # and takes no other ref as input, so what is deployed is what the github-pages
+  # environment's branch and tag rules allowed.
   workflow_dispatch:
-    inputs:
-      ref:
-        description: "Git ref to build and deploy (tag, branch, or SHA). Empty = this workflow ref."
-        required: false
-        type: string
 
 permissions:
   contents: read
@@ -43,16 +40,16 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # No `ref:`. Every run builds its own commit: the release's tag, the ref a manual run
+        # was started on, or the pull request's merge commit.
         with:
-          # Release / dispatch: build the tagged (or requested) tree so Pages
-          # matches that version, not whatever happens to be on the default branch.
-          ref: ${{ inputs.ref || github.event.release.tag_name || github.ref }}
+          persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: website/package-lock.json
-      - run: npm ci
+      - run: npm ci --ignore-scripts
         working-directory: website
       - run: npm run build
         working-directory: website

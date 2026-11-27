@@ -11,6 +11,15 @@ cannot resolve its review threads.
 
 ### Added
 
+- **Static-analysis context** (`REVIEW_STATIC_ANALYSIS_ENABLED`, off by default): the review prompt
+  gets the annotations that completed checks attached to the changed files, fenced as untrusted
+  data. That covers Code Scanning alerts, which GitHub publishes as annotations of a check run
+  named after the tool (such as "CodeQL") that passes unless an alert reaches its failure
+  threshold, and linters that annotate. With `REVIEW_CI_CONTEXT_ENABLED` on, a failing check run
+  whose annotations the CI-failure section already reads is not repeated. The checks come from the CI gate's own read and one
+  annotations page per annotated check (at most five, other apps before GitHub Actions jobs), so
+  there is no new GitHub App permission.
+  `REVIEW_STATIC_ANALYSIS_MAX_CHARS` (default 3000) caps the section. (#34)
 - **Opt-in Agent next steps in the PR summary** (#1442): when `REVIEW_AGENT_NEXT_STEPS_ENABLED` is on,
   the summary comment gains a deterministic subsection under its heading with the reviewed head,
   open-finding count, names of pending or failing required checks and maintainer command hints, so
@@ -46,10 +55,69 @@ cannot resolve its review threads.
   writes no file, commit or branch.
 - **A GitHub Enterprise setup guide**: `docs/GITHUB_ENTERPRISE.md` and a docs-site page say which
   GitHub Enterprise products work and what to set up on GitHub for an organization (#1488).
+### Security
+
+- **Text a model wrote can no longer notify people, post raw HTML or offer its own suggestion**:
+  a finding's title and description, a status note, a file summary, a description gap, a reply and
+  the `/describe` and `/changelog` drafts were posted as the model wrote them, so text steered by a
+  pull request could `@`-mention users and teams, hide content in HTML, forge one of the bot's
+  hidden markers, or add a second `suggestion` block a reader could commit with one click. An `@`
+  that could start a mention is now followed by a zero-width space (`@&#8203;name`), which reads
+  the same and notifies nobody; an `@` directly after a letter or digit, as in an email address,
+  is unchanged, and so is one after a `/` in the path of an `http(s)://` address (bare, as a
+  markdown link's destination, or in `<…>`), where GitHub reads no mention. In descriptions, notes and replies a `<` that could open a tag or comment is
+  escaped, a fenced block marked `suggestion` becomes a plain code block, and an unclosed fence is
+  closed. Code spans and fenced code keep their content byte for byte; a fenced block nested in a
+  list or quote is moved to the top level. A title copied from the rendered summary into an
+  `@thrillhousebot resolved` or `declined` comment still names its finding.
+- **The skip counter on `/metrics` no longer names repositories**: `thrillhouse.review.skips`
+  carried a `repository` label (`owner/repo`), and the Prometheus endpoint is unauthenticated, so
+  anyone who could reach it could list private repository names. The counter keeps `reason` only,
+  over OTLP as well. **Dashboards or alerts that group or filter this metric by `repository` need
+  updating**; the repository and pull request of each skip are still in the
+  `Automatic review skipped` log line.
+- **Dashboard WebSocket access is re-checked with the keepalive off**: `WEBSOCKET_KEEPALIVE_MS=0`
+  also stopped the periodic check of what each open connection may still read, so a login whose
+  access was removed kept receiving events until it disconnected. The check now runs every 25
+  seconds on a timer of its own, whatever the keepalive is set to.
+- **Installation tokens are limited to the repository being worked on**: every token was minted
+  for all repositories of the installation. Reviews, commands, replies, reactions and the other
+  work on one repository now use a token that reaches that repository only, with the same
+  permissions; a refreshed token keeps the same limit. The dashboard backfill, which lists an
+  installation's repositories, and the calls made through the GitHub App extension's own client
+  (repository settings, instructions, permission checks, linked issues, dashboard access) still
+  use installation-wide tokens.
+- **Lines exempted from the security scan are listed in the summary**: a
+  `thrillhousebot:allow-secret` or `thrillhousebot:allow-iac` comment silenced a match with no
+  trace, and anyone who can push to the pull request can write one. The summary's review-scope
+  note now counts the exempted lines and names them by `path:line` and marker, never by content
+  (the first 30 are named, the rest are a count), so a reviewer can check that each one is
+  deliberate.
+- **The hosted installer no longer sends the manifest code to smee.io**: with a Smee channel as
+  the host, GitHub redirected the browser to the channel URL with the one-time `?code=` that
+  converts into the new App's private key and secrets. The redirect now goes to
+  `http://localhost:8080`, as the OAuth callback already did; the webhook stays on the channel.
+- **A file read refuses a path that leaves the repository**: a path from model output or a
+  repository file with a `..` segment or a leading `/` could address another endpoint of the
+  GitHub API with the bot's token. Such a path is now treated as a missing file without a request.
 - **A "Basis" block on each finding** (#1435, off by default): `REVIEW_SHOW_EVIDENCE=true` prints
   under the description what the review established for it: the path-scoped rules covering the
   file, the failing check the finding cites, the second pass's verdict, and the review learning
   that demoted it. Each line is a name, path, id or fixed phrase, and is left out when empty.
+- **GitHub App authentication goes through the Quarkiverse GitHub App extension** (#1314): the
+  extension signs the App JWT, and its application client mints installation tokens and lists the
+  App's installations, so the bot's own JWT signing and the `nimbus-jose-jwt` dependency are gone.
+  Minting a token now takes three GitHub requests instead of one (the App, the installation, then
+  the token), and the installation listing adds one for the App. These calls follow
+  `HTTP_CONNECT_TIMEOUT` and `HTTP_REQUEST_TIMEOUT` (10s each by default) rather than the REST
+  client's settings. They go to `GITHUB_API_URL`. hub4j's response logger is capped at `INFO`: below
+  that it writes out an answer it cannot parse, which for a token request holds the token.
+- **Workflow run, artifact and installation repository listings go through hub4j** (#1314): the
+  patch coverage lookup and the startup scope backfill make them with the same installation token
+  as before, to `GITHUB_API_URL`. The coverage lookup adds one request, to read the repository.
+  These calls follow `HTTP_CONNECT_TIMEOUT` and `HTTP_REQUEST_TIMEOUT` (10s each by default)
+  rather than the REST client's settings.
+
 
 ### Fixed
 
@@ -68,6 +136,19 @@ cannot resolve its review threads.
 - **A refused thread resolve says why** (#1471): GitHub's reason is logged instead of being
   discarded, and a missing permission is named in the reply to a `resolved` directive and to
   `/resolve`, which no longer answers that there is nothing to resolve.
+- **Dashboard links and issue URLs follow `GITHUB_URL`** (#1491): the two pull request links in the
+  dashboard's session history pointed at `github.com` whatever was configured, and a linked issue
+  written as a full URL was only recognised there. The session payloads now carry
+  `pullRequestUrl`, and only issue URLs on the configured web address are read.
+- **A one-line private key no longer stops the application at start** (#1314): the extension, which
+  reads `GITHUB_PRIVATE_KEY` too, rejected the form `.env.example` asks for (one line with literal
+  `\n` escapes) and a key without its PEM header and footer. Every key the start-up check accepts
+  is now handed to the extension in a form it can read, and a padded `GITHUB_APP_ID` is stripped
+  for it as the bot's own signer did.
+- **The summary comment follows a verdict held on CI** (#1462): when CI turns green and the held
+  approval is posted, the summary no longer says it cannot be approved or lists the checks as
+  pending. While the hold stays, its table shows the checks' current state. The Agent next steps
+  section, when on, follows it too. A summary posted before this change is not rewritten.
 
 ### Security
 
@@ -85,10 +166,85 @@ cannot resolve its review threads.
   context only". When the permission cannot be read, nobody is confirmed for that review and
   findings stay open until the next one. The bot's reply to a directive uses the same check. No new
   GitHub App permission is needed.
+- **Text from a pull request can no longer make a review spend minutes in pattern matching.**
+  Several patterns read to the end of their input from every place a match could start, so the
+  time grew with the square of the input's length: a description made of line breaks (about 8
+  seconds at GitHub's 65,536-character limit, on the checked "Bug fix" box test), one added line
+  made of `val`, `fun` or `const a=(` (minutes at a few hundred thousand characters), and, with
+  `REVIEW_DIMENSION_ROUTING_ENABLED` or CI-failure context on, an added line that is one long
+  name. Each of these patterns now reads a bounded stretch or reads each word once. An added line
+  longer than 1,000 characters is no longer scanned for parser-like code, so a minified or
+  generated line no longer brings the heuristic-code guidance into the prompt. A "Bug fix"
+  checkbox is read on its own line only: a list marker on one line and `[x]` on the next no longer
+  counts.
+- **A long run of blanks in a model answer no longer stalls the clean-up of its text.** The
+  patterns that tidy finding descriptions, description gaps, file summaries and quoted code spans
+  started at every blank of a run and read the rest each time: a description with a run of 16,000
+  spaces took about 15 seconds, four times that for twice the length. Each now reads a run once,
+  from its first blank, and removes what it removed before.
+- **A glob in `.github/thrillhousebot.yml` can no longer stall a review.** `ignored-files` and
+  `path-instructions` globs were matched by the JDK's backtracking matcher, where each `*` multiplies
+  the work: `*a*a*a*a*b` against a 250-character file name took over a minute and one more wildcard
+  took hours. They are now matched without backtracking, in time proportional to the glob's length
+  times the path's. The syntax and what a glob matches are unchanged. A glob longer than 500
+  characters is dropped with a warning, as an unparseable glob is.
+- **Malformed input no longer ends a review with an error.** A hunk header whose start line has
+  ten or more digits (`@@ -1 +99999999999 @@`) threw a `NumberFormatException`; it now opens no
+  hunk, like any header that cannot be read. A finding description naming a path of several
+  thousand directories overflowed the stack while its `file:line` mention was moved; such a path
+  is now read without recursion. A model answer whose status map has a key of ten or more digits
+  threw too, and now reads as naming no finding.
+
 - **The native image moves to the 2026-11-25 UBI9 micro base**, which ships `pcre2` 10.40-7.el9_8
   (RHSA-2026:81532) with the fixes for CVE-2026-89161, CVE-2026-86145 and CVE-2026-103111, so their
   `.trivyignore` entries are removed. CVE-2026-84782 (`libssl3`, DTLS only) stays ignored for the
   `-distroless` image: Debian has a fixed package, but the distroless base has not picked it up.
+- **The release pipeline checks what it publishes**: a release now needs a signed tag on
+  `main`, made with an SSH signing key GitHub lists for a maintainer, and images that carry
+  provenance from `ci.yml` on `main` for the tagged commit. Before, any `vX.Y.Z` tag on any commit
+  started a release, and whatever image held the commit's tag in the registry was scanned, promoted
+  and signed by tag name. The images are now resolved to digests once and scanned, tagged, signed
+  and unpacked by digest; a published version tag is never moved to other images; the publishing
+  jobs run in the `release` environment; `crane` is checked against a pinned SHA-256. Releases
+  through v0.9.3 cannot be run again with `workflow_dispatch`, because their images predate the CI
+  provenance. The README's verification commands now name the release workflow and the tag; the
+  old cosign pattern was unanchored and matched any workflow in the repository.
+- **A test image built from a pull request can no longer plant a build cache or reach the
+  registry token**: with `pr_number` set, the Docker test image workflow ran the pull request's
+  build in the job that held `packages: write`, and saved its Maven, npm and Docker layer caches
+  where `main` CI and the release workflow restored them. The build now runs in read-only jobs
+  and hands over an artifact, a pull request build saves no cache, and no job restores a Maven
+  cache through the prefix every job shared. The Maven wrapper checks the SHA-256 of the
+  distribution it downloads, and CI's native builds use a builder image pinned by digest.
+- **The docs deploy builds only the ref it runs on**: `docs.yml` took a `ref` input and deployed
+  any branch or commit to the live site from a run started on an allowed ref. The input is gone,
+  so the `github-pages` environment's branch and tag rules decide what can be published.
+- **Every path has a code owner**: `CODEOWNERS` had entries for the workflows and two script
+  directories only, so the required code-owner review did not cover the build files, the composite
+  actions or Dependabot's configuration. A default entry now covers everything. Dependabot also
+  watches the composite action directory, whose `upload-sarif` pin had fallen a major version
+  behind the workflows.
+- **Automatic reviews are bounded without any setting**: a pull request author needs no write
+  access to start a review, and until now every limit on automatic reviews shipped switched off,
+  so the number of pull requests and pushes alone decided how many reviews and model calls ran.
+  The defaults are now `AUTO_REVIEW_MIN_INTERVAL=1m`, `REVIEW_MAX_TOKENS_PER_REVIEW=1000000` and
+  `AI_MAX_CONCURRENT_CALLS=16`, and two new settings limit one repository to four automatic
+  reviews at once (`AUTO_REVIEW_MAX_CONCURRENT_PER_REPO`) with up to fifty waiting, one per pull
+  request (`AUTO_REVIEW_MAX_QUEUED_PER_REPO`). Reviews past the first limit wait and are still
+  reviewed; one past the second is skipped as `REPOSITORY_QUEUE_FULL`. Converting a pull request
+  to draft and back no longer starts a new review of the same commit each time: ready-for-review
+  lifts the interval once per head commit. Setting any of these to `0` turns it off, as before.
+  **What you will notice:** a push, reopen or repeated ready-for-review within a minute of an
+  automatic review of the same pull request is skipped (`RATE_LIMITED`) and not reviewed later,
+  so push again or comment `/review`; a deployment that raised `REVIEW_MAX_INPUT_TOKENS` or
+  `REVIEW_MAX_AI_CALLS` should raise `REVIEW_MAX_TOKENS_PER_REVIEW` too (the bot warns at startup
+  when the planned input is above it); and a provider that allows fewer than sixteen concurrent
+  requests still needs `AI_MAX_CONCURRENT_CALLS` set to its limit.
+- **The bot writes nothing for a command before checking who sent it**: `/review` on a paused pull
+  request posted the paused notice for any commenter, every command got the 👀 reaction whoever
+  sent it, and `/help` was answered every time anyone asked. The write-access check now comes
+  first, so a commenter it refuses gets no reaction, no notice and no reply, and `/help` from a
+  commenter without write access is answered once per pull request per hour.
 
 ## [0.9.3] - 2026-11-26
 

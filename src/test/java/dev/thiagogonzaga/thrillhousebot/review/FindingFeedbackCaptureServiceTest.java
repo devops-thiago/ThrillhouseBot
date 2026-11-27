@@ -78,7 +78,7 @@ class FindingFeedbackCaptureServiceTest {
 
   @Test
   void captureOnReviewReplyRejectsNullOrBlankActorBeforePermissionLookup() {
-    when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
+    when(authClient.getAuthHeader(9L, "repo")).thenReturn("Bearer t");
 
     capture.captureOnReviewReply(
         new RepoScope(9L, TestScopes.REPOSITORY_ID),
@@ -100,7 +100,7 @@ class FindingFeedbackCaptureServiceTest {
 
   @Test
   void captureOnReviewReplyRejectsNullAssociationBeforePermissionLookup() {
-    when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
+    when(authClient.getAuthHeader(9L, "repo")).thenReturn("Bearer t");
 
     capture.captureOnReviewReply(
         new RepoScope(9L, TestScopes.REPOSITORY_ID),
@@ -115,7 +115,7 @@ class FindingFeedbackCaptureServiceTest {
 
   @Test
   void captureOnReviewReplyRejectsUnrecognizedPermission() throws Exception {
-    when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
+    when(authClient.getAuthHeader(9L, "repo")).thenReturn("Bearer t");
     doReturn(GHPermissionType.UNKNOWN).when(repository).getPermission("null-response");
     doReturn(GHPermissionType.UNKNOWN).when(repository).getPermission("null-level");
 
@@ -139,7 +139,7 @@ class FindingFeedbackCaptureServiceTest {
 
   @Test
   void captureOnReviewReplyIgnoresPermissionApiException() throws Exception {
-    when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
+    when(authClient.getAuthHeader(9L, "repo")).thenReturn("Bearer t");
     doThrow(new RuntimeException("api down")).when(repository).getPermission("octocat");
 
     assertDoesNotThrow(
@@ -157,7 +157,7 @@ class FindingFeedbackCaptureServiceTest {
 
   @Test
   void captureOnReviewReplyIgnoresUnresolvableRepository() throws Exception {
-    when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
+    when(authClient.getAuthHeader(9L, "repo")).thenReturn("Bearer t");
     doThrow(new java.io.IOException("not found")).when(gitHub).getRepository("owner/repo");
 
     assertDoesNotThrow(
@@ -175,7 +175,7 @@ class FindingFeedbackCaptureServiceTest {
 
   @Test
   void captureOnReviewReplySkipsRootCommentWithNullUser() {
-    when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
+    when(authClient.getAuthHeader(9L, "repo")).thenReturn("Bearer t");
     when(reviewClient.getPullRequestComment(
             anyString(), anyString(), eq("owner"), eq("repo"), eq(99L)))
         .thenReturn(
@@ -200,7 +200,7 @@ class FindingFeedbackCaptureServiceTest {
     var started = new CountDownLatch(maxConcurrentCaptures);
     var release = new CountDownLatch(1);
     var completed = new CountDownLatch(maxConcurrentCaptures);
-    when(authClient.getAuthHeader(anyLong()))
+    when(authClient.getAuthHeader(anyLong(), anyString()))
         .thenAnswer(
             ignored -> {
               started.countDown();
@@ -236,8 +236,8 @@ class FindingFeedbackCaptureServiceTest {
                   99L,
                   new FindingFeedbackCaptureService.ReviewReply("octocat", "OWNER", "not useful")));
 
-      verify(authClient, times(maxConcurrentCaptures)).getAuthHeader(anyLong());
-      verify(authClient, never()).getAuthHeader(99L);
+      verify(authClient, times(maxConcurrentCaptures)).getAuthHeader(anyLong(), anyString());
+      verify(authClient, never()).getAuthHeader(99L, "repo");
     } finally {
       release.countDown();
     }
@@ -339,7 +339,7 @@ class FindingFeedbackCaptureServiceTest {
 
   @Test
   void captureOnReviewReplyRejectsNonMaintainerAssociationBeforeFetchingRoot() {
-    when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
+    when(authClient.getAuthHeader(9L, "repo")).thenReturn("Bearer t");
 
     capture.captureOnReviewReply(
         new RepoScope(9L, TestScopes.REPOSITORY_ID),
@@ -355,7 +355,7 @@ class FindingFeedbackCaptureServiceTest {
 
   @Test
   void captureOnReviewReplyRejectsReadOnlyCollaboratorBeforeFetchingRoot() throws Exception {
-    when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
+    when(authClient.getAuthHeader(9L, "repo")).thenReturn("Bearer t");
     doReturn(GHPermissionType.READ).when(repository).getPermission("octocat");
 
     capture.captureOnReviewReply(
@@ -385,7 +385,7 @@ class FindingFeedbackCaptureServiceTest {
 
   @Test
   void captureOnReviewReplyFetchesRootAndRecordsHeuristic() {
-    when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
+    when(authClient.getAuthHeader(9L, "repo")).thenReturn("Bearer t");
     when(reviewClient.getPullRequestComment(
             anyString(), anyString(), eq("owner"), eq("repo"), eq(99L)))
         .thenReturn(
@@ -424,7 +424,7 @@ class FindingFeedbackCaptureServiceTest {
 
   @Test
   void captureOnReviewReplyIgnoresNonFindingThreads() {
-    when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
+    when(authClient.getAuthHeader(9L, "repo")).thenReturn("Bearer t");
     when(reviewClient.getPullRequestComment(
             anyString(), anyString(), eq("owner"), eq("repo"), eq(99L)))
         .thenReturn(
@@ -663,7 +663,7 @@ class FindingFeedbackCaptureServiceTest {
 
   @Test
   void fetchCommentBodyFailureSkipsCapture() {
-    when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
+    when(authClient.getAuthHeader(9L, "repo")).thenReturn("Bearer t");
     when(reviewClient.getPullRequestComment(any(), any(), any(), any(), anyLong()))
         .thenThrow(new RuntimeException("gone"));
     capture.captureOnReviewReply(
@@ -769,7 +769,7 @@ class FindingFeedbackCaptureServiceTest {
 
   @Test
   void scheduleCaptureOnReviewReplyRunsSuccessfully() {
-    when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
+    when(authClient.getAuthHeader(9L, "repo")).thenReturn("Bearer t");
     when(reviewClient.getPullRequestComment(any(), any(), eq("owner"), eq("repo"), eq(99L)))
         .thenReturn(
             new GitHubReviewClient.PullRequestComment(
@@ -789,7 +789,7 @@ class FindingFeedbackCaptureServiceTest {
         7,
         99L,
         new FindingFeedbackCaptureService.ReviewReply("octocat", "OWNER", "thanks"));
-    verify(authClient, timeout(2000)).getAuthHeader(9L);
+    verify(authClient, timeout(2000)).getAuthHeader(9L, "repo");
     verify(reviewClient, timeout(2000))
         .getPullRequestComment(any(), any(), eq("owner"), eq("repo"), eq(99L));
   }
@@ -798,7 +798,7 @@ class FindingFeedbackCaptureServiceTest {
   void scheduleCaptureOnReviewReplyStopsWhenTheBotRootCarriesNoFindingMarker() {
     // A bot comment that is not a finding — a summary or a conversational reply — has no index to
     // attribute feedback to, so capture must stop before polling reactions.
-    when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
+    when(authClient.getAuthHeader(9L, "repo")).thenReturn("Bearer t");
     when(reviewClient.getPullRequestComment(any(), any(), eq("owner"), eq("repo"), eq(99L)))
         .thenReturn(
             new GitHubReviewClient.PullRequestComment(
@@ -830,7 +830,7 @@ class FindingFeedbackCaptureServiceTest {
 
   @Test
   void fetchCommentBodyNullCommentSkipsCapture() {
-    when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
+    when(authClient.getAuthHeader(9L, "repo")).thenReturn("Bearer t");
     when(reviewClient.getPullRequestComment(any(), any(), any(), any(), anyLong()))
         .thenReturn(null);
     capture.captureOnReviewReply(
@@ -881,7 +881,8 @@ class FindingFeedbackCaptureServiceTest {
 
   @Test
   void scheduleCaptureOnReviewReplyRunsAsyncAndSwallowsErrors() {
-    when(authClient.getAuthHeader(anyLong())).thenThrow(new RuntimeException("auth fail"));
+    when(authClient.getAuthHeader(anyLong(), anyString()))
+        .thenThrow(new RuntimeException("auth fail"));
     capture.scheduleCaptureOnReviewReply(
         new RepoScope(1L, TestScopes.REPOSITORY_ID),
         "o",
@@ -889,7 +890,7 @@ class FindingFeedbackCaptureServiceTest {
         1,
         9L,
         new FindingFeedbackCaptureService.ReviewReply("u", "OWNER", "not useful"));
-    verify(authClient, timeout(2000)).getAuthHeader(1L);
+    verify(authClient, timeout(2000)).getAuthHeader(1L, "r");
   }
 
   @Test

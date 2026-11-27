@@ -87,7 +87,7 @@ class MaintainerReplyServiceTest {
     when(reasoning.effort()).thenReturn("low");
     tokenLedger = new ReviewTokenLedger(config);
     service = serviceWith(diffFormatter);
-    when(authClient.getAuthHeader(anyLong())).thenReturn(AUTH);
+    when(authClient.getAuthHeader(anyLong(), anyString())).thenReturn(AUTH);
   }
 
   /**
@@ -486,7 +486,7 @@ class MaintainerReplyServiceTest {
     service.handle(reviewThreadTask(false));
 
     verifyNoInteractions(reviewClient, commentClient, replyAssistant);
-    verify(authClient, never()).getAuthHeader(anyLong());
+    verify(authClient, never()).getAuthHeader(anyLong(), anyString());
   }
 
   @Test
@@ -666,7 +666,8 @@ class MaintainerReplyServiceTest {
         .replyToReviewComment(
             eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), eq(99L), reply.capture());
     assertEquals(
-        List.of(answer, "Line 3 of <path> is fine.", "Line 3 of <path> is fine."),
+        // The placeholder is posted with its "<" escaped, so it shows instead of reading as a tag.
+        List.of(answer, "Line 3 of &lt;path> is fine.", "Line 3 of &lt;path> is fine."),
         reply.getAllValues().stream()
             .map(GitHubReviewClient.ReplyToReviewCommentRequest::body)
             .toList());

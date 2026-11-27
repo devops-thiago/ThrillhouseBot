@@ -101,8 +101,10 @@
   <p>
     GitHub also redirects to your host with a one-time <code>?code=</code>
     parameter (the bot isn't running yet, so the page won't load — that's
-    fine). You can exchange it for a ready-made <code>.env</code> instead of
-    copying values by hand:
+    fine). With a Smee channel the redirect goes to
+    <code>http://localhost:8080</code>, never to smee.io, so the code stays in
+    your browser. You can exchange it for a ready-made <code>.env</code>
+    instead of copying values by hand:
   </p>
   <pre>gh api --method POST /app-manifests/&lt;code&gt;/conversions \
   | java scripts/GenEnv.java --host &lt;your-host&gt;</pre>
@@ -221,6 +223,10 @@
       const callbackUrl = normalized.isSmee
         ? "http://localhost:8080/api/auth/callback"
         : base + "/api/auth/callback";
+      // GitHub sends the browser here with the one-time ?code= that converts
+      // into the App's private key and secrets. A Smee channel is a public
+      // third-party page, so the code goes to the local bot's address instead.
+      const redirectUrl = normalized.isSmee ? "http://localhost:8080" : base;
       const manifest = {
         name: "ThrillhouseBot",
         url: base,
@@ -229,7 +235,7 @@
           url: webhookUrl,
           active: true
         },
-        redirect_url: base,
+        redirect_url: redirectUrl,
         callback_urls: [
           callbackUrl
         ],

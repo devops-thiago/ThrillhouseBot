@@ -58,6 +58,9 @@ public class ReviewResponseParser {
 
   private static final String STATUS = "status";
 
+  /** The most digits a finding number read from a status map key may have: it fits an int. */
+  private static final int MAX_FINDING_ID_DIGITS = 9;
+
   /** Criterion verdicts read from one answer, at most: an issue lists a handful of criteria. */
   static final int MAX_CRITERION_VERDICTS = 50;
 
@@ -641,10 +644,16 @@ public class ReviewResponseParser {
     return item;
   }
 
-  /** The map key is usually the finding number, possibly wrapped in text ("finding_2"). */
+  /**
+   * The map key is usually the finding number, possibly wrapped in text ("finding_2"). A key with
+   * no digit, or with more digits than any finding number has, names no finding and reads as 0, as
+   * an answer may hold any key at all.
+   */
   private static int parseFindingId(String key) {
     var digits = key.replaceAll("\\D", "");
-    return digits.isEmpty() ? 0 : Integer.parseInt(digits);
+    return digits.isEmpty() || digits.length() > MAX_FINDING_ID_DIGITS
+        ? 0
+        : Integer.parseInt(digits);
   }
 
   /**

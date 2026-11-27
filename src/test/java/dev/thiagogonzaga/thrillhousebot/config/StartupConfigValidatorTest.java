@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import io.smallrye.config.ConfigMapping;
 import io.smallrye.config.PropertiesConfigSource;
@@ -35,6 +36,8 @@ import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 class StartupConfigValidatorTest {
 
@@ -81,9 +84,13 @@ class StartupConfigValidatorTest {
     private int maxAiCalls = 6;
     private double tokenSafetyMargin = 0.9;
     private long maxTokensPerReview = 0;
+    private int autoReviewMaxConcurrentPerRepo = 4;
+    private int autoReviewMaxQueuedPerRepo = 50;
     private String ciGating = "strict";
     private boolean ciContextEnabled = false;
     private int ciContextMaxChars = 4000;
+    private boolean staticAnalysisEnabled = false;
+    private int staticAnalysisMaxChars = 3000;
     private boolean learningsEnabled = false;
     private boolean declineRecheckEnabled = true;
     private int[] learningsCaps = {100, 10, 3000};
@@ -171,6 +178,12 @@ class StartupConfigValidatorTest {
       return this;
     }
 
+    ConfigBuilder autoReviewLimits(int maxConcurrent, int maxQueued) {
+      this.autoReviewMaxConcurrentPerRepo = maxConcurrent;
+      this.autoReviewMaxQueuedPerRepo = maxQueued;
+      return this;
+    }
+
     ConfigBuilder ciGating(String v) {
       this.ciGating = v;
       return this;
@@ -187,6 +200,12 @@ class StartupConfigValidatorTest {
     ConfigBuilder ciContext(boolean enabled, int maxChars) {
       this.ciContextEnabled = enabled;
       this.ciContextMaxChars = maxChars;
+      return this;
+    }
+
+    ConfigBuilder staticAnalysis(boolean enabled, int maxChars) {
+      this.staticAnalysisEnabled = enabled;
+      this.staticAnalysisMaxChars = maxChars;
       return this;
     }
 
@@ -292,11 +311,19 @@ class StartupConfigValidatorTest {
       lenient().when(review.maxAiCalls()).thenReturn(maxAiCalls);
       lenient().when(review.tokenSafetyMargin()).thenReturn(tokenSafetyMargin);
       lenient().when(review.maxTokensPerReview()).thenReturn(maxTokensPerReview);
+      lenient()
+          .when(review.autoReviewMaxConcurrentPerRepo())
+          .thenReturn(autoReviewMaxConcurrentPerRepo);
+      lenient().when(review.autoReviewMaxQueuedPerRepo()).thenReturn(autoReviewMaxQueuedPerRepo);
       lenient().when(review.ciGating()).thenReturn(ciGating);
       var ciContext = mock(ThrillhouseConfig.CiContextConfig.class);
       lenient().when(review.ciContext()).thenReturn(ciContext);
       lenient().when(ciContext.enabled()).thenReturn(ciContextEnabled);
       lenient().when(ciContext.maxChars()).thenReturn(ciContextMaxChars);
+      var staticAnalysis = mock(ThrillhouseConfig.StaticAnalysisConfig.class);
+      lenient().when(review.staticAnalysis()).thenReturn(staticAnalysis);
+      lenient().when(staticAnalysis.enabled()).thenReturn(staticAnalysisEnabled);
+      lenient().when(staticAnalysis.maxChars()).thenReturn(staticAnalysisMaxChars);
       var learnings = mock(ThrillhouseConfig.LearningsConfig.class);
       lenient().when(review.learnings()).thenReturn(learnings);
       lenient().when(review.declineRecheckEnabled()).thenReturn(declineRecheckEnabled);
@@ -604,6 +631,63 @@ class StartupConfigValidatorTest {
   @Test
   void bootsWhenMaxTokensPerReviewIsPositive() {
     new ConfigBuilder().maxTokensPerReview(250_000).build().validate();
+  }
+
+  @Test
+  void failsFastWhenAnAutomaticReviewLimitIsNegative() {
+    // 0 turns either limit off, so a negative one is a typo, refused at boot naming the variable.
+    var ex = assertFailsValidation(new ConfigBuilder().autoReviewLimits(-1, -1).build());
+    assertTrue(ex.getMessage().contains("AUTO_REVIEW_MAX_CONCURRENT_PER_REPO"), ex.getMessage());
+    assertTrue(
+        ex.getMessage().contains("thrillhousebot.review.auto-review-max-concurrent-per-repo"),
+        ex.getMessage());
+    assertTrue(ex.getMessage().contains("AUTO_REVIEW_MAX_QUEUED_PER_REPO"), ex.getMessage());
+    assertTrue(
+        ex.getMessage().contains("thrillhousebot.review.auto-review-max-queued-per-repo"),
+        ex.getMessage());
+  }
+
+  @Test
+  void bootsWithTheAutomaticReviewLimitsOffOrOn() {
+    new ConfigBuilder().autoReviewLimits(0, 0).build().validate();
+    new ConfigBuilder().autoReviewLimits(4, 50).build().validate();
+  }
+
+  @Test
+  void warnsWhenThePlannedInputAloneIsAboveTheSpendCeiling() {
+    // An operator who raised the input budget and never set the ceiling gets the shipped one.
+    var review = mock(ThrillhouseConfig.ReviewConfig.class);
+    when(review.maxTokensPerReview()).thenReturn(1_000_000L);
+    when(review.maxInputTokens()).thenReturn(400_000);
+    when(review.maxAiCalls()).thenReturn(6);
+
+    var warning = StartupConfigValidator.spendCeilingWarning(review).orElseThrow();
+
+    assertTrue(warning.contains("REVIEW_MAX_TOKENS_PER_REVIEW (1000000)"), warning);
+    assertTrue(warning.contains("REVIEW_MAX_INPUT_TOKENS 400000"), warning);
+    assertTrue(warning.contains("REVIEW_MAX_AI_CALLS 6"), warning);
+    assertTrue(warning.contains("2400000"), warning);
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    // The shipped budget fits under the shipped ceiling.
+    "1000000, 48000, 6",
+    // The ceiling is off.
+    "0, 400000, 6",
+    // Token budgeting is off, so nothing is planned.
+    "1000000, 0, 6",
+    // The planned input is exactly the ceiling.
+    "288000, 48000, 6"
+  })
+  void doesNotWarnWhenTheSpendCeilingCoversThePlannedInput(
+      long ceiling, int maxInputTokens, int maxAiCalls) {
+    var review = mock(ThrillhouseConfig.ReviewConfig.class);
+    when(review.maxTokensPerReview()).thenReturn(ceiling);
+    when(review.maxInputTokens()).thenReturn(maxInputTokens);
+    when(review.maxAiCalls()).thenReturn(maxAiCalls);
+
+    assertTrue(StartupConfigValidator.spendCeilingWarning(review).isEmpty());
   }
 
   @Test
@@ -1253,6 +1337,24 @@ class StartupConfigValidatorTest {
     new ConfigBuilder().ciContext(true, 500).build().validate();
     new ConfigBuilder().ciContext(true, 20_000).build().validate();
     new ConfigBuilder().ciContext(false, -1).build().validate();
+  }
+
+  @Test
+  void failsFastWhenAnEnabledStaticAnalysisCapIsOutOfBounds() {
+    for (var maxChars : List.of(499, 20_001, 0, -1)) {
+      var ex = assertFailsValidation(new ConfigBuilder().staticAnalysis(true, maxChars).build());
+      assertTrue(
+          ex.getMessage()
+              .contains("REVIEW_STATIC_ANALYSIS_MAX_CHARS must be between 500 and 20000"),
+          ex.getMessage());
+    }
+  }
+
+  @Test
+  void acceptsStaticAnalysisCapsAtTheBoundsAndIgnoresTheCapWhileDisabled() {
+    new ConfigBuilder().staticAnalysis(true, 500).build().validate();
+    new ConfigBuilder().staticAnalysis(true, 20_000).build().validate();
+    new ConfigBuilder().staticAnalysis(false, -1).build().validate();
   }
 
   @Test

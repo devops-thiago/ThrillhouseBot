@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.dashboard;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubUrls;
 import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import io.quarkus.hibernate.orm.panache.PanacheEntity;
 import io.quarkus.runtime.annotations.RegisterForReflection;
@@ -136,6 +137,14 @@ public class ReviewSession extends PanacheEntity {
 
   public String getPrTitle() {
     return prTitle;
+  }
+
+  /**
+   * The pull request's page on the configured GitHub web address, sent with the session so the
+   * dashboard links to the right host.
+   */
+  public String getPullRequestUrl() {
+    return GitHubUrls.pullRequest(repository, prNumber);
   }
 
   public String getCommitSha() {

@@ -91,4 +91,15 @@ class MarkdownSafeTest {
     assertTrue(wide.startsWith("\n````suggestion\n"), wide);
     assertTrue(wide.endsWith("````\n"), wide);
   }
+
+  @Test
+  void inlineGuardsAMentionAndLeavesAnEmailAddressAlone() {
+    assertEquals("Ask @&#8203;octocat", MarkdownSafe.inline("Ask @octocat"));
+    assertEquals("@&#8203;acme/security owns it", MarkdownSafe.inline("@acme/security owns it"));
+    assertEquals("Missing @&#8203;Override", MarkdownSafe.inline("Missing @Override"));
+    assertEquals("@&#8203;octocat", MarkdownSafe.inline("&#64;octocat"));
+    assertEquals("mail dev@example.com", MarkdownSafe.inline("mail dev@example.com"));
+    // Backticks are escaped here, so a span cannot shelter the name either.
+    assertEquals("&#96;@&#8203;octocat&#96;", MarkdownSafe.inline("`@octocat`"));
+  }
 }

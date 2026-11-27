@@ -480,7 +480,7 @@ final class OverviewScreen {
    * ("loads findings for the dashboard").
    */
   private static final Pattern PART_SEPARATOR =
-      Pattern.compile("(?i),(?=\\s)\\s*+|\\s++(?:and|but|or|nor|yet)\\s++");
+      Pattern.compile("(?i),(?=\\s)\\s*+|(?<!\\s)\\s++(?:and|but|or|nor|yet)\\s++");
 
   /** A part that only qualifies the one before it: "which are…", "that the review tracks". */
   private static final Pattern RELATIVE_TAIL =

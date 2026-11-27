@@ -86,6 +86,7 @@ public class WebhookEvents {
   private final CommentCommandService commentCommandService;
   private final PrPauseService prPauseService;
   private final AckReactionService ackReactionService;
+  private final HelpReplyLimiter helpReplyLimiter;
   private final ReviewSkipEmitter skipEmitter;
   private final FindingFeedbackCaptureService findingFeedbackCapture;
   private final CiHoldRegistry ciHoldRegistry;
@@ -109,6 +110,7 @@ public class WebhookEvents {
       CommentCommandService commentCommandService,
       PrPauseService prPauseService,
       AckReactionService ackReactionService,
+      HelpReplyLimiter helpReplyLimiter,
       ReviewSkipEmitter skipEmitter,
       FindingFeedbackCaptureService findingFeedbackCapture,
       CiHoldRegistry ciHoldRegistry,
@@ -127,6 +129,7 @@ public class WebhookEvents {
     this.commentCommandService = commentCommandService;
     this.prPauseService = prPauseService;
     this.ackReactionService = ackReactionService;
+    this.helpReplyLimiter = helpReplyLimiter;
     this.skipEmitter = skipEmitter;
     this.findingFeedbackCapture = findingFeedbackCapture;
     this.ciHoldRegistry = ciHoldRegistry;
@@ -334,10 +337,14 @@ public class WebhookEvents {
           yield true;
         }
 
-        if (ACTION_READY_FOR_REVIEW.equals(action)) {
-          autoReviewRateLimiter.clearForPr(repo.owner().login(), repo.name(), pr.number());
-        } else if (autoReviewRateLimiter.isThrottled(
-            repo.owner().login(), repo.name(), pr.number())) {
+        // A draft marked ready is reviewed inside the window once per head; a second
+        // ready_for_review of the same head is throttled like any other event.
+        boolean liftedForReady =
+            ACTION_READY_FOR_REVIEW.equals(action)
+                && autoReviewRateLimiter.clearForReadyHead(
+                    repo.owner().login(), repo.name(), pr.number(), pr.head().sha());
+        if (!liftedForReady
+            && autoReviewRateLimiter.isThrottled(repo.owner().login(), repo.name(), pr.number())) {
           skipEmitter.recordSkip(
               ReviewSkipReason.RATE_LIMITED,
               installationOf(payload),
@@ -439,12 +446,6 @@ public class WebhookEvents {
       log.debug("Ignoring {} command with missing repository or installation", command);
       return true;
     }
-    ackReactionService.addEyes(
-        payload.installation().id(),
-        repo.owner().login(),
-        repo.name(),
-        payload.comment().id(),
-        AckReactionService.CommentKind.ISSUE);
     var ctx =
         new CommentCommandService.CommandContext(
             command,
@@ -459,11 +460,40 @@ public class WebhookEvents {
             payload.comment().id(),
             payload.comment().body());
 
+    // The bot writes nothing, not even the reaction, before it knows who is asking.
+    boolean authorized =
+        manualReviewAuthorizer.isAuthorized(
+            ctx.owner(), ctx.repo(), ctx.installationId(), ctx.login(), ctx.authorAssociation());
+    if (!authorized && !helpForAnyone(ctx)) {
+      log.info(
+          "Ignoring unauthorized {} command from @{} on PR #{}",
+          command,
+          ctx.login(),
+          ctx.prNumber());
+      return true;
+    }
+    ackReactionService.addEyes(
+        ctx.installationId(),
+        ctx.owner(),
+        ctx.repo(),
+        ctx.commentId(),
+        AckReactionService.CommentKind.ISSUE);
+
     if (command == CommentCommand.REVIEW) {
       return handleReviewCommand(ctx, payload.issue().closed());
     }
     commentCommandService.handle(ctx);
     return true;
+  }
+
+  /**
+   * Whether a {@code /help} from someone without write access is answered: the command is open to
+   * anyone, but only once per pull request in each {@link HelpReplyLimiter} window, so a commenter
+   * cannot make the bot post over and over.
+   */
+  private boolean helpForAnyone(CommentCommandService.CommandContext ctx) {
+    return ctx.command() == CommentCommand.HELP
+        && helpReplyLimiter.tryAcquire(ctx.installationId(), ctx.repositoryId(), ctx.prNumber());
   }
 
   private boolean maybeDispatchConversationalMention(WebhookPayload payload) {
@@ -648,6 +678,10 @@ public class WebhookEvents {
     return queued;
   }
 
+  /**
+   * Runs a {@code /review} its caller already authorized. The paused and closed notices are posted
+   * only here, after the authorization, so a stranger cannot make the bot post.
+   */
   private boolean handleReviewCommand(CommentCommandService.CommandContext ctx, boolean closed) {
     if (prPauseService.isPaused(ctx.scope(), ctx.owner(), ctx.repo(), ctx.prNumber())) {
       log.info(
@@ -655,17 +689,9 @@ public class WebhookEvents {
       commentCommandService.notifyPaused(ctx);
       return true;
     }
-    if (!manualReviewAuthorizer.isAuthorized(
-        ctx.owner(), ctx.repo(), ctx.installationId(), ctx.login(), ctx.authorAssociation())) {
-      log.info(
-          "Ignoring unauthorized manual review trigger from @{} on PR #{}",
-          ctx.login(),
-          ctx.prNumber());
-      return true;
-    }
     if (closed) {
       // #1458: a closed or merged PR has nothing left to fix, so no review runs and no model is
-      // called. The notice comes after the authorization so a stranger cannot make the bot post.
+      // called.
       log.info(
           "Ignoring /review on closed PR #{} in {}/{}", ctx.prNumber(), ctx.owner(), ctx.repo());
       commentCommandService.notifyClosed(ctx);

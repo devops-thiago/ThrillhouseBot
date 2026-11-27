@@ -8,8 +8,9 @@
 # The frontend static files are embedded in the native binary via src/main/resources/META-INF.
 
 ## Stage 1: Build native executable with Mandrel
-# Digest pins ubi9-quarkus-mandrel-builder-image:jdk-25
-FROM quay.io/quarkus/ubi9-quarkus-mandrel-builder-image@sha256:096586cdc3e62db2a749216410db3f56b20b00aedfcb13e354472160edb08c7c AS build
+# Digest pins ubi9-quarkus-mandrel-builder-image:jdk-25. Keep it equal to
+# quarkus.native.builder-image in the native profile of pom.xml, which CI builds with.
+FROM quay.io/quarkus/ubi9-quarkus-mandrel-builder-image@sha256:5f1a539d126a690fcc1212b8a59c39de454a7e768a8519979bc71bc737344384 AS build
 COPY --chown=quarkus:quarkus --chmod=0755 mvnw /code/mvnw
 COPY --chown=quarkus:quarkus --chmod=0755 .mvn /code/.mvn
 COPY --chown=quarkus:quarkus --chmod=0644 pom.xml /code/

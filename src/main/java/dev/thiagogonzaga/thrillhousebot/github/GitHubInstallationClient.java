@@ -17,34 +17,24 @@ package dev.thiagogonzaga.thrillhousebot.github;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.ws.rs.*;
-import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
-import java.time.Instant;
 import java.util.List;
 import org.eclipse.microprofile.rest.client.annotation.RegisterProvider;
 import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 
+/**
+ * The repository lookup that has to see a redirect, and the shapes of the installation and
+ * repository listings {@link GitHubUserClient} reads.
+ *
+ * <p>The lookup stays on a REST client because of a hub4j limitation: hub4j follows a redirect
+ * itself and never gives out the {@code 301} or its {@code Location}, which carries the repository
+ * id the scope backfill matches on, and it drops the token when the redirect changes host. This
+ * goes away once hub4j reports the redirect. An installation's own repositories are listed through
+ * {@link GitHubTokenReads}.
+ */
 @RegisterRestClient(configKey = "github-api")
 @RegisterProvider(GitHubErrorLogger.class)
 public interface GitHubInstallationClient {
-
-  @GET
-  @Path("/app/installations")
-  @Produces(MediaType.APPLICATION_JSON)
-  List<Installation> listInstallations(
-      @HeaderParam("Authorization") String authorization,
-      @HeaderParam("Accept") String accept,
-      @QueryParam("per_page") @DefaultValue("100") int perPage,
-      @QueryParam("page") @DefaultValue("1") int page);
-
-  @GET
-  @Path("/installation/repositories")
-  @Produces(MediaType.APPLICATION_JSON)
-  InstallationRepositoriesResponse listInstallationRepositories(
-      @HeaderParam("Authorization") String authorization,
-      @HeaderParam("Accept") String accept,
-      @QueryParam("per_page") @DefaultValue("100") int perPage,
-      @QueryParam("page") @DefaultValue("1") int page);
 
   /**
    * The repository by name. A renamed repository answers its old name with a 301 whose {@code
@@ -74,16 +64,7 @@ public interface GitHubInstallationClient {
       this.repositories = repositories == null ? List.of() : List.copyOf(repositories);
     }
 
-    /**
-     * {@code createdAt} tells a repository from an older one deleted under the same name: the scope
-     * backfill fills only rows stored after it.
-     */
-    public record Repository(
-        long id, String name, Owner owner, @JsonProperty("created_at") Instant createdAt) {
-      public Repository(long id, String name, Owner owner) {
-        this(id, name, owner, null);
-      }
-
+    public record Repository(long id, String name, Owner owner) {
       public record Owner(String login) {}
     }
   }

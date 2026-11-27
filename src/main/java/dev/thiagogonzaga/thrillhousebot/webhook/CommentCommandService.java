@@ -47,12 +47,15 @@ import org.slf4j.LoggerFactory;
  * /remember}. Work runs on the shared review executor so the webhook 200-ack thread is never
  * blocked by GitHub API calls.
  *
- * <p>Every recognized command is acknowledged with a 👀 reaction before it reaches here, so a path
- * that ends without posting reads on the PR as a hang. The rule these handlers follow is therefore:
- * an acknowledged command produces exactly one visible reply — the requested output, or a one-line
- * notice saying why there is none (paused, switched off, already satisfied, nothing to say). The
- * single deliberate exception is a command from someone without write access: replying there would
- * let any commenter make the bot post, so those stay silent and are only logged.
+ * <p>A command that reaches here was acknowledged with a 👀 reaction, so a path that ends without
+ * posting reads on the PR as a hang. The rule these handlers follow is therefore: an acknowledged
+ * command produces exactly one visible reply — the requested output, or a one-line notice saying
+ * why there is none (paused, switched off, already satisfied, nothing to say). A command from
+ * someone without write access gets neither: {@code WebhookEvents} checks the commenter before the
+ * reaction and drops the command, since replying would let any commenter make the bot post, and the
+ * handlers check again before doing anything. {@code /help} is open to anyone; for a commenter
+ * without write access {@code WebhookEvents} lets it through once per pull request in each {@link
+ * HelpReplyLimiter} window.
  */
 @ApplicationScoped
 public class CommentCommandService {
@@ -236,7 +239,7 @@ public class CommentCommandService {
     executor.execute(
         () -> {
           try {
-            postComment(authClient.getAuthHeader(ctx.installationId()), ctx, notice);
+            postComment(authClient.getAuthHeader(ctx.installationId(), ctx.repo()), ctx, notice);
           } catch (RuntimeException e) {
             log.warn(
                 "Failed to post {} notice on {}/{} #{}",
@@ -252,7 +255,7 @@ public class CommentCommandService {
   /** Visible for tests: performs the command effect on the calling thread. */
   void execute(CommandContext ctx) {
     try {
-      var auth = authClient.getAuthHeader(ctx.installationId());
+      var auth = authClient.getAuthHeader(ctx.installationId(), ctx.repo());
       switch (ctx.command()) {
         case HELP -> postComment(auth, ctx, HELP_TEXT);
         case SUMMARY -> handleSummary(ctx, auth);

@@ -187,7 +187,7 @@ public class DocGenerationService extends AbstractPrSuggestionGenerator {
   /** {@link #handle}'s work, inside its ledger run. */
   private void handleInRun(DocTask task) {
     try {
-      var auth = authClient.getAuthHeader(task.installationId());
+      var auth = authClient.getAuthHeader(task.installationId(), task.repo());
       var pr =
           SoftLoaders.pullRequest(
               prClient, auth, task.owner(), task.repo(), task.prNumber(), COMMAND);

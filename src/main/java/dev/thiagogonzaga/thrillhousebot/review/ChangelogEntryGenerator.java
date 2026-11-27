@@ -181,7 +181,7 @@ public class ChangelogEntryGenerator extends AbstractPrSuggestionGenerator {
       return null;
     }
     return HEADER
-        + entry
+        + MarkdownSafe.prose(entry)
         + batchFailureNote(
             drafted.failedBatches(), COMMAND, "the files in them are not covered by this entry.")
         + FOOTER

@@ -232,11 +232,6 @@
             <artifactId>quarkus-flyway-postgresql</artifactId>
         </dependency>
 
-        <!-- GitHub App auth -->
-        <dependency>
-            <groupId>com.nimbusds</groupId>
-            <artifactId>nimbus-jose-jwt</artifactId>
-        </dependency>
         <!--
             GitHub event handling (Quarkiverse GitHub App): owns the webhook entry — HMAC
             signature check over the raw body, delivery parsing and event dispatch to the
@@ -486,6 +481,13 @@
             <properties>
                 <skipITs>false</skipITs>
                 <quarkus.native.enabled>true</quarkus.native.enabled>
+                <!-- Container builds (CI, the test-image workflow) compile in this image. Pinned by
+                     digest, so the toolchain changes only through a reviewed commit and not when
+                     the jdk-25 tag moves. The digest is the multi-arch index of
+                     ubi9-quarkus-mandrel-builder-image:jdk-25; keep it equal to the builder stage
+                     of src/main/docker/Dockerfile.multistage. -->
+                <quarkus.native.builder-image
+                >quay.io/quarkus/ubi9-quarkus-mandrel-builder-image@sha256:5f1a539d126a690fcc1212b8a59c39de454a7e768a8519979bc71bc737344384</quarkus.native.builder-image>
                 <!-- A native image keeps the builder JDK's blocked-certificate list. Mount the
                      updated list over it for container builds until Mandrel ships it (#1215). -->
                 <quarkus.native.container-runtime-options

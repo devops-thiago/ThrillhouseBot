@@ -66,14 +66,31 @@ same diff.
   evidence reports are uploaded; a missing base or incomplete proof fails.
 - `scripts/dco/` is code-owner protected like the workflow that delegates to it.
 
+## Workflow and release checks
+
+- `scripts/workflows/policy.test.mjs` holds the workflows to their rules: actions pinned to one
+  full commit SHA each, no Maven cache restored through a prefix every job shares, no cache saved
+  from a pull request (CI and the test-image workflow), the test-image job with registry access
+  running no build, `docs.yml` building only its own ref, and the release workflow working by
+  digest inside the `release` environment. Change the workflow and the rule together, and say
+  why in the pull request.
+- `scripts/release/check-tag.mjs` decides whether a tag may be released: `vX.Y.Z`, a signed
+  annotated tag from an account in `RELEASE_TAG_SIGNERS`, on `main`, matching `pom.xml`. The
+  release workflow runs the copy on `main`, never the tag's, and its `verify` job builds
+  nothing from the tagged tree. Every check fails closed.
+- Both suites run with `node --test` in the `frontend` CI job. `docs/RELEASING.md` lists the
+  repository settings the release checks assume.
+- A job that runs a pull request's build holds a read-only token and no registry login; it hands
+  results on as artifacts. Pass workflow inputs through `env:` and validate them in the script.
+
 ## Package map
 
 | Package | Owns |
 |---|---|
-| `webhook/` | The webhook entry (`WebhookEvents`, driven by the Quarkiverse GitHub App extension's route on `POST /api/webhook`; it owns the HMAC check), triggers and filters (`TriggerDetector`, `ReviewTriggerFilter`), dedupe, pause state, the comment commands (`CommentCommandService`) |
+| `webhook/` | The webhook entry (`WebhookEvents`, driven by the Quarkiverse GitHub App extension's route on `POST /api/webhook`; it owns the HMAC check), triggers and filters (`TriggerDetector`, `ReviewTriggerFilter`), dedupe, pause state, the comment commands (`CommentCommandService`), the `/help` limit for commenters without write access (`HelpReplyLimiter`) |
 | `review/` | Everything between "a review was requested" and "the result is on GitHub": orchestration, context loading, prompt assembly, budgeting, the post-model finding chain, verdict, publishing, CI gating, follow-ups, the on-request commands |
 | `review/ai/` | The LangChain4j layer: AI service interfaces and their prompt constants (`*Prompts`), streaming and retries (`AiReviewService`), parsing and salvage, the verifier, the token ledger, the call gate |
-| `github/` | REST and GraphQL clients (plus hub4j through the Quarkiverse `GitHubClientProvider` for permission, membership, issue and file reads), app auth, write pacing and retry (`GitHubWritePacer`, `GitHubWriteRetry`), instructions and repo-settings resolution |
+| `github/` | REST and GraphQL clients (plus hub4j through the Quarkiverse `GitHubClientProvider` for permission, membership, issue and file reads, and with a caller's installation token through `GitHubTokenReads` for workflow run, artifact and installation repository listings), app auth (`GitHubAppApi`, through the extension's application client), write pacing and retry (`GitHubWritePacer`, `GitHubWriteRetry`), instructions and repo-settings resolution |
 | `dashboard/` | OAuth sessions, the WebSocket broadcaster, `ReviewSession` persistence, finding-feedback aggregates |
 | `notification/` | The opt-in outgoing review-outcome webhook |
 | `observability/` | The Prometheus endpoint, review-outcome metrics, and the OpenTelemetry resource's `service.instance.id` (`ServiceInstanceResource`: `HOSTNAME`, else a random id per start; `OTEL_RESOURCE_ATTRIBUTES`, comma-separated `key=value` pairs, overrides it) |
@@ -84,12 +101,13 @@ same diff.
 
 | Stage | Where |
 |---|---|
-| Dispatch, per-PR serialization, coalescing | `review/ReviewDispatcher` |
+| Dispatch, per-PR serialization, coalescing, the per-PR window and the per-repository slots for automatic reviews | `review/ReviewDispatcher` (with `AutoReviewRateLimiter`, `AutoReviewSlots`) |
 | Top-level run: check run, context, plan, pipeline, verdict, publish | `review/ReviewOrchestrator` |
 | Stand down before the first write: a chain of `review/PrePublishGuard`s run in order, first stand-down wins, shared consequences (skip counted, check run skipped) applied once. Order: head moved (#704, with the #806 carry-over), then a rejecting label gate (#1021). A new guard is added to the coordinator's list, not to the orchestrator. A head that moved while the context loaded (`ReviewContextLoader.StaleReviewException.headMoved`) gets the same consequences without the carry-over and is not a failure: no failure notice, failed-outcome metric or failure notification (#1412); an unreadable head stays a failure | `review/ReviewStandDown.beforeFirstWrite` over `HeadMovedGuard` (with `SupersededFindingsCarryover`), `LabelGateGuard` (with `PullRequestLabelGate`); `ReviewStandDown.supersededWhileLoading` from `ReviewOrchestrator.closeSupersededWhileLoading` |
 | Load diff, every earlier round (from the stored `ReviewSession.aiResponseJson`), threads and conversation, instructions, labels, project stack, config-key and patch-coverage context | `review/ReviewContextLoader` (with `PatchCoverageResolver`, `ConfigKeyContextResolver`, `BugFixContextResolver`, `SupersededFindingsCarryover`) |
 | Previous-findings prompt section: the numbered effective round, then the unnumbered "still open from earlier rounds" and "answered in earlier rounds" sections, then the older rounds' open findings a `resolved` could stand for (file changed, change unknown, or a named file changed), numbered on after the effective round's (#1319, #1316) | `review/FollowUpAnalyzer.buildPreviousFindingsContext` (with `effectivePreviousRoundIndex`, `openEarlierRoundFindings`), `FollowUpAnalyzer.priorListing` / `formatEarlierListed` (`review/PriorListing`), joined in `ReviewContextLoader.load` |
 | Early CI reading and the opt-in CI-failure section | `review/CiStatusEvaluator`, `review/CiFailureContextResolver`; TAP `TODO` and `SKIP` directives are expected outcomes, excluded both when collecting failed tests and when reading them back via `CiFailureCitations` (#1110). When the early reading counted a pending check or saw no check besides the bot's own (`CiFailures.reported`), the summary's citations are read from a section refreshed after the model call (`ReviewOrchestrator.refreshCiFailures` → `CiStatusEvaluator.checkRunFailures`, or the gate's own re-read, then `CiFailureContextResolver.refresh`, #1092), and `FindingVerificationService.floorCiCitedConfidence` lifts a low-confidence finding citing it, the round persisted again (`floorOnRefreshedCi`); the review and verifier calls keep the review-start section |
+| Opt-in static-analysis section (#34): the annotations that completed check runs (a Code Scanning check such as "CodeQL", linters) attached to reviewable changed files, less an Actions job's runner notices, from the same early CI reading (`CiFailures.annotated`); one annotations page for at most `StaticAnalysisConfig.MAX_CHECKS` checks, other apps before GitHub Actions jobs; a failing run is left out only when the CI-failure section reads its annotations (matched by check-run id); review call only, no verifier evidence, so a finding raised from it stands on the diff | `review/CiStatusEvaluator`, `review/StaticAnalysisContextResolver`, `ReviewPromptAssembler.staticAnalysisSection` |
 | Opt-in review learnings: recall before the call (ranked, capped section and typed selection) | `review/ReviewLearnings.recall` (reads `ReviewLearningService.listActive` once) |
 | Opt-in linked-issue context: resolve the PR's linked issues, read them, extract acceptance criteria, sanitize and cap | `review/TicketContextResolver.resolve` over an `review/IssueTrackerProvider` (`review/GitHubIssuesProvider.linkedTickets`: PR-body closing keywords, then `closingIssuesReferences`, then optionally the branch name), called from `ReviewOrchestrator` and handed to `ReviewPromptAssembler.assemble(ctx, req, ciFailures, linkedIssues)` |
 | Fence untrusted input, build review and summary guidance, pick the system prompt | `review/ReviewPromptAssembler` (with `PromptSections`, `PromptTemplateEscaper`, `ReviewDimensionRouter`) |
@@ -116,10 +134,11 @@ same diff.
 
 ## Model-call invariants
 
-- **Every model call holds a `ModelCallGate` slot** (`AI_MAX_CONCURRENT_CALLS`). Streamed calls
+- **Every model call holds a `ModelCallGate` slot** (`AI_MAX_CONCURRENT_CALLS`, default 16). Streamed calls
   take it in `AiReviewService`; every blocking AI service reaches the model through
   `BoundedChatModel`. `BoundedChatModelWiringTest` fails for an AI service wired any other way.
-- **Every review-path call is metered by `ReviewTokenLedger`** (`REVIEW_MAX_TOKENS_PER_REVIEW`).
+- **Every review-path call is metered by `ReviewTokenLedger`** (`REVIEW_MAX_TOKENS_PER_REVIEW`,
+  default 1,000,000).
   `FindingPipeline.run` opens and clears the session entry. Streamed calls are recorded by
   `OtelObservabilityListener` through the `ReviewSessionContext` bind and gated by
   `ensureCallAllowed` in `AiReviewService`. The blocking verifier records its own usage and checks
@@ -549,6 +568,24 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   guard (fail open, like the head guard), and `CiHoldRevisit` before posting a held approval (fail
   closed: the hold stays). All three go through `PullRequestLabelGate`, which reads nothing when
   no label gate is configured, and skip a manual `/review` (`HeldVerdict.manualTrigger`).
+- **The limits on automatic reviews ship switched on.** A pull request author needs no write
+  access to start a review, so `AUTO_REVIEW_MIN_INTERVAL`, `AUTO_REVIEW_MAX_CONCURRENT_PER_REPO`,
+  `AUTO_REVIEW_MAX_QUEUED_PER_REPO`, `REVIEW_MAX_TOKENS_PER_REVIEW` and `AI_MAX_CONCURRENT_CALLS`
+  all default to a non-zero value, declared on `ThrillhouseConfig` and in `application.properties`
+  alike (`CostLimitDefaultsTest`); `0` stays the operator's way to turn one off. `ready_for_review`
+  lifts the window once per head (`AutoReviewRateLimiter.clearForReadyHead`). An automatic review
+  takes its repository's slot in `ReviewDispatcher.reviewWithinRepositoryLimit` and returns it
+  however the review ends; it waits on its own worker, so a queued review is never dropped, and
+  the rate window is read again once the slot is held. A manual review takes no slot, and a
+  newer request for a pull request whose review is waiting replaces it (`recheckWaiters`), so a
+  `/review` is never held behind the queue. A throttled
+  or queue-full review is a recorded skip and `dispatch` still returns `true`: `false` is only for
+  a rejected executor, because it rolls the delivery's dedupe slot back.
+- **Nothing is written for a commenter before the write-access check.** `WebhookEvents`
+  authorizes a command (`ManualReviewAuthorizer`) before the 👀 reaction and before the paused or
+  closed notice, and drops a refused command without calling `CommentCommandService`, whose
+  handlers check again. `/help` from a commenter without write access passes once per pull request
+  per `HelpReplyLimiter.WINDOW`.
 - **The webhook entry is the Quarkiverse GitHub App extension's route**, set to the same `POST
   /api/webhook` path via `quarkus.github-app.*` (aliased to the `GITHUB_APP_ID` /
   `GITHUB_PRIVATE_KEY` / `GITHUB_WEBHOOK_SECRET` variables, checked equal by
@@ -562,6 +599,22 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   rollback and the duplicate-skip recording lived with the routing. HTTP corner cases come from
   the extension's `Routes`: missing mandatory headers `400`, signature mismatch `400`, signed
   non-JSON body `500`, accepted delivery `200` with an empty body (`NativeImageIT` pins these).
+- **App authentication goes through the extension's application client** (#1314). `GitHubAppApi`
+  binds its `CONNECTOR` while it asks `GitHubClientProvider` for that client, and
+  `FailFastGitHubCustomizer` installs it. That class stays the only `GitHubCustomizer` bean: the
+  extension uses one only when exactly one exists, so a second switches both off without an error
+  (`GitHubAppAuthWiringTest` pins it). `GitHubAppConnector` keeps the REST clients' contract that
+  `GitHubTokenRefresh` and the installation handling read: `ClientWebApplicationException` for a
+  refusal, `ProcessingException` for a transport failure, no response body in a message, one
+  attempt. `GitHubAppCredentialInterceptor` rewrites the configured key and strips the App ID for
+  the extension, so a form the start-up check accepts works for the signer too.
+- **A read made with a token from `GitHubAuthClient` keeps that token** (#1314). `GitHubTokenReads`
+  builds hub4j with the caller's `Authorization` header, never an installation client from
+  `GitHubClientProvider`, which reaches the whole installation. It uses `GitHubAppConnector`, and
+  its listings keep the page bounds the REST clients had. What hub4j cannot express stays on a
+  trimmed REST client whose Javadoc names the limitation: the artifact and job-log redirects
+  (`GitHubActionsClient`), the renamed repository's `301` (`GitHubInstallationClient`) and the
+  listings made with a user's token (`GitHubUserClient`).
 
 ## Prompts
 
@@ -593,11 +646,11 @@ Two patterns. Pick the first unless the section must sit somewhere else in the u
 1. **Trailing-guidance slot (the default).** Review-only guidance and data ride
    `PromptInputs.repoInstructions`, which `ReviewPromptAssembler.assemble` builds with
    `combineSections` (mock fidelity, bug-fix efficacy with linked issue text, config-key context,
-   heuristic failure modes, patch coverage, then CI failures, linked issues and learnings in that
-   fixed order, then repo instructions). The three opt-in sections arrive together as one
-   `ReviewPromptAssembler.TrailingContext` passed to `assemble(ctx, req, extra)`; add a component
-   there rather than another overload. Add a static `…Section` method that returns `""` when there
-   is no data and emits the guidance constant only together with its fenced data (see
+   heuristic failure modes, patch coverage, then CI failures, static analysis, linked issues and
+   learnings in that fixed order, then repo instructions). The four opt-in sections arrive together
+   as one `ReviewPromptAssembler.TrailingContext` passed to `assemble(ctx, req, extra)`; add a
+   component there rather than another overload. Add a static `…Section` method that returns `""`
+   when there is no data and emits the guidance constant only together with its fenced data (see
    `patchCoverageSection`, `ciFailuresSection`, `learningsSection`). Every batch carries the slot,
    and `DiffBudgetPlanner.plan` already counts it as shared overhead
    (`DiffBudgetPlannerTest.ciFailuresLinkedIssuesAndLearningsTogetherAreAllChargedToTheSharedOverhead`).
@@ -686,9 +739,10 @@ live `fence(...)` (#604).
 
 - **Fence all model-visible external text.** That covers the diff, PR title and body, base
   comparison, project stack, changed tests, previous findings, linked issue text, CI output,
-  coverage data, config-key snippets, and maintainer-authored instructions (global and
-  path-scoped). Use `PromptTemplateEscaper.fence`, which wraps text in per-call CSPRNG fence
-  lines and passes it byte-exact, and give it a heading in the prompt that calls it untrusted data.
+  static-analysis annotations, coverage data, config-key snippets, and maintainer-authored
+  instructions (global and path-scoped). Use `PromptTemplateEscaper.fence`, which wraps text in
+  per-call CSPRNG fence lines and passes it byte-exact, and give it a heading in the prompt that
+  calls it untrusted data.
   `escape` / `neutralizeMarkers` only rewrite legacy markers. They are not an injection defense.
 - **Linked issues are read, never written, and their text is untrusted.** An
   `IssueTrackerProvider` only reads: no comment, label or state change on the issue, ever
@@ -741,7 +795,28 @@ live `fence(...)` (#604).
   statement (`sizeOnly`: the first sentence's leading clause, followed by nothing or a side note that
   opens with "with", "plus", "including" or "also", then any later sentence, the computed CI
   sentence aside) on an unchanged head (#1095).
-- **Text the bot posts to GitHub** goes through `review/MarkdownSafe`, not `LogSafe`.
+- **Text the bot posts to GitHub** goes through `review/MarkdownSafe`, not `LogSafe`. A model
+  field never reaches a comment raw: one line goes through `inline` (or `proseLine` / `proseCell`
+  when its code spans should render), markdown of its own (a description, a status note, a reply)
+  through `prose`, a value inside a code span through `inlineCode`. Besides the block break-outs,
+  these guard every possible mention (`@&#8203;name`; an `@` after a letter or digit is an email
+  and stays, and so does one after a `/` in an `http(s)://host.tld/` address that
+  `MarkdownProse.url` or `angleAutolink` accepts, which is narrower than what GitHub links on
+  purpose: `www.` forms, `_ * ~ & $` and `)` end or disqualify it), and `prose` escapes tag and comment openers, turns a `suggestion` fence into a plain
+  block and closes an unclosed fence. `MarkdownProse` rewrites rather than screens: a guess at what
+  is code that differs from GitHub's reading posts a mention untouched, so fenced blocks are
+  emitted at the top level under a fence longer than their content, code spans count only when
+  they close on their own line, and every other backtick becomes `&#96;`. The bot's own text, the
+  `@thrillhousebot` hints included, is never passed through these. Text read back from a posted
+  comment and compared with a model's (`DescriptionGapCarryover.listedGaps`,
+  `FollowUpAnalyzer.namingText` and its title scans) accepts the posted form.
+- **Installation tokens are minted for one repository.** `GitHubAuthClient.getAuthHeader(id,
+  repository)` is what work on a repository uses; the one-argument form reaches the whole
+  installation and is for the callers `InstallationTokenScopeInvariantTest` lists. A mint that is
+  refused is never retried wider, and a 401 refresh re-mints the same scope. The GitHub App
+  extension's `GitHubClientProvider` mints its own installation-wide tokens.
+- **Metrics carry no repository, pull request or login.** `GET /metrics` is unauthenticated
+  (`ReviewSkipEmitter`); such detail belongs in the log line.
 - **Review learnings are maintainer text and stay data.** `ReviewLearningService.save` refuses
   credential-shaped text (`LearningText.containsCredential`) and flattens the rest
   (`LearningText.normalize`); `ReviewLearnings.select` screens again before replay, and

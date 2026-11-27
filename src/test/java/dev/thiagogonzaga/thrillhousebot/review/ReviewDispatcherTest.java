@@ -46,6 +46,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -60,6 +61,9 @@ class ReviewDispatcherTest {
   @Mock private CiHoldRevisit ciHoldRevisit;
   @Mock private RunningReviewCoverage coverage;
 
+  /** The shipped per-repository limits; the tests of the limit build their own. */
+  private final AutoReviewSlots slots = new AutoReviewSlots(4, 50);
+
   private ExecutorService reviewExecutor;
   private ReviewDispatcher dispatcher;
 
@@ -72,6 +76,7 @@ class ReviewDispatcherTest {
             reviewExecutor,
             orchestrator,
             rateLimiter,
+            slots,
             skipEmitter,
             ciHoldRevisit,
             coverage,
@@ -231,6 +236,7 @@ class ReviewDispatcherTest {
             rejecting,
             orchestrator,
             rateLimiter,
+            slots,
             skipEmitter,
             ciHoldRevisit,
             coverage,
@@ -379,6 +385,7 @@ class ReviewDispatcherTest {
             executor,
             orchestrator,
             rateLimiter,
+            slots,
             skipEmitter,
             ciHoldRevisit,
             coverage,
@@ -514,6 +521,7 @@ class ReviewDispatcherTest {
             executor,
             orchestrator,
             rateLimiter,
+            slots,
             skipEmitter,
             ciHoldRevisit,
             coverage,
@@ -546,6 +554,7 @@ class ReviewDispatcherTest {
             executor,
             orchestrator,
             rateLimiter,
+            slots,
             skipEmitter,
             ciHoldRevisit,
             coverage,
@@ -951,6 +960,264 @@ class ReviewDispatcherTest {
     beginReview(state, null);
 
     assertEquals("", state.reviewingSha());
+  }
+
+  /** A dispatcher on virtual threads, as in production, with the given per-repository limits. */
+  private ReviewDispatcher limitedDispatcher(AutoReviewSlots limits) {
+    reviewExecutor.shutdownNow();
+    reviewExecutor = Executors.newVirtualThreadPerTaskExecutor();
+    return new ReviewDispatcher(
+        reviewExecutor,
+        orchestrator,
+        rateLimiter,
+        limits,
+        skipEmitter,
+        ciHoldRevisit,
+        coverage,
+        OpenTelemetry.noop());
+  }
+
+  private static void awaitWaiting(AutoReviewSlots limits, int expected) {
+    var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    while (limits.waiting(1L, TestScopes.REPOSITORY_ID) != expected
+        && System.nanoTime() < deadline) {
+      Thread.onSpinWait();
+    }
+    assertEquals(expected, limits.waiting(1L, TestScopes.REPOSITORY_ID));
+  }
+
+  /** Spins until no review waits for a slot; the caller's assertions cover a timeout. */
+  private static void awaitNoneWaiting(AutoReviewSlots limits) {
+    var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    while (limits.waiting(1L, TestScopes.REPOSITORY_ID) != 0 && System.nanoTime() < deadline) {
+      Thread.onSpinWait();
+    }
+  }
+
+  @Test
+  void automaticReviewsOfOneRepositoryRunOnlyAsManyAtOnceAsTheLimit() throws InterruptedException {
+    var limits = new AutoReviewSlots(2, 10);
+    var limited = limitedDispatcher(limits);
+    var running = new AtomicInteger();
+    var mostAtOnce = new AtomicInteger();
+    var started = new CountDownLatch(2);
+    var release = new CountDownLatch(1);
+    doAnswer(
+            invocation -> {
+              mostAtOnce.accumulateAndGet(running.incrementAndGet(), Math::max);
+              started.countDown();
+              release.await(5, TimeUnit.SECONDS);
+              running.decrementAndGet();
+              return true;
+            })
+        .when(orchestrator)
+        .review(any(ReviewOrchestrator.ReviewRequest.class));
+
+    // Six pull requests of one repository are opened at once.
+    for (int pr = 1; pr <= 6; pr++) {
+      assertTrue(limited.dispatch(reviewRequest("owner", "repo", pr, "sha" + pr)));
+    }
+
+    assertTrue(started.await(5, TimeUnit.SECONDS));
+    awaitWaiting(limits, 4);
+    assertEquals(2, running.get());
+
+    release.countDown();
+
+    // Every pull request is still reviewed, two at a time.
+    verify(orchestrator, timeout(5000).times(6))
+        .review(any(ReviewOrchestrator.ReviewRequest.class));
+    awaitEmptyDispatcherState(limited, 5, TimeUnit.SECONDS);
+    assertEquals(2, mostAtOnce.get());
+    assertEquals(0, limits.trackedRepositories());
+    verify(skipEmitter, never()).recordSkip(any(), anyLong(), any(), any(), anyInt(), any());
+  }
+
+  @Test
+  void anAutomaticReviewPastTheQueueLimitIsSkippedAndCounted() throws InterruptedException {
+    var limits = new AutoReviewSlots(1, 1);
+    var limited = limitedDispatcher(limits);
+    var started = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    blockReviewUntil(started, release);
+
+    limited.dispatch(reviewRequest("owner", "repo", 1, "sha1"));
+    assertTrue(started.await(5, TimeUnit.SECONDS));
+    limited.dispatch(reviewRequest("owner", "repo", 2, "sha2"));
+    awaitWaiting(limits, 1);
+
+    // The skip is a decision, not a rejected dispatch: the delivery is not rolled back.
+    assertTrue(limited.dispatch(reviewRequest("owner", "repo", 3, "sha3")));
+
+    verify(skipEmitter, timeout(5000))
+        .recordSkip(
+            eq(ReviewSkipReason.REPOSITORY_QUEUE_FULL),
+            eq(1L),
+            eq("owner"),
+            eq("repo"),
+            eq(3),
+            anyString());
+    release.countDown();
+    awaitEmptyDispatcherState(limited, 5, TimeUnit.SECONDS);
+    verify(orchestrator, times(2)).review(any(ReviewOrchestrator.ReviewRequest.class));
+    verify(orchestrator, never()).review(reviewRequest("owner", "repo", 3, "sha3"));
+    verify(rateLimiter, never()).recordCompletion("owner", "repo", 3);
+    assertEquals(0, limits.trackedRepositories());
+  }
+
+  @Test
+  void aManualReviewAndAnotherRepositoryNeverWaitForTheSlot() throws InterruptedException {
+    var limits = new AutoReviewSlots(1, 1);
+    var limited = limitedDispatcher(limits);
+    var started = new CountDownLatch(3);
+    var release = new CountDownLatch(1);
+    blockReviewUntil(started, release);
+    var otherRepository =
+        new ReviewOrchestrator.ReviewRequest(
+            "owner",
+            "other",
+            1,
+            "sha",
+            "title",
+            "",
+            "base",
+            "main",
+            1L,
+            TestScopes.REPOSITORY_ID + 1,
+            false);
+
+    limited.dispatch(reviewRequest("owner", "repo", 1, "sha1"));
+    limited.dispatch(manualRequest(2));
+    limited.dispatch(otherRepository);
+
+    // All three run at once although the repository's one slot is taken.
+    assertTrue(started.await(5, TimeUnit.SECONDS));
+    assertEquals(0, limits.waiting(1L, TestScopes.REPOSITORY_ID));
+    assertEquals(1, limits.running(1L, TestScopes.REPOSITORY_ID));
+
+    release.countDown();
+    awaitEmptyDispatcherState(limited, 5, TimeUnit.SECONDS);
+    assertEquals(0, limits.trackedRepositories());
+  }
+
+  @Test
+  void aManualReviewReplacesItsPullRequestsWaitingAutomaticReviewAndRunsAtOnce()
+      throws InterruptedException {
+    var limits = new AutoReviewSlots(1, 5);
+    var limited = limitedDispatcher(limits);
+    var firstStarted = new CountDownLatch(1);
+    var manualStarted = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    var manual = manualRequest(2);
+    doAnswer(
+            invocation -> {
+              firstStarted.countDown();
+              if (manual.equals(invocation.getArgument(0))) {
+                manualStarted.countDown();
+              }
+              release.await(5, TimeUnit.SECONDS);
+              return true;
+            })
+        .when(orchestrator)
+        .review(any(ReviewOrchestrator.ReviewRequest.class));
+
+    limited.dispatch(reviewRequest("owner", "repo", 1, "sha1"));
+    assertTrue(firstStarted.await(5, TimeUnit.SECONDS));
+    var waiting = reviewRequest("owner", "repo", 2, "sha2");
+    limited.dispatch(waiting);
+    awaitWaiting(limits, 1);
+
+    // A maintainer asks for a review of the pull request whose automatic review is queued.
+    assertTrue(limited.dispatch(manual));
+
+    // It runs while the repository's one slot is still held by the first review.
+    assertTrue(manualStarted.await(5, TimeUnit.SECONDS));
+    assertEquals(0, limits.waiting(1L, TestScopes.REPOSITORY_ID));
+    assertEquals(1, limits.running(1L, TestScopes.REPOSITORY_ID));
+
+    release.countDown();
+    awaitEmptyDispatcherState(limited, 5, TimeUnit.SECONDS);
+    verify(orchestrator, never()).review(waiting);
+    assertEquals(0, limits.trackedRepositories());
+  }
+
+  @Test
+  void theSlotIsReturnedWhenTheReviewFails() {
+    var limits = new AutoReviewSlots(1, 1);
+    var limited = limitedDispatcher(limits);
+    when(orchestrator.review(any(ReviewOrchestrator.ReviewRequest.class)))
+        .thenThrow(new IllegalStateException("model unavailable"))
+        .thenReturn(true);
+
+    limited.dispatch(reviewRequest("owner", "repo", 1, "sha1"));
+    awaitEmptyDispatcherState(limited, 5, TimeUnit.SECONDS);
+    assertEquals(0, limits.trackedRepositories());
+
+    limited.dispatch(reviewRequest("owner", "repo", 2, "sha2"));
+
+    verify(orchestrator, timeout(5000)).review(reviewRequest("owner", "repo", 2, "sha2"));
+    awaitEmptyDispatcherState(limited, 5, TimeUnit.SECONDS);
+    assertEquals(0, limits.trackedRepositories());
+  }
+
+  @Test
+  void theRateWindowIsReadAgainOnceAWaitingReviewGetsItsSlot() throws InterruptedException {
+    var limits = new AutoReviewSlots(1, 1);
+    var limited = limitedDispatcher(limits);
+    var started = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    blockReviewUntil(started, release);
+
+    limited.dispatch(reviewRequest("owner", "repo", 1, "sha1"));
+    assertTrue(started.await(5, TimeUnit.SECONDS));
+    limited.dispatch(reviewRequest("owner", "repo", 2, "sha2"));
+    awaitWaiting(limits, 1);
+    // While it waited, a manual review of the same pull request completed and opened its window.
+    when(rateLimiter.isThrottled("owner", "repo", 2)).thenReturn(true);
+
+    release.countDown();
+
+    verify(skipEmitter, timeout(5000))
+        .recordSkip(
+            eq(ReviewSkipReason.RATE_LIMITED), anyLong(), eq("owner"), eq("repo"), eq(2), any());
+    awaitEmptyDispatcherState(limited, 5, TimeUnit.SECONDS);
+    verify(orchestrator, times(1)).review(any(ReviewOrchestrator.ReviewRequest.class));
+    assertEquals(0, limits.trackedRepositories());
+  }
+
+  @Test
+  void aReviewInterruptedWhileWaitingForItsSlotIsNotRun() throws InterruptedException {
+    var limits = new AutoReviewSlots(1, 1);
+    var limited = limitedDispatcher(limits);
+    var started = new CountDownLatch(1);
+    doAnswer(
+            invocation -> {
+              started.countDown();
+              try {
+                new CountDownLatch(1).await(5, TimeUnit.SECONDS);
+              } catch (InterruptedException _) {
+                // The shutdown interrupts the workers one after the other. The slot is kept until
+                // the waiting review has been interrupted too, so a freed slot cannot reach it
+                // first.
+                awaitNoneWaiting(limits);
+                Thread.currentThread().interrupt();
+              }
+              return true;
+            })
+        .when(orchestrator)
+        .review(any(ReviewOrchestrator.ReviewRequest.class));
+
+    limited.dispatch(reviewRequest("owner", "repo", 1, "sha1"));
+    assertTrue(started.await(5, TimeUnit.SECONDS));
+    limited.dispatch(reviewRequest("owner", "repo", 2, "sha2"));
+    awaitWaiting(limits, 1);
+
+    reviewExecutor.shutdownNow();
+
+    assertTrue(reviewExecutor.awaitTermination(5, TimeUnit.SECONDS));
+    verify(orchestrator, never()).review(reviewRequest("owner", "repo", 2, "sha2"));
+    assertEquals(0, limits.trackedRepositories());
+    assertEquals(0, limited.stateCount());
   }
 
   /** Marks a review of {@code headSha} running, with no span and no requests counted. */

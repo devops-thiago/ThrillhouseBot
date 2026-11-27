@@ -45,5 +45,10 @@ public enum ReviewSkipReason {
    * The PR head moved while the review ran, so the finished run abandoned its post — the coalesced
    * run for the new head covers it (#704).
    */
-  HEAD_MOVED
+  HEAD_MOVED,
+  /**
+   * As many automatic reviews of the repository were waiting for a slot as {@code
+   * review.auto-review-max-queued-per-repo} allows.
+   */
+  REPOSITORY_QUEUE_FULL
 }

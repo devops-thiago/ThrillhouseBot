@@ -3299,7 +3299,8 @@ class FindingPipelineTest {
 
   @Test
   void aDisabledCeilingLeavesTheMultiCallPathUntouched() {
-    // #499(d) characterization: with the default REVIEW_MAX_TOKENS_PER_REVIEW=0 a review behaves
+    // #499(d) characterization: with REVIEW_MAX_TOKENS_PER_REVIEW=0 (the ceiling off) a review
+    // behaves
     // exactly as before this feature, even with an enormous recorded spend.
     var thrillhouseConfig = mock(dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.class);
     var reviewConfig =

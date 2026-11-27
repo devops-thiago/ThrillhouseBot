@@ -730,9 +730,14 @@ public class FollowUpAnalyzer {
     }
     return botRootComments(inlineComments, botIdentity)
         .filter(c -> FilePaths.same(finding.file(), c.path()))
-        .filter(c -> c.body() != null && c.body().contains(finding.title()))
+        .filter(c -> c.body() != null && carriesTitle(c.body(), finding.title()))
         .map(GitHubReviewClient.PullRequestComment::id)
         .toList();
+  }
+
+  /** Whether {@code body} holds {@code title}, as the model wrote it or as the bot posts it. */
+  private static boolean carriesTitle(String body, String title) {
+    return printedForms(title).anyMatch(body::contains);
   }
 
   private static Stream<GitHubReviewClient.PullRequestComment> botRootComments(
@@ -1215,12 +1220,14 @@ public class FollowUpAnalyzer {
   /**
    * Sentence appended to a contradiction note when the decline came from the PR conversation. The
    * note's own closing line says to reply again; a finding declined this way has no thread to reply
-   * on, so it names the reply that ends the re-check for it.
+   * on, so it names the reply that ends the re-check for it. The directive is in a code span, as
+   * the bot's other hints are: the note is posted as prose ({@link MarkdownSafe#prose}), which
+   * guards a bare {@code @} and leaves a code span as written.
    */
   private static String conversationRecheckHint(BotIdentity botIdentity) {
-    return " A second @"
+    return " A second `@"
         + botIdentity.primaryMention()
-        + " declined comment naming this finding is that reply.";
+        + " declined` comment naming this finding is that reply.";
   }
 
   /**
@@ -1499,7 +1506,12 @@ public class FollowUpAnalyzer {
    * is the text the locator and content are matched against, never the directive token.
    */
   private static String namingText(String body) {
-    return BLOCKQUOTE_LINE.matcher(FENCED_CODE.matcher(body).replaceAll(" ")).replaceAll(" ");
+    // A title copied from the rendered page carries the zero-width space the bot posts after an
+    // "@" (MarkdownSafe); the finding's own title does not.
+    return BLOCKQUOTE_LINE
+        .matcher(FENCED_CODE.matcher(body).replaceAll(" "))
+        .replaceAll(" ")
+        .replace("@\u200B", "@");
   }
 
   /**

@@ -19,10 +19,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.logging.Handler;
@@ -876,5 +878,22 @@ class OverviewScreenTest {
     }
     assertEquals("", OverviewScreen.screenedText("() or []", "+x", ""));
     assertEquals("", OverviewScreen.screenedText("Hosts **two** or **more** findings", "+x", ""));
+  }
+
+  /**
+   * A file summary holding a run of 400,000 blanks with no conjunction after it. Looking for the
+   * conjunction used to start at every blank and read the rest of the run: 32,000 took 2 seconds.
+   */
+  @Test
+  void aLongRunOfBlanksInASummaryIsReadOnce() {
+    var summary = "Adds a parser" + " ".repeat(400_000) + "for the report.";
+
+    assertEquals(
+        summary,
+        assertTimeoutPreemptively(
+            Duration.ofSeconds(10), () -> OverviewScreen.screenedText(summary, "+x", "")));
+    assertEquals(
+        "Adds a parser   and a test,  but   no docs.",
+        OverviewScreen.screenedText("Adds a parser   and a test,  but   no docs.", "+x", ""));
   }
 }

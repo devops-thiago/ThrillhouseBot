@@ -1,0 +1,59 @@
+name: Released history
+
+# A released version's CHANGELOG section and its archived docs (website/src/content/docs/<v>/,
+# website/src/assets/<v>/, website/src/content/versions/<v>.json and its versions.json entry)
+# record what shipped. This check fails a pull request that edits, removes, renames or adds to
+# any of them for a version with a vX.Y.Z tag; a correction goes into the next release as an
+# Errata entry. Adding a new release section or a new archive is allowed.
+#
+# pull_request_target, so this file and the checker always come from the base branch: under
+# pull_request a pull request runs its own copy of the workflow and could rewrite the check it is
+# held to. Nothing from the pull request is executed here: its test merge is fetched as git
+# objects and only read through git diff and git show. The checker's tests, which do run the pull
+# request's code, run in ci.yml under pull_request.
+on:
+  pull_request_target:
+    branches: [main, develop, "release/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  released-history:
+    name: released-history
+    runs-on: ubuntu-latest
+    steps:
+      # No ref: under pull_request_target the default checkout is the base branch, which is the
+      # only code this job runs. Naming a pull request ref here, even the base commit, reads as an
+      # untrusted checkout to workflow scanners.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # The check reads GitHub's test merge of the pull request into its base, against that
+      # merge's first parent: exactly what merging would change, however old the branch is.
+      - name: Fetch the pull request's test merge without checking it out
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The checkout keeps no credential, so the token is passed to these two fetches only.
+          # That keeps them working where the repository is not public.
+          remote="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          # The release tags decide what is locked, so fetch them explicitly rather than rely on
+          # what the checkout brought for a commit ref.
+          git -c "http.extraheader=${auth}" fetch --no-tags --quiet "$remote" "+refs/tags/v*:refs/tags/v*"
+          if ! git -c "http.extraheader=${auth}" fetch --no-tags --quiet "$remote" "+refs/pull/${PR_NUMBER}/merge:refs/remotes/pull/merge"; then
+            echo "::error::GitHub has no test merge for this pull request; resolve its conflicts with the base branch and push again."
+            exit 1
+          fi
+          {
+            echo "MERGE_SHA=$(git rev-parse refs/remotes/pull/merge)"
+            echo "MERGE_BASE_SHA=$(git rev-parse refs/remotes/pull/merge^1)"
+          } >> "$GITHUB_ENV"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - name: Check released CHANGELOG sections and archived docs
+        run: BASE_SHA="$MERGE_BASE_SHA" HEAD_SHA="$MERGE_SHA" node scripts/released-history/check.mjs

@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.MissingNode;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubUrls;
 import io.quarkiverse.githubapp.GitHubClientProvider;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -42,11 +43,12 @@ import org.kohsuke.github.GHRepository;
  *
  * <ol>
  *   <li>Closing keywords in the PR body ({@code Closes #57}, {@code fixes owner/repo#57}, {@code
- *       resolves https://github.com/owner/repo/issues/57}), in the order they appear. This is what
- *       the author wrote, it costs no request, and GitHub only records these links itself when the
- *       base is the default branch, so for a PR into a release branch it is the only source. Code
- *       spans, fenced blocks and HTML comments are skipped: a PR template's commented-out {@code
- *       Closes #} example is not a link.
+ *       resolves https://github.com/owner/repo/issues/57}), in the order they appear. A URL counts
+ *       only on the configured GitHub web address ({@code GITHUB_URL}). This is what the author
+ *       wrote, it costs no request, and GitHub only records these links itself when the base is the
+ *       default branch, so for a PR into a release branch it is the only source. Code spans, fenced
+ *       blocks and HTML comments are skipped: a PR template's commented-out {@code Closes #}
+ *       example is not a link.
  *   <li>GitHub's {@code closingIssuesReferences} (one GraphQL read), which adds issues linked from
  *       the Development panel. An error or a missing permission there is not fatal; the body's
  *       links stand on their own.
@@ -86,20 +88,10 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
 
   /**
    * GitHub's closing keywords ({@code close/fix/resolve} and inflections, optional colon), then the
-   * reference that follows, which {@link #ISSUE_REFERENCE} reads.
+   * reference that follows, which {@link #issueReference} reads.
    */
   private static final Pattern CLOSING_KEYWORD =
       Pattern.compile("(?i)\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\b:?\\s+(\\S+)");
-
-  /**
-   * One issue reference at the start of a token: {@code #n}, {@code owner/repo#n} or an issue URL
-   * on github.com. Group 1 is the qualified repository, group 2 the URL's repository, group 3 the
-   * number.
-   */
-  private static final Pattern ISSUE_REFERENCE =
-      Pattern.compile(
-          "(?i)(?:([\\w.-]+/[\\w.-]+)#|https?://github\\.com/([\\w.-]+/[\\w.-]+)/issues/|#)"
-              + "(\\d{1,9})(?!\\d)");
 
   /**
    * An issue number in the last segment of a branch name: {@code 57}, {@code 57-short-name}, or a
@@ -188,18 +180,24 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
    * case, as GitHub does.
    */
   static List<Integer> bodyReferences(String prBody, String owner, String repo) {
+    return bodyReferences(prBody, owner, repo, GitHubUrls.webUrl());
+  }
+
+  /** {@link #bodyReferences(String, String, String)} on the GitHub web address {@code webUrl}. */
+  static List<Integer> bodyReferences(String prBody, String owner, String repo, String webUrl) {
     if (prBody == null || prBody.isBlank()) {
       return List.of();
     }
     // GitHub keeps the CRLF a browser form submits; normalize so a blank line reads as one.
     var visible = withoutNonLinkRegions(prBody.replace("\r\n", "\n").replace('\r', '\n'));
     var numbers = new LinkedHashSet<Integer>();
+    var issueReference = issueReference(webUrl);
     var keywords = CLOSING_KEYWORD.matcher(visible);
     while (keywords.find()) {
       // A reference wrapped in brackets, "fixes (#12)" or "fixes [#12]", still names the issue.
       var token = keywords.group(1);
       var opener = token.charAt(0) == '(' || token.charAt(0) == '[' ? 1 : 0;
-      var reference = ISSUE_REFERENCE.matcher(token.substring(opener));
+      var reference = issueReference.matcher(token.substring(opener));
       if (reference.lookingAt()) {
         var named = reference.group(reference.group(1) != null ? 1 : 2);
         var number = Integer.parseInt(reference.group(3));
@@ -209,6 +207,18 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
       }
     }
     return List.copyOf(numbers);
+  }
+
+  /**
+   * One issue reference at the start of a token: {@code #n}, {@code owner/repo#n} or an issue URL
+   * on the host of {@code webUrl}, over http or https. Group 1 is the qualified repository, group 2
+   * the URL's repository, group 3 the number.
+   */
+  private static Pattern issueReference(String webUrl) {
+    return Pattern.compile(
+        "(?i)(?:([\\w.-]+/[\\w.-]+)#|https?://"
+            + Pattern.quote(GitHubUrls.withoutScheme(webUrl))
+            + "/([\\w.-]+/[\\w.-]+)/issues/|#)(\\d{1,9})(?!\\d)");
   }
 
   /**

@@ -220,7 +220,7 @@ class FindingStateLifecycleTest {
     store(SCOPE, 2, "eeee0002");
     store(SCOPE, 3, "eeee0003");
     store(SCOPE, 4, "eeee0004");
-    when(auth.getAuthHeader(31L)).thenReturn("token t");
+    when(auth.getAuthHeader(31L, "repo")).thenReturn("token t");
     when(prClient.getPullRequest(eq("token t"), any(), eq("owner"), eq("repo"), anyInt()))
         .thenAnswer(
             call ->
@@ -250,8 +250,8 @@ class FindingStateLifecycleTest {
     store(OTHER_INSTALLATION, 3, "ffff0003");
     states.save(
         new RepoScope(33L, 330L), "no-slash", 4, Map.of("ffff0004", row("ffff0004", "open")));
-    when(auth.getAuthHeader(31L)).thenReturn("token t");
-    when(auth.getAuthHeader(32L)).thenThrow(new IllegalStateException("suspended"));
+    when(auth.getAuthHeader(31L, "repo")).thenReturn("token t");
+    when(auth.getAuthHeader(32L, "repo")).thenThrow(new IllegalStateException("suspended"));
     when(prClient.getPullRequest(eq("token t"), any(), any(), any(), eq(1)))
         .thenThrow(new WebApplicationException(502));
     when(prClient.getPullRequest(eq("token t"), any(), any(), any(), eq(2)))
@@ -297,7 +297,7 @@ class FindingStateLifecycleTest {
   @Test
   void aRenamedRepositoryKeepsItsRowsUnderTheNewName() {
     store(SCOPE, PR, "hhhh0001");
-    when(auth.getAuthHeader(31L)).thenReturn("token t");
+    when(auth.getAuthHeader(31L, "repo")).thenReturn("token t");
     when(prClient.getPullRequest(any(), any(), eq("owner"), eq("renamed"), eq(PR)))
         .thenReturn(details("closed"));
 

@@ -61,6 +61,20 @@ final class HeuristicCodeDetector {
       Pattern.compile("(?i)\\bNormalizer\\b|isWhitespace|\\bNBSP\\b|zero.?width");
 
   /**
+   * The longest added line that is scanned. A longer one is minified or generated text, not a
+   * parser somebody wrote by hand, and reading it would let one pull request line set the cost of
+   * the scan: it is skipped and, like a context line, ends the run of additions before it.
+   */
+  static final int MAX_SCANNED_LINE_CHARS = 1000;
+
+  /**
+   * The most text a declaration pattern reads between its keyword and what ends the declaration
+   * (the member name, the {@code =} of a constant, the {@code )} of an arrow function's parameter
+   * list). A real declaration's modifiers, type and name fit well inside it.
+   */
+  private static final int MAX_DECLARATION_GAP_CHARS = 200;
+
+  /**
    * Name stems (lowercase) whose declared members carry a decision boundary. Checked in plain code
    * against the identifier the structural patterns below capture, so no pattern repeats the
    * alternation.
@@ -93,11 +107,17 @@ final class HeuristicCodeDetector {
    * <p>The gap is atomic and must end on a separator, so it cannot overlap the captured name and
    * re-split on backtracking — that overlap is what made the earlier form super-linear (java:S8786)
    * on a long line with no {@code (}.
+   *
+   * <p>The gap is also bounded ({@link #MAX_DECLARATION_GAP_CHARS}). Every keyword on a line is a
+   * place a match can start, and an unbounded gap read from each one to the end of the line, so a
+   * line of nothing but keywords took time quadratic in its length.
    */
   private static final Pattern HEURISTIC_DECLARATION =
       Pattern.compile(
           "(?i)\\b(?:private|public|protected|internal|static|final|fun|def|func|function)\\b"
-              + "(?>[^(=\\r\\n]*[^\\w.(=\\r\\n])(\\w+)\\s*\\(");
+              + "(?>[^(=\\r\\n]{0,"
+              + MAX_DECLARATION_GAP_CHARS
+              + "}[^\\w.(=\\r\\n])(\\w+)\\s*\\(");
 
   /**
    * Package-private Java-style method declaration, where no visibility keyword is present. The type
@@ -113,14 +133,18 @@ final class HeuristicCodeDetector {
 
   /**
    * JavaScript/TypeScript parser or validator assigned to an arrow/function expression, one pattern
-   * per expression form.
+   * per expression form. The parameter list the second form looks ahead over is bounded ({@link
+   * #MAX_DECLARATION_GAP_CHARS}) for the same reason as the gap of {@link #HEURISTIC_DECLARATION}:
+   * each {@code const name = (} on a line is a start, and none may read to the end of the line.
    */
   private static final List<Pattern> ASSIGNED_HEURISTIC_DECLARATION_PATTERNS =
       List.of(
           Pattern.compile("(?i)\\b(?:const|let|var)\\s+(\\w+)\\s*=\\s*function\\s*\\("),
           Pattern.compile(
               "(?i)\\b(?:const|let|var)\\s+(\\w+)\\s*=\\s*(?:async\\s*)?"
-                  + "\\((?=[^\\r\\n]*\\)\\s*=>)"),
+                  + "\\((?=[^\\r\\n]{0,"
+                  + MAX_DECLARATION_GAP_CHARS
+                  + "}\\)\\s*=>)"),
           Pattern.compile(
               "(?i)\\b(?:const|let|var)\\s+(\\w+)\\s*=\\s*(?:async\\s*)?[\\w$]+\\s*=>"));
 
@@ -135,10 +159,15 @@ final class HeuristicCodeDetector {
    * A tolerance/window constant — the #55 three-line ambiguity window is the motivating shape. The
    * declaration is matched structurally and the name tokens are checked in plain code, the same
    * split as {@link #HEURISTIC_NAME_STEMS}: three unbounded runs in one expression overlapped and
-   * made it super-linear (java:S8786), and a single run terminated by {@code =} cannot.
+   * made it super-linear (java:S8786). The one run left, from the keyword to the {@code =}, is
+   * bounded ({@link #MAX_DECLARATION_GAP_CHARS}): unbounded, it was read to the end of the line
+   * from every keyword on a line that has no {@code =}, which is quadratic in the line's length.
    */
   private static final Pattern THRESHOLD_DECLARATION =
-      Pattern.compile("(?i)\\b(?:static\\s+final|const|val|let|var)\\b([^=\\r\\n]*)=");
+      Pattern.compile(
+          "(?i)\\b(?:static\\s+final|const|val|let|var)\\b([^=\\r\\n]{0,"
+              + MAX_DECLARATION_GAP_CHARS
+              + "})=");
 
   /** Name fragments (lowercase) that mark a declared constant as a tolerance or window. */
   private static final String[] THRESHOLD_NAME_TOKENS = {
@@ -200,9 +229,13 @@ final class HeuristicCodeDetector {
       if (line.startsWith("+++ ")) {
         scope = FileScope.of(line);
         addedLines.clear();
-      } else if (scope.testFile() || line.isEmpty() || line.charAt(0) != '+') {
+      } else if (scope.testFile()
+          || line.isEmpty()
+          || line.charAt(0) != '+'
+          || line.length() > MAX_SCANNED_LINE_CHARS) {
         // Only contiguous additions can form one declaration or construction. Context, removals,
-        // hunk headers, and ignored test-file content all terminate the bounded window.
+        // hunk headers, ignored test-file content and an addition too long to be hand-written
+        // code all terminate the bounded window.
         addedLines.clear();
       } else {
         addedLines.addLast(line);
@@ -231,7 +264,7 @@ final class HeuristicCodeDetector {
   }
 
   /** Whether the text declares a constant whose name carries a tolerance/window token. */
-  private static boolean declaresThresholdConstant(CharSequence text) {
+  static boolean declaresThresholdConstant(CharSequence text) {
     var matcher = THRESHOLD_DECLARATION.matcher(text);
     while (matcher.find()) {
       var declared = matcher.group(1).toLowerCase(Locale.ROOT);
@@ -254,7 +287,7 @@ final class HeuristicCodeDetector {
   }
 
   /** Whether the text declares a member whose captured name carries a heuristic stem. */
-  private static boolean declaresHeuristicMember(CharSequence text, boolean inJavaScriptFile) {
+  static boolean declaresHeuristicMember(CharSequence text, boolean inJavaScriptFile) {
     if (namesHeuristicMember(HEURISTIC_DECLARATION, text)
         || namesHeuristicMember(PACKAGE_PRIVATE_HEURISTIC_DECLARATION, text)) {
       return true;

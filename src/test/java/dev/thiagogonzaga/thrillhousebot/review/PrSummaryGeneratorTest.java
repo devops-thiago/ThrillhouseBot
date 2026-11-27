@@ -453,6 +453,58 @@ class PrSummaryGeneratorTest {
   }
 
   @Test
+  void aMentionAnywhereInTheModelsSummaryIsPostedSoItNotifiesNobody() {
+    var aiSummary =
+        new ReviewResponse.Summary(
+            0,
+            0,
+            0,
+            0,
+            0,
+            "ok",
+            "Lets @octocat rotate keys.",
+            List.of(
+                "The description credits @acme/security, but `@PreAuthorize` is not added <!-- x"
+                    + " -->"));
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
+
+    var summary = generator.generate(1, 5, 0, List.of(), aiSummary, result);
+
+    assertTrue(summary.contains("Lets @&#8203;octocat rotate keys."), summary);
+    assertTrue(
+        summary.contains(
+            "- The description credits @&#8203;acme/security, but `@PreAuthorize` is not added"
+                + " &lt;!-- x -->\n"),
+        summary);
+    assertFalse(summary.contains("@octocat"), summary);
+    assertFalse(summary.contains("@acme"), summary);
+    // The bot's own hint is not model text and still reads as the command it names.
+    assertTrue(summary.contains("Reply with `/review` to re-run."), summary);
+  }
+
+  @Test
+  void aFileSummaryCannotNotifyAndAScopedPathKeepsItsName() {
+    var changedFiles = List.of(new PrSummaryGenerator.ChangedFile("src/@types/a.ts", "modified"));
+    var aiSummary =
+        summaryWithFiles(
+            new ReviewResponse.FileSummary(
+                "src/@types/a.ts", "Typed by @octocat with `@internal` <b>tags</b>"));
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
+
+    var summary = generator.generate(1, 10, 1, changedFiles, aiSummary, result);
+
+    assertTrue(
+        summary.contains(
+            "| `src/@types/a.ts` | Modified | Typed by @&#8203;octocat with `@internal`"
+                + " &lt;b>tags&lt;/b> |"),
+        summary);
+  }
+
+  @Test
   void shouldNeutralizeHostilePrPurpose() {
     var hostilePurpose = "Legit purpose.\n### Injected heading\n</details>\n```\n| pipe";
     var aiSummary = new ReviewResponse.Summary(0, 0, 0, 0, 0, "ok", hostilePurpose, List.of());
@@ -1912,11 +1964,12 @@ class PrSummaryGeneratorTest {
             aiSummary,
             result);
 
-    // A single-clause row is the file's summary, not a re-assertion — it stays verbatim even
-    // though it overlaps the inline finding heavily.
+    // A single-clause row is the file's summary, not a re-assertion — it stays even though it
+    // overlaps the inline finding heavily. Its "<source>" is escaped, so it shows as text instead
+    // of reading as a tag.
     assertTrue(
         summary.contains(
-            "| `src/rotator.c` | Added | Dedup + append to <source>.log using an unvalidated"
+            "| `src/rotator.c` | Added | Dedup + append to &lt;source>.log using an unvalidated"
                 + " client source path |"),
         summary);
     assertTrue(summary.contains("| `src/banlist.h` | Added | Declares banlist API |"), summary);
