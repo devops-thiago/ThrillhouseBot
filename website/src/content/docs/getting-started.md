@@ -23,8 +23,9 @@ app before starting the bot.
 Two fields are optional. **Organization** registers the app under that
 organization instead of your personal account. **GitHub address** (default
 `https://github.com`) takes a plain `https://host` and changes where the
-manifest is sent. The bot's support for other addresses is still in progress
-and untested on a real instance
+manifest is sent. For another address the page also shows the `GITHUB_URL`
+line to set in the bot's `.env`, from which the bot derives its API addresses.
+Other addresses have not been tested on a real GitHub Enterprise instance
 ([#1487](https://github.com/devops-thiago/ThrillhouseBot/issues/1487)).
 
 Installing for an organization on GitHub Enterprise? Read

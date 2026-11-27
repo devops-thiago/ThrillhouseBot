@@ -1,1 +1,2 @@
 dev.thiagogonzaga.thrillhousebot.config.GitHubAppCredentialInterceptor
+dev.thiagogonzaga.thrillhousebot.config.GitHubAddressInterceptor

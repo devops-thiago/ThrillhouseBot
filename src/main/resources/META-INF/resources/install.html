@@ -42,8 +42,8 @@
       <label for="github-address">GitHub address (optional)</label><br />
       <input type="text" id="github-address" inputmode="url" placeholder="https://github.com" autocomplete="off" spellcheck="false" aria-describedby="github-address-note" /><br />
       <small id="github-address-note">
-        Leave empty to use the address shown in the field. The bot's support for addresses other than
-        <code>github.com</code> is still in progress and has not been tested on a real instance
+        Leave empty to use the address shown in the field. Support for addresses other than
+        <code>github.com</code> has not been tested on a real GitHub Enterprise instance
         (<a href="https://github.com/devops-thiago/ThrillhouseBot/issues/1487">see #1487</a>).
       </small>
     </p>
@@ -51,12 +51,16 @@
       <label for="github-organization">Organization (optional)</label><br />
       <input type="text" id="github-organization" placeholder="your-org" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="github-organization-note" /><br />
       <small id="github-organization-note">
-        Registers the app under this organization, which works on <code>github.com</code> today.
-        Leave empty to register it under your personal account.
+        Registers the app under this organization. Leave empty to register it under your personal
+        account.
       </small>
     </p>
     <p id="github-error" class="error" role="alert"></p>
     <p>Registration page: <code id="registration-target"></code></p>
+    <p id="github-env" hidden>
+      Set this in the bot's <code>.env</code> so it uses the same GitHub:
+      <code id="github-env-line"></code>
+    </p>
   </div>
 
   <form id="manifest-form" action="https://github.com/settings/apps/new" method="post">
@@ -75,6 +79,8 @@
     const organizationInput = document.getElementById("github-organization");
     const targetPreview = document.getElementById("registration-target");
     const targetError = document.getElementById("github-error");
+    const envNote = document.getElementById("github-env");
+    const envLine = document.getElementById("github-env-line");
     let defaultGitHubBase = "https://github.com";
     let manifestReady = false;
 
@@ -98,7 +104,8 @@
         return { error: "Enter a valid organization name: up to 39 letters, digits and single hyphens, not starting or ending with a hyphen." };
       }
       const owner = organization ? "/organizations/" + organization : "";
-      return { action: githubBase + owner + "/settings/apps/new" };
+      const env = address && githubBase !== "https://github.com" ? "GITHUB_URL=" + githubBase : "";
+      return { action: githubBase + owner + "/settings/apps/new", env };
     }
 
     function refreshSubmit() {
@@ -106,6 +113,8 @@
       if (target.action) manifestForm.action = target.action;
       targetPreview.textContent = target.action || "-";
       targetError.textContent = target.error || "";
+      envLine.textContent = target.env || "";
+      envNote.hidden = !target.env;
       submitBtn.disabled = !manifestReady || !target.action;
     }
 

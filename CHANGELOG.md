@@ -11,6 +11,14 @@ cannot resolve its review threads.
 
 ### Added
 
+- **`GITHUB_URL` alone points the bot at another GitHub** (#1489): an unset or blank
+  `GITHUB_API_URL` and `GITHUB_GRAPHQL_URL` are now derived from it, as
+  `https://api.github.com` for `github.com`, `https://api.<subdomain>.ghe.com` for a `ghe.com`
+  subdomain, and `<GITHUB_URL>/api/v3` and `<GITHUB_URL>/api/graphql` for any other host. Until now
+  each of the three settings defaulted to `github.com` by itself, so one left out kept calling
+  `github.com`. A value you set still wins, trailing slashes are dropped, and with nothing set every
+  address is unchanged. The installer pages show the `GITHUB_URL` line for a typed address. Nothing
+  has been tested on a real GitHub Enterprise instance.
 - **Static-analysis context** (`REVIEW_STATIC_ANALYSIS_ENABLED`, off by default): the review prompt
   gets the annotations that completed checks attached to the changed files, fenced as untrusted
   data. That covers Code Scanning alerts, which GitHub publishes as annotations of a check run
@@ -29,6 +37,12 @@ cannot resolve its review threads.
 
 ### Changed
 
+- **The bot does not start with a GitHub address that is not `https`** (#1489): the App JWT,
+  installation tokens, the OAuth client secret and user tokens are sent to these addresses. This
+  covers `GITHUB_URL`, `GITHUB_API_URL`, `GITHUB_GRAPHQL_URL`, `GITHUB_OAUTH_URL` and the same
+  addresses set directly on the GitHub App extension or on the `github-api` and `github-graphql`
+  REST client keys. **What you will notice:** of these, v0.9.3 reads only `GITHUB_OAUTH_URL`, so
+  check it if you set it.
 - **A partial review says why the call failed and lists every file** (#1472): the notice names
   what ended a failed batch (a timeout, the model's context window, a response cut before any
   finding was complete, the provider's HTTP status or rate limit, or an unreadable answer). When
@@ -44,8 +58,8 @@ cannot resolve its review threads.
   personal account. A typed address has to be a plain `https` origin; left empty, it is
   `https://github.com`, or on the page the bot serves, the address the bot is configured with.
   Each page shows where the manifest will be sent and keeps the button disabled while either
-  value is invalid. Support in the bot for other addresses is still in progress and untested on a
-  real instance (#1487).
+  value is invalid. Support in the bot for other addresses is untested on a real instance
+  (#1487).
 - **Open findings in the review webhook** (#1443): with `NOTIFICATIONS_WEBHOOK_INCLUDE_OPEN_FINDINGS`
   (new, default off), a `review.completed` payload in the `json` format carries
   `review.openFindings`, the entries of the summary comment's findings manifest: file paths and
