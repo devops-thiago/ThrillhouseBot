@@ -285,7 +285,7 @@ class ReviewOrchestratorTest {
     when(findingVerificationService.verify(
             anyLong(), any(), any(), any(), any(), any(), any(), any()))
         .thenAnswer(invocation -> invocation.getArgument(1));
-    when(followUpAnalyzer.dropRepliedDuplicates(any(), any(), any(), any(), any()))
+    when(followUpAnalyzer.dropRepliedDuplicates(any(), any(), any(), any(), any(), any()))
         .thenAnswer(invocation -> invocation.getArgument(0));
     lenient().when(followUpAnalyzer.parsePreviousResponses(any())).thenReturn(List.of());
     lenient()
@@ -3378,7 +3378,12 @@ class ReviewOrchestratorTest {
                 any());
         verify(followUpAnalyzer)
             .dropRepliedDuplicates(
-                any(), eq(List.of("{\"round\":2}", "{\"round\":1}")), any(), eq(BOT_ID), any());
+                any(),
+                eq(List.of("{\"round\":2}", "{\"round\":1}")),
+                any(),
+                eq(BOT_ID),
+                any(),
+                any());
         // The round did not approve the new head, so the bot's approval of the old one is
         // withdrawn.
         verify(reviewClient)

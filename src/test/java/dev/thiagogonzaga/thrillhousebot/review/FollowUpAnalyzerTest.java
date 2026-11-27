@@ -240,7 +240,8 @@ class FollowUpAnalyzerTest {
 
     assertSame(
         withFinding,
-        analyzer.dropRepliedDuplicates(withFinding, null, comments, BOT_ID, KnownWriters.ALL));
+        analyzer.dropRepliedDuplicates(
+            withFinding, null, comments, BOT_ID, KnownWriters.ALL, new DiffLineResolver(Map.of())));
   }
 
   @Test
@@ -281,7 +282,12 @@ class FollowUpAnalyzerTest {
 
     var result =
         analyzer.dropRepliedDuplicates(
-            reRaised, List.of(PREVIOUS_JSON), comments, BOT_ID, KnownWriters.ALL);
+            reRaised,
+            List.of(PREVIOUS_JSON),
+            comments,
+            BOT_ID,
+            KnownWriters.ALL,
+            new DiffLineResolver(Map.of()));
 
     assertTrue(result.findings().isEmpty());
   }
@@ -326,7 +332,12 @@ class FollowUpAnalyzerTest {
 
     var result =
         analyzer.dropRepliedDuplicates(
-            paraphrased, List.of(priorJson), comments, BOT_ID, KnownWriters.ALL);
+            paraphrased,
+            List.of(priorJson),
+            comments,
+            BOT_ID,
+            KnownWriters.ALL,
+            new DiffLineResolver(Map.of()));
 
     assertTrue(result.findings().isEmpty());
   }
@@ -371,7 +382,12 @@ class FollowUpAnalyzerTest {
     assertSame(
         distinct,
         analyzer.dropRepliedDuplicates(
-            distinct, List.of(priorJson), comments, BOT_ID, KnownWriters.ALL));
+            distinct,
+            List.of(priorJson),
+            comments,
+            BOT_ID,
+            KnownWriters.ALL,
+            new DiffLineResolver(Map.of())));
   }
 
   @Test
@@ -406,7 +422,12 @@ class FollowUpAnalyzerTest {
     assertSame(
         distinct,
         analyzer.dropRepliedDuplicates(
-            distinct, List.of(priorJson), comments, BOT_ID, KnownWriters.ALL));
+            distinct,
+            List.of(priorJson),
+            comments,
+            BOT_ID,
+            KnownWriters.ALL,
+            new DiffLineResolver(Map.of())));
   }
 
   @Test
@@ -468,7 +489,12 @@ class FollowUpAnalyzerTest {
 
     var result =
         analyzer.dropRepliedDuplicates(
-            reRaised, List.of(PREVIOUS_JSON), comments, BOT_ID, KnownWriters.ALL);
+            reRaised,
+            List.of(PREVIOUS_JSON),
+            comments,
+            BOT_ID,
+            KnownWriters.ALL,
+            new DiffLineResolver(Map.of()));
 
     assertTrue(result.findings().isEmpty());
   }
@@ -501,7 +527,12 @@ class FollowUpAnalyzerTest {
 
     var result =
         analyzer.dropRepliedDuplicates(
-            reRaised, List.of(PREVIOUS_JSON), comments, BOT_ID, KnownWriters.ALL);
+            reRaised,
+            List.of(PREVIOUS_JSON),
+            comments,
+            BOT_ID,
+            KnownWriters.ALL,
+            new DiffLineResolver(Map.of()));
 
     assertEquals(1, result.findings().size());
     assertEquals("Genuinely new bug", result.findings().get(0).title());
@@ -528,7 +559,12 @@ class FollowUpAnalyzerTest {
     assertSame(
         reRaised,
         analyzer.dropRepliedDuplicates(
-            reRaised, List.of(PREVIOUS_JSON), comments, BOT_ID, KnownWriters.ALL));
+            reRaised,
+            List.of(PREVIOUS_JSON),
+            comments,
+            BOT_ID,
+            KnownWriters.ALL,
+            new DiffLineResolver(Map.of())));
   }
 
   @Test
@@ -550,7 +586,12 @@ class FollowUpAnalyzerTest {
     assertSame(
         reRaised,
         analyzer.dropRepliedDuplicates(
-            reRaised, List.of(PREVIOUS_JSON), comments, BOT_ID, KnownWriters.ALL));
+            reRaised,
+            List.of(PREVIOUS_JSON),
+            comments,
+            BOT_ID,
+            KnownWriters.ALL,
+            new DiffLineResolver(Map.of())));
   }
 
   @Test
@@ -576,7 +617,12 @@ class FollowUpAnalyzerTest {
 
     var result =
         analyzer.dropRepliedDuplicates(
-            escalated, List.of(PREVIOUS_JSON), comments, BOT_ID, KnownWriters.ALL);
+            escalated,
+            List.of(PREVIOUS_JSON),
+            comments,
+            BOT_ID,
+            KnownWriters.ALL,
+            new DiffLineResolver(Map.of()));
 
     assertTrue(result.findings().isEmpty());
   }
@@ -601,7 +647,12 @@ class FollowUpAnalyzerTest {
 
     var result =
         analyzer.dropRepliedDuplicates(
-            reRaised, List.of(latestRoundJson, PREVIOUS_JSON), comments, BOT_ID, KnownWriters.ALL);
+            reRaised,
+            List.of(latestRoundJson, PREVIOUS_JSON),
+            comments,
+            BOT_ID,
+            KnownWriters.ALL,
+            new DiffLineResolver(Map.of()));
 
     assertTrue(result.findings().isEmpty());
   }
@@ -719,7 +770,12 @@ class FollowUpAnalyzerTest {
     assertSame(
         fileless,
         analyzer.dropRepliedDuplicates(
-            fileless, List.of(PREVIOUS_JSON), comments, BOT_ID, KnownWriters.ALL));
+            fileless,
+            List.of(PREVIOUS_JSON),
+            comments,
+            BOT_ID,
+            KnownWriters.ALL,
+            new DiffLineResolver(Map.of())));
   }
 
   @Test
@@ -743,7 +799,12 @@ class FollowUpAnalyzerTest {
     assertSame(
         different,
         analyzer.dropRepliedDuplicates(
-            different, List.of(PREVIOUS_JSON), comments, BOT_ID, KnownWriters.ALL));
+            different,
+            List.of(PREVIOUS_JSON),
+            comments,
+            BOT_ID,
+            KnownWriters.ALL,
+            new DiffLineResolver(Map.of())));
   }
 
   @Test
@@ -767,7 +828,12 @@ class FollowUpAnalyzerTest {
     assertSame(
         response,
         analyzer.dropRepliedDuplicates(
-            response, List.of(PREVIOUS_JSON), comments, BOT_ID, KnownWriters.ALL));
+            response,
+            List.of(PREVIOUS_JSON),
+            comments,
+            BOT_ID,
+            KnownWriters.ALL,
+            new DiffLineResolver(Map.of())));
   }
 
   @Test
@@ -780,14 +846,30 @@ class FollowUpAnalyzerTest {
     assertSame(
         noFindings,
         analyzer.dropRepliedDuplicates(
-            noFindings, List.of(PREVIOUS_JSON), comments, BOT_ID, KnownWriters.ALL));
+            noFindings,
+            List.of(PREVIOUS_JSON),
+            comments,
+            BOT_ID,
+            KnownWriters.ALL,
+            new DiffLineResolver(Map.of())));
     assertSame(
         withFinding,
         analyzer.dropRepliedDuplicates(
-            withFinding, List.of(PREVIOUS_JSON), List.of(), BOT_ID, KnownWriters.ALL));
+            withFinding,
+            List.of(PREVIOUS_JSON),
+            List.of(),
+            BOT_ID,
+            KnownWriters.ALL,
+            new DiffLineResolver(Map.of())));
     assertSame(
         withFinding,
-        analyzer.dropRepliedDuplicates(withFinding, List.of(), comments, BOT_ID, KnownWriters.ALL));
+        analyzer.dropRepliedDuplicates(
+            withFinding,
+            List.of(),
+            comments,
+            BOT_ID,
+            KnownWriters.ALL,
+            new DiffLineResolver(Map.of())));
   }
 
   @Test
