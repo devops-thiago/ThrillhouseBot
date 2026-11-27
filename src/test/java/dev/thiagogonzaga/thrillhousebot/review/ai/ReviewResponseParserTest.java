@@ -137,6 +137,26 @@ class ReviewResponseParserTest {
     assertNull(response.findings().get(0).confidence());
   }
 
+  /** A key no finding number can be, such as one of eleven digits, is read and names no finding. */
+  @Test
+  void shouldReadAStatusMapKeyTooLongToBeAFindingNumber() {
+    var response =
+        parser.parse(
+            """
+            {"findings": [], "previous_findings_status": {
+              "finding_99999999999": "resolved",
+              "finding_123456789": "unresolved",
+              "9-9-9-9-9-9-9-9-9-9": "resolved"
+            }}
+            """);
+
+    assertEquals(3, response.previousFindingsStatus().size());
+    assertEquals(0, response.previousFindingsStatus().get(0).id());
+    assertEquals("resolved", response.previousFindingsStatus().get(0).status());
+    assertEquals(123456789, response.previousFindingsStatus().get(1).id());
+    assertEquals(0, response.previousFindingsStatus().get(2).id());
+  }
+
   @Test
   void shouldNormalizeStatusMapKeyedByFindingId() {
     var response =

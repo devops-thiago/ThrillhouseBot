@@ -265,9 +265,6 @@ public class ReviewDimensionRouter {
           "scan",
           "iterat");
 
-  /** A call to something named list…, the usual shape of a collection fetch. */
-  private static final Pattern LIST_CALL = Pattern.compile("list\\w*\\s*\\(");
-
   /**
    * Substrings (matched against the lower-cased patch) that suggest a stub or a fake, across the
    * test frameworks the bot reviews — the material dimension 8 needs. A mock outside a test path
@@ -388,13 +385,30 @@ public class ReviewDimensionRouter {
       return out;
     }
     var lower = patch.toLowerCase(Locale.ROOT);
-    if (PAGINATION_SIGNALS.stream().anyMatch(lower::contains) || LIST_CALL.matcher(lower).find()) {
+    if (PAGINATION_SIGNALS.stream().anyMatch(lower::contains) || callsListFunction(lower)) {
       out.putIfAbsent(ReviewDimension.PAGINATION, "API, query or list code in the patch");
     }
     if (MOCK_SIGNALS.stream().anyMatch(lower::contains)) {
       out.putIfAbsent(ReviewDimension.MOCK_FIDELITY, "mock or stub in the patch");
     }
     return out;
+  }
+
+  /**
+   * Whether the lower-cased patch calls something whose name holds {@code list}, the usual shape of
+   * a collection fetch: a whole name, any whitespace, then its argument list opening. Each name is
+   * read once, back from its parenthesis. A pattern starting at {@code list} itself read to the end
+   * of the name from every {@code list} in it, which is quadratic in the length of a name made of
+   * them.
+   */
+  private static boolean callsListFunction(String lower) {
+    for (int paren = lower.indexOf('('); paren >= 0; paren = lower.indexOf('(', paren + 1)) {
+      int end = CallSites.nameEnd(lower, paren);
+      if (lower.substring(CallSites.nameStart(lower, end), end).contains("list")) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** What kind of file {@code path} names, from its name and extension. */

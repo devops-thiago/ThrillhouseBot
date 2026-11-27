@@ -18,9 +18,12 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -143,5 +146,39 @@ class PathScopedInstructionsTest {
     assertEquals(1, resolved.scopes().size());
     assertEquals("api/**", resolved.scopes().get(0).glob());
     assertFalse(resolved.isEmpty());
+  }
+
+  /**
+   * A scope glob of six wildcards against 3,000 changed files with names of 250 characters, the
+   * most files GitHub lists for a pull request. Matched by backtracking, one such name took hours.
+   */
+  @Test
+  void aScopeGlobOfManyWildcardsIsMatchedInBoundedTime() {
+    var files = new ArrayList<String>();
+    for (int i = 0; i < 3_000; i++) {
+      files.add("src/" + "a".repeat(250) + i);
+    }
+    files.add("src/" + "a".repeat(250) + "b");
+    var declared =
+        settings(scope("*a*a*a*a*a*b", "Hostile."), scope("src/*a*a*a*a*a*b", "Anchored."));
+
+    var resolved =
+        assertTimeoutPreemptively(
+            Duration.ofSeconds(20), () -> PathScopedInstructions.resolve(declared, files));
+
+    assertEquals(2, resolved.scopes().size());
+    assertEquals(List.of(files.get(3_000)), resolved.scopes().get(0).files());
+    assertEquals(List.of(files.get(3_000)), resolved.scopes().get(1).files());
+  }
+
+  @Test
+  void aScopeGlobLongerThanTheLimitIsDroppedLikeAnUncompilableOne() {
+    var resolved =
+        PathScopedInstructions.resolve(
+            settings(scope("api/" + "a".repeat(600), "Too long."), scope("api/**", "Kept.")),
+            List.of("api/" + "a".repeat(600), "api/Route.java"));
+
+    assertEquals(1, resolved.scopes().size());
+    assertEquals("api/**", resolved.scopes().get(0).glob());
   }
 }

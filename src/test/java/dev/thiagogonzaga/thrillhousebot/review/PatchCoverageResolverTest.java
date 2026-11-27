@@ -24,6 +24,7 @@ import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.ArtifactZipFetcher;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubActionsClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubTokenReads;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import jakarta.ws.rs.core.Response;
@@ -35,6 +36,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.TreeSet;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -84,11 +86,13 @@ class PatchCoverageResolverTest {
       </report>
       """;
 
+  private final GitHubTokenReads tokenReads = mock(GitHubTokenReads.class);
   private final GitHubActionsClient actionsClient = mock(GitHubActionsClient.class);
+  private final AtomicInteger artifactListings = new AtomicInteger();
   private final ArtifactZipFetcher zipFetcher = mock(ArtifactZipFetcher.class);
 
   private PatchCoverageResolver resolver(boolean enabled) {
-    return new PatchCoverageResolver(actionsClient, zipFetcher, enabled);
+    return new PatchCoverageResolver(tokenReads, actionsClient, zipFetcher, enabled);
   }
 
   private static ReviewOrchestrator.ReviewRequest request() {
@@ -130,17 +134,28 @@ class PatchCoverageResolverTest {
 
   /** A completed run for the head SHA that uploaded {@code artifactName} with id 99. */
   private void givenRunWithArtifact(String artifactName) {
-    givenRuns(new GitHubActionsClient.WorkflowRun(42L, "ci", HEAD_SHA, "completed", "success"));
-    when(actionsClient.listRunArtifacts(any(), any(), eq("o"), eq("r"), eq(42L), anyInt()))
-        .thenReturn(
-            new GitHubActionsClient.RunArtifacts(
-                1, List.of(new GitHubActionsClient.Artifact(99L, artifactName, 1_024, false))));
+    givenRuns(run(42L, HEAD_SHA, "success", artifact(artifactName, false)));
   }
 
-  private void givenRuns(GitHubActionsClient.WorkflowRun... runs) {
-    when(actionsClient.listWorkflowRuns(
-            any(), any(), eq("o"), eq("r"), eq(HEAD_SHA), eq("completed"), anyInt()))
-        .thenReturn(new GitHubActionsClient.WorkflowRuns(runs.length, List.of(runs)));
+  /** A run whose artifact listings are counted. */
+  private GitHubTokenReads.WorkflowRun run(
+      long id, String headSha, String conclusion, GitHubTokenReads.Artifact... artifacts) {
+    return new GitHubTokenReads.WorkflowRun(
+        id,
+        headSha,
+        conclusion,
+        () -> {
+          artifactListings.incrementAndGet();
+          return List.of(artifacts);
+        });
+  }
+
+  private static GitHubTokenReads.Artifact artifact(String name, boolean expired) {
+    return new GitHubTokenReads.Artifact(99L, name, expired);
+  }
+
+  private void givenRuns(GitHubTokenReads.WorkflowRun... runs) {
+    when(tokenReads.completedWorkflowRuns("token", "o", "r", HEAD_SHA)).thenReturn(List.of(runs));
   }
 
   private void givenDownloadRedirectsTo(URI location) {
@@ -164,7 +179,7 @@ class PatchCoverageResolverTest {
     void contributesNothingAndCallsNoApiWhenTheDeploymentSwitchIsOff() {
       assertEquals("", resolve(false, ARTIFACT));
 
-      verifyNoInteractions(actionsClient, zipFetcher);
+      verifyNoInteractions(tokenReads, actionsClient, zipFetcher);
     }
 
     @Test
@@ -174,7 +189,7 @@ class PatchCoverageResolverTest {
           resolver(true).resolve("token", request(), RepoSettings.EMPTY, changedFile()),
           "the common case: a repository that declares nothing gets no coverage context");
 
-      verifyNoInteractions(actionsClient, zipFetcher);
+      verifyNoInteractions(tokenReads, actionsClient, zipFetcher);
     }
 
     @Test
@@ -183,7 +198,7 @@ class PatchCoverageResolverTest {
           PatchCoverageResolver.Resolution.NONE,
           resolver(true).resolve("token", request(), settingsNaming(ARTIFACT), List.of()));
 
-      verifyNoInteractions(actionsClient, zipFetcher);
+      verifyNoInteractions(tokenReads, actionsClient, zipFetcher);
     }
 
     @Test
@@ -228,7 +243,7 @@ class PatchCoverageResolverTest {
           PatchCoverageResolver.Resolution.NONE,
           resolver(true).resolve("token", blankSha, settingsNaming(ARTIFACT), changedFile()));
 
-      verifyNoInteractions(actionsClient, zipFetcher);
+      verifyNoInteractions(tokenReads, actionsClient, zipFetcher);
     }
 
     @Test
@@ -236,13 +251,13 @@ class PatchCoverageResolverTest {
       var config = mock(ThrillhouseConfig.class, RETURNS_DEEP_STUBS);
       when(config.review().patchCoverage().enabled()).thenReturn(false);
 
-      var injected = new PatchCoverageResolver(actionsClient, zipFetcher, config);
+      var injected = new PatchCoverageResolver(tokenReads, actionsClient, zipFetcher, config);
 
       assertEquals(
           PatchCoverageResolver.Resolution.NONE,
           injected.resolve("token", request(), settingsNaming(ARTIFACT), changedFile()),
           "the CDI constructor must wire thrillhousebot.review.patch-coverage.enabled");
-      verifyNoInteractions(actionsClient, zipFetcher);
+      verifyNoInteractions(tokenReads, actionsClient, zipFetcher);
     }
   }
 
@@ -266,14 +281,13 @@ class PatchCoverageResolverTest {
 
     @Test
     void ignoresRunsForAnotherCommit() {
-      givenRuns(new GitHubActionsClient.WorkflowRun(42L, "ci", "otherSha", "completed", "success"));
+      givenRuns(run(42L, "otherSha", "success"));
 
       assertEquals(
           "",
           resolve(true, ARTIFACT),
           "coverage from a different revision would point at meaningless line numbers");
-      verify(actionsClient, never())
-          .listRunArtifacts(any(), any(), any(), any(), anyLong(), anyInt());
+      assertEquals(0, artifactListings.get());
     }
 
     @Test
@@ -290,11 +304,7 @@ class PatchCoverageResolverTest {
 
     @Test
     void ignoresAnExpiredArtifactEvenThoughItsBytesWouldStillParse() {
-      givenRuns(new GitHubActionsClient.WorkflowRun(42L, "ci", HEAD_SHA, "completed", "success"));
-      when(actionsClient.listRunArtifacts(any(), any(), eq("o"), eq("r"), eq(42L), anyInt()))
-          .thenReturn(
-              new GitHubActionsClient.RunArtifacts(
-                  1, List.of(new GitHubActionsClient.Artifact(99L, ARTIFACT, 1_024, true))));
+      givenRuns(run(42L, HEAD_SHA, "success", artifact(ARTIFACT, true)));
       // Same wiring: a readable report is waiting behind the download, so "" can only be the
       // expiry check doing its job — not an unmocked collaborator quietly skipping the path.
       givenDownloadRedirectsTo(BLOB);
@@ -311,12 +321,8 @@ class PatchCoverageResolverTest {
       // skipped before its artifacts are even listed, and so must an absent one: a run GitHub
       // reports as completed with no conclusion is not a run that said it succeeded.
       givenRuns(
-          new GitHubActionsClient.WorkflowRun(41L, "ci", HEAD_SHA, "completed", null),
-          new GitHubActionsClient.WorkflowRun(42L, "ci", HEAD_SHA, "completed", "failure"));
-      when(actionsClient.listRunArtifacts(any(), any(), eq("o"), eq("r"), eq(42L), anyInt()))
-          .thenReturn(
-              new GitHubActionsClient.RunArtifacts(
-                  1, List.of(new GitHubActionsClient.Artifact(99L, ARTIFACT, 1_024, false))));
+          run(41L, HEAD_SHA, null, artifact(ARTIFACT, false)),
+          run(42L, HEAD_SHA, "failure", artifact(ARTIFACT, false)));
       givenDownloadRedirectsTo(BLOB);
       when(zipFetcher.fetch(BLOB)).thenReturn(zippedReport(REPORT));
 
@@ -324,8 +330,7 @@ class PatchCoverageResolverTest {
           "",
           resolve(true, ARTIFACT),
           "coverage from a failed or cancelled run is not something the model may treat as fact");
-      verify(actionsClient, never())
-          .listRunArtifacts(any(), any(), any(), any(), anyLong(), anyInt());
+      assertEquals(0, artifactListings.get());
     }
 
     @Test
@@ -374,7 +379,7 @@ class PatchCoverageResolverTest {
 
     @Test
     void degradesToNoContextWhenTheApiFails() {
-      when(actionsClient.listWorkflowRuns(any(), any(), any(), any(), any(), any(), anyInt()))
+      when(tokenReads.completedWorkflowRuns(any(), any(), any(), any()))
           .thenThrow(new IllegalStateException("502 from GitHub"));
 
       assertEquals(
@@ -382,37 +387,31 @@ class PatchCoverageResolverTest {
     }
 
     @Test
-    void degradesToNoContextWhenNoRunOrArtifactListCanBeRead() {
-      when(actionsClient.listWorkflowRuns(
-              any(), any(), eq("o"), eq("r"), eq(HEAD_SHA), eq("completed"), anyInt()))
-          .thenReturn(null);
-      assertEquals(
-          "", resolve(true, ARTIFACT), "a null runs payload is not a run with no artifact");
+    void degradesToNoContextWhenTheArtifactsOfARunCannotBeListed() {
+      givenRuns(
+          new GitHubTokenReads.WorkflowRun(
+              42L,
+              HEAD_SHA,
+              "success",
+              () -> {
+                throw new IllegalStateException("502 from GitHub");
+              }));
 
-      reset(actionsClient);
-      givenRuns(new GitHubActionsClient.WorkflowRun(42L, "ci", HEAD_SHA, "completed", "success"));
-      when(actionsClient.listRunArtifacts(any(), any(), any(), any(), anyLong(), anyInt()))
-          .thenReturn(null);
-      assertEquals("", resolve(true, ARTIFACT), "a null artifact list degrades to no coverage");
-
-      verifyNoInteractions(zipFetcher);
+      assertEquals("", resolve(true, ARTIFACT));
+      verifyNoInteractions(actionsClient, zipFetcher);
     }
 
     @Test
     void probesOnlyABoundedNumberOfRunsForTheSameCommit() {
-      var runs = new GitHubActionsClient.WorkflowRun[PatchCoverageResolver.MAX_RUNS_PROBED + 4];
+      var runs = new GitHubTokenReads.WorkflowRun[PatchCoverageResolver.MAX_RUNS_PROBED + 4];
       for (var i = 0; i < runs.length; i++) {
-        runs[i] =
-            new GitHubActionsClient.WorkflowRun(i + 1L, "ci", HEAD_SHA, "completed", "success");
+        runs[i] = run(i + 1L, HEAD_SHA, "success");
       }
       givenRuns(runs);
-      when(actionsClient.listRunArtifacts(any(), any(), any(), any(), anyLong(), anyInt()))
-          .thenReturn(new GitHubActionsClient.RunArtifacts(0, List.of()));
 
       assertEquals("", resolve(true, ARTIFACT));
 
-      verify(actionsClient, times(PatchCoverageResolver.MAX_RUNS_PROBED))
-          .listRunArtifacts(any(), any(), any(), any(), anyLong(), anyInt());
+      assertEquals(PatchCoverageResolver.MAX_RUNS_PROBED, artifactListings.get());
     }
 
     @Test

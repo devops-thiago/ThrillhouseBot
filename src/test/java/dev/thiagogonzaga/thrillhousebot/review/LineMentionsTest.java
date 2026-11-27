@@ -53,4 +53,29 @@ class LineMentionsTest {
   void aFileAtTheRepositoryRootMatchesItsBareName() {
     assertEquals("Dockerfile:9", LineMentions.moved("Dockerfile:8", "Dockerfile", 8, 9));
   }
+
+  /**
+   * A path of 500,000 directories. Reading it used to take a stack frame per directory and ended in
+   * a {@link StackOverflowError} near 4,000 of them on a default thread stack.
+   */
+  @Test
+  void aPathOfManyDirectoriesIsReadWithoutExhaustingTheStack() {
+    var deep = "/" + "a/".repeat(500_000);
+
+    assertEquals(
+        "see " + deep + FILE + ":45 here",
+        LineMentions.moved("see " + deep + FILE + ":42 here", FILE, 42, 45));
+    assertEquals(
+        "see " + deep + "other/Foo.java:42, then Foo.java:45",
+        LineMentions.moved("see " + deep + "other/Foo.java:42, then Foo.java:42", FILE, 42, 45));
+  }
+
+  @Test
+  void aDirectoryNamedLikeTheFileIsPartOfAnotherPath() {
+    var text = "Foo.java/Foo.java:42 and Foo.java:7/Foo.java:42";
+    assertEquals(text, LineMentions.moved(text, FILE, 42, 45));
+    assertEquals(
+        "main/Foo.java:45, Foo.java/main/Foo.java:42",
+        LineMentions.moved("main/Foo.java:42, Foo.java/main/Foo.java:42", FILE, 42, 45));
+  }
 }

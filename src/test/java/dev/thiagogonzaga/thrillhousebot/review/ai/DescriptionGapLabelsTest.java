@@ -16,7 +16,10 @@
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.time.Duration;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -305,5 +308,41 @@ class DescriptionGapLabelsTest {
     assertEquals(
         List.of("Keep " + word + " a previously listed gap now."),
         DescriptionGapLabels.stripIssued(List.of("Keep " + word + " G1 now."), 1));
+  }
+
+  /**
+   * A gap holding a run of 400,000 blanks or blank lines. The patterns that open with a run of
+   * blanks used to start at every one of them and read the rest each time: 32,000 took 6 seconds.
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {" ", " \n"})
+  void aLongRunOfBlanksInAGapIsReadOnce(String blank) {
+    var gap =
+        "The description says rows are kept (G1)"
+            + blank.repeat(400_000 / blank.length())
+            + "while the parser drops the last one, as in G2.";
+
+    var stripped =
+        assertTimeoutPreemptively(
+            Duration.ofSeconds(10), () -> DescriptionGapLabels.stripIssued(List.of(gap), 2));
+
+    assertEquals(1, stripped.size());
+    assertTrue(stripped.getFirst().startsWith("The description says rows are kept"), "the head");
+    assertTrue(stripped.getFirst().endsWith("while the parser drops the last one."), "the tail");
+  }
+
+  @Test
+  void aLabelAfterSeveralBlanksIsRemovedAsAfterOne() {
+    assertEquals(
+        List.of(
+            "The description says rows are kept.",
+            "Rows are kept (the cache);.",
+            "The parser drops the last row."),
+        DescriptionGapLabels.stripIssued(
+            List.of(
+                "The description says rows are kept   (G1)   , as in G2.",
+                "Rows are kept   (see G1, the cache)  ;  same as G2.",
+                "The parser drops the last row , like G1."),
+            2));
   }
 }

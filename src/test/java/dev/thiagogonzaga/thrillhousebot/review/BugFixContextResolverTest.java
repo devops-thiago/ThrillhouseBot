@@ -20,6 +20,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
+import java.time.Duration;
 import java.util.List;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -42,6 +43,36 @@ class BugFixContextResolverTest {
       assertTrue(BugFixContextResolver.isBugFix("* [X] Bug fix"));
       assertTrue(BugFixContextResolver.isBugFix("- [x] Bugfix"));
       assertTrue(BugFixContextResolver.isBugFix("- [x] Bug-fix"));
+    }
+
+    @Test
+    void shouldReadTheCheckboxUnderIndentationAndAfterBlankLines() {
+      assertTrue(BugFixContextResolver.isBugFix("## Type\n\n\n   - [x] Bug fix"));
+      assertTrue(BugFixContextResolver.isBugFix("\t*\t[x] bug  fix"));
+      assertTrue(BugFixContextResolver.isBugFix("-[x] bug-fix\r\n- [ ] Feature\r\n"));
+      assertFalse(BugFixContextResolver.isBugFix("Not a list - [x] Bug fix"));
+      assertFalse(
+          BugFixContextResolver.isBugFix("-\n[x] Bug fix"),
+          "a marker and a box on two lines are not a checkbox");
+    }
+
+    /**
+     * Every blank line used to be a place the checkbox pattern started from and read the rest of
+     * the blank run, so this body took minutes. It is about six times GitHub's body limit.
+     */
+    @Test
+    void shouldReadABodyOfBlankLinesInLinearTime() {
+      var blank = "x" + "\n".repeat(400_000);
+      var indented = "x" + "\n ".repeat(200_000);
+      assertTimeoutPreemptively(
+          Duration.ofSeconds(10),
+          () -> {
+            assertFalse(BugFixContextResolver.isBugFix(blank));
+            assertFalse(BugFixContextResolver.isBugFix(indented));
+            assertTrue(BugFixContextResolver.isBugFix(blank + "- [x] Bug fix"));
+            assertEquals(
+                List.of(7), BugFixContextResolver.linkedIssueNumbers(indented + "fixes #7"));
+          });
     }
 
     @Test

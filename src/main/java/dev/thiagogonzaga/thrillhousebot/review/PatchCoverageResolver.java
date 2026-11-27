@@ -19,6 +19,7 @@ import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.ArtifactZipFetcher;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubActionsClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubTokenReads;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -68,9 +69,6 @@ public class PatchCoverageResolver {
 
   private static final String ACCEPT = "application/vnd.github+json";
 
-  /** Only a finished run has uploaded its artifacts. */
-  private static final String COMPLETED = "completed";
-
   /**
    * Run conclusions whose coverage report may be trusted as measured fact. {@code success} is the
    * ordinary green run; {@code neutral} is a deliberate non-failing outcome (a run that chose to
@@ -108,21 +106,27 @@ public class PatchCoverageResolver {
     static final Resolution NONE = new Resolution("", "");
   }
 
+  private final GitHubTokenReads tokenReads;
   private final GitHubActionsClient actionsClient;
   private final ArtifactZipFetcher zipFetcher;
   private final boolean enabled;
 
   @Inject
   public PatchCoverageResolver(
+      GitHubTokenReads tokenReads,
       @RestClient GitHubActionsClient actionsClient,
       ArtifactZipFetcher zipFetcher,
       ThrillhouseConfig config) {
-    this(actionsClient, zipFetcher, config.review().patchCoverage().enabled());
+    this(tokenReads, actionsClient, zipFetcher, config.review().patchCoverage().enabled());
   }
 
   /** Visible for tests: the deployment kill switch is passed directly. */
   PatchCoverageResolver(
-      GitHubActionsClient actionsClient, ArtifactZipFetcher zipFetcher, boolean enabled) {
+      GitHubTokenReads tokenReads,
+      GitHubActionsClient actionsClient,
+      ArtifactZipFetcher zipFetcher,
+      boolean enabled) {
+    this.tokenReads = tokenReads;
     this.actionsClient = actionsClient;
     this.zipFetcher = zipFetcher;
     this.enabled = enabled;
@@ -223,12 +227,7 @@ public class PatchCoverageResolver {
     // proceeds exactly as it does for every repository that publishes no report at all. Walking
     // further pages would spend an extra API call on every review to change nothing for any of
     // them.
-    var runs =
-        actionsClient.listWorkflowRuns(
-            auth, ACCEPT, owner, repo, headSha, COMPLETED, GitHubActionsClient.RUNS_PER_PAGE);
-    if (runs == null) {
-      return null;
-    }
+    var runs = tokenReads.completedWorkflowRuns(auth, owner, repo, headSha);
     // Declarative rather than a loop with jumps: the policy is "only SUCCEEDED runs for this exact
     // commit, and at most MAX_RUNS_PROBED of them", and saying it once here keeps the walk below to
     // the single thing it does — look for the named artifact. The conclusion filter is necessary
@@ -237,13 +236,13 @@ public class PatchCoverageResolver {
     // still uploaded via `if: always()`) is the run stopping short, not measured coverage, and its
     // ci=0 regions must not reach the model as fact.
     var candidates =
-        runs.workflowRuns().stream()
+        runs.stream()
             .filter(run -> headSha.equalsIgnoreCase(run.headSha()))
             .filter(run -> isUsableConclusion(run.conclusion()))
             .limit(MAX_RUNS_PROBED)
             .toList();
     for (var run : candidates) {
-      var artifactId = artifactIdOnRun(auth, owner, repo, run.id(), artifactName);
+      var artifactId = artifactIdOnRun(run, artifactName);
       if (artifactId != null) {
         return artifactId;
       }
@@ -257,21 +256,14 @@ public class PatchCoverageResolver {
   }
 
   /** The named, unexpired artifact's id on one run, or {@code null} when it has none. */
-  private Long artifactIdOnRun(
-      String auth, String owner, String repo, long runId, String artifactName) {
+  private static Long artifactIdOnRun(GitHubTokenReads.WorkflowRun run, String artifactName) {
     // Single page again, for the same reason and with more headroom: this is scoped to ONE run
     // and asks for GitHub's maximum page size, so it truncates only for a run that uploaded more
     // than ARTIFACTS_PER_PAGE artifacts. The consequence is identical — the report is not found
     // and the feature contributes nothing.
-    var artifacts =
-        actionsClient.listRunArtifacts(
-            auth, ACCEPT, owner, repo, runId, GitHubActionsClient.ARTIFACTS_PER_PAGE);
-    if (artifacts == null) {
-      return null;
-    }
-    return artifacts.artifacts().stream()
+    return run.artifacts().stream()
         .filter(artifact -> !artifact.expired() && artifactName.equalsIgnoreCase(artifact.name()))
-        .map(GitHubActionsClient.Artifact::id)
+        .map(GitHubTokenReads.Artifact::id)
         .findFirst()
         .orElse(null);
   }

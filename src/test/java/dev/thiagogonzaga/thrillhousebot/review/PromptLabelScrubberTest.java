@@ -19,8 +19,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import java.time.Duration;
 import java.util.List;
 import java.util.Random;
 import java.util.Set;
@@ -1641,5 +1644,48 @@ class PromptLabelScrubberTest {
       var once = PromptLabelScrubber.scrub(text);
       assertEquals(once, PromptLabelScrubber.scrub(once));
     }
+  }
+
+  /**
+   * A description holding one run of 200,000 blanks. The patterns that open with a run of blanks
+   * used to start at every blank of it and read the rest each time: 16,000 took 15 seconds.
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {" ", "\t", " \n"})
+  void aLongRunOfBlanksIsReadOnce(String blank) {
+    var text =
+        "The parser drops the last row"
+            + blank.repeat(200_000 / blank.length())
+            + "when the file ends.";
+
+    var scrubbed =
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> PromptLabelScrubber.scrub(text));
+
+    assertTrue(scrubbed.startsWith("The parser drops the last row"), "the text before the run");
+    assertTrue(scrubbed.endsWith("when the file ends."), "the text after the run");
+  }
+
+  /** What each pattern opening with blanks removes is the same with several blanks before it. */
+  @ParameterizedTest
+  @CsvSource(
+      delimiter = '|',
+      ignoreLeadingAndTrailingWhitespace = false,
+      value = {
+        "It reads the key from issue #117 as  provided with this review and stops."
+            + "|It reads the key from issue #117 as  and stops.",
+        "It reads the key from issue #117  as provided with this review and stops."
+            + "|It reads the key from issue #117 and stops.",
+        "It reads the key,   as provided with this review, and stops.|It reads the key and stops.",
+        "The value is checked   (as provided with this review) first.|The value is checked first.",
+        "It skips Foo.java   (withheld by the ignore list) entirely.|It skips Foo.java entirely.",
+        "The second,   among the three verified above, explains it.|The second,, explains it.",
+        "It works   - Wait, the loop exits early.|It works - the loop exits early.",
+        "BedReporter...   rather, grep across the added files confirms it."
+            + "|Grep across the added files confirms it.",
+        "It follows the rule   (see [L12]) here.|It follows the rule here.",
+        "   Among the three verified above, the second explains it.|   The second explains it."
+      })
+  void aNoteAfterSeveralBlanksIsRemovedAsAfterOne(String text, String expected) {
+    assertEquals(expected, PromptLabelScrubber.scrub(text));
   }
 }

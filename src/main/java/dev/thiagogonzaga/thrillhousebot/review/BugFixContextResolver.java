@@ -47,9 +47,16 @@ public class BugFixContextResolver {
   private static final Pattern CLOSING_REFERENCE =
       Pattern.compile("(?i)\\b(?:fix(?:e[sd])?|close[sd]?|resolve[sd]?)\\b:?\\s+#(\\d{1,9})\\b");
 
-  /** A checked PR-template checkbox whose label contains "bug fix" (emoji between them is fine). */
+  /**
+   * A checked PR-template checkbox whose label contains "bug fix" (emoji between them is fine).
+   *
+   * <p>The indentation and the gap after the list marker are spaces and tabs only. Whitespace that
+   * could cross a line break made every line of a run of blank lines a start that read the rest of
+   * the run, so a pull request body of nothing but line breaks took time quadratic in its length. A
+   * blank line before the checkbox needs no such match: the checkbox's own line is a start too.
+   */
   private static final Pattern BUG_FIX_CHECKBOX =
-      Pattern.compile("(?im)^\\s*[-*]\\s*\\[x\\][^\\r\\n]*\\bbug[\\s-]*fix");
+      Pattern.compile("(?im)^[ \\t]*[-*][ \\t]*\\[x\\][^\\r\\n]*\\bbug[\\s-]*fix");
 
   private final GitHubCommentClient commentClient;
 

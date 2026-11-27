@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -27,6 +28,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDimensionRouter.FileKind;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewDimension;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
@@ -135,6 +137,47 @@ class ReviewDimensionRouterTest {
             ReviewDimension.CODE_QUALITY_AND_COMPLEXITY,
             ReviewDimension.PRODUCER_CONSUMER),
         routed(file("src/main/java/A.java", PLAIN_LOGIC)));
+  }
+
+  @Test
+  void aCallCountsAsAListCallWhereverListStandsInItsName() {
+    for (var call :
+        List.of(
+            "list(x)",
+            "wishlist (x)",
+            "enlist_all(x)",
+            "a.mylistof9(\n",
+            "List<A> x = listOf\t(")) {
+      assertTrue(
+          routed(file("src/main/java/A.java", "@@ -1 +1 @@\n+" + call))
+              .contains(ReviewDimension.PAGINATION),
+          call);
+    }
+    for (var notACall :
+        List.of("listing = 1", "var list = (a)", "lis(t)", "list.of(x)", "checklist")) {
+      assertFalse(
+          routed(file("src/main/java/A.java", "@@ -1 +1 @@\n+" + notACall))
+              .contains(ReviewDimension.PAGINATION),
+          notACall);
+    }
+  }
+
+  /**
+   * One name of 400,000 characters. The probe used to read to the end of the name from every {@code
+   * list} in it, which took minutes.
+   */
+  @Test
+  void aNameMadeOfListsIsReadOnce() {
+    var name = "@@ -1 +1 @@\n+" + "list".repeat(100_000);
+    assertTimeoutPreemptively(
+        Duration.ofSeconds(10),
+        () -> {
+          assertFalse(
+              routed(file("src/main/java/A.java", name)).contains(ReviewDimension.PAGINATION));
+          assertTrue(
+              routed(file("src/main/java/A.java", name + " (x)"))
+                  .contains(ReviewDimension.PAGINATION));
+        });
   }
 
   @Test
