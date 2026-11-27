@@ -962,7 +962,6 @@ class ReviewDispatcherTest {
     assertEquals("", state.reviewingSha());
   }
 
-  /** Marks a review of {@code headSha} running, with no span and no requests counted. */
   /** A dispatcher on virtual threads, as in production, with the given per-repository limits. */
   private ReviewDispatcher limitedDispatcher(AutoReviewSlots limits) {
     reviewExecutor.shutdownNow();
@@ -1206,6 +1205,7 @@ class ReviewDispatcherTest {
     assertEquals(0, limited.stateCount());
   }
 
+  /** Marks a review of {@code headSha} running, with no span and no requests counted. */
   private static void beginReview(ReviewDispatcher.PerPrState state, String headSha) {
     state.beginReview(
         headSha, Span.getInvalid(), new ReviewDispatcher.PerPrState.Served(List.of(), 0));

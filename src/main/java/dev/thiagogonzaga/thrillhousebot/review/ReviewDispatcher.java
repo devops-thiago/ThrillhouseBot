@@ -374,32 +374,39 @@ public final class ReviewDispatcher {
     var req = batch.request();
     var outcome =
         autoReviewSlots.acquire(req.installationId(), req.repositoryId(), state::hasQueuedReview);
-    if (outcome == AutoReviewSlots.Outcome.ACQUIRED) {
-      try {
-        if (!skippedAsThrottled(req)) {
-          reviewBatch(state, batch, served);
-        }
-      } finally {
-        autoReviewSlots.release(req.installationId(), req.repositoryId());
-      }
-    } else if (outcome == AutoReviewSlots.Outcome.QUEUE_FULL) {
-      skipEmitter.recordSkip(
-          ReviewSkipReason.REPOSITORY_QUEUE_FULL,
-          req.installationId(),
-          req.owner(),
-          req.repo(),
-          req.prNumber(),
-          "as many automatic reviews of the repository wait as AUTO_REVIEW_MAX_QUEUED_PER_REPO"
-              + " allows (a later push or a manual /review reviews it)");
-    } else {
+    switch (outcome) {
+      case ACQUIRED -> reviewHoldingSlot(state, batch, served);
+      case QUEUE_FULL ->
+          skipEmitter.recordSkip(
+              ReviewSkipReason.REPOSITORY_QUEUE_FULL,
+              req.installationId(),
+              req.owner(),
+              req.repo(),
+              req.prNumber(),
+              "as many automatic reviews of the repository wait as AUTO_REVIEW_MAX_QUEUED_PER_REPO"
+                  + " allows (a later push or a manual /review reviews it)");
       // Replaced by a newer request for the pull request, which the worker takes next, or
       // interrupted by a shutdown.
-      log.info(
-          "Not running the review of {}/{} #{} that waited for a review slot: {}",
-          req.owner(),
-          req.repo(),
-          req.prNumber(),
-          outcome);
+      case INTERRUPTED, SUPERSEDED ->
+          log.info(
+              "Not running the review of {}/{} #{} that waited for a review slot: {}",
+              req.owner(),
+              req.repo(),
+              req.prNumber(),
+              outcome);
+    }
+  }
+
+  /** Runs the review whose slot is held, unless the rate window now covers it, then frees it. */
+  private void reviewHoldingSlot(
+      PerPrState state, PerPrState.ReviewBatch batch, PerPrState.Served served) {
+    var req = batch.request();
+    try {
+      if (!skippedAsThrottled(req)) {
+        reviewBatch(state, batch, served);
+      }
+    } finally {
+      autoReviewSlots.release(req.installationId(), req.repositoryId());
     }
   }
 
