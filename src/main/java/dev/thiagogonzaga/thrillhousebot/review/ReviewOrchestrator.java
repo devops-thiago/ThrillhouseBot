@@ -500,7 +500,8 @@ public class ReviewOrchestrator {
                   config.review().showEvidence()
                       ? finding ->
                           evidence.basis().render(finding, ctx.pathInstructions(), ciCitations)
-                      : finding -> ""));
+                      : finding -> "",
+                  inlineComments));
 
       resultSurfaced = true;
       final var doneReq = req;

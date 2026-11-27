@@ -579,7 +579,7 @@ public class FollowUpAnalyzer {
     var key = SuggestionFormatter.findingKey(finding.file(), finding.line(), finding.title());
     var own =
         markedOnFile(finding, findingId, inlineComments, botIdentity)
-            .filter(c -> isOwnComment(finding, key, c.body()))
+            .filter(c -> isOwnComment(finding.title(), finding.description(), key, c.body()))
             .map(GitHubReviewClient.PullRequestComment::id)
             .toList();
     return own.isEmpty() ? null : own.get(own.size() - 1);
@@ -621,10 +621,29 @@ public class FollowUpAnalyzer {
    * posted before carries none, and the finding's own content in the body decides ({@link
    * #bodyCarriesOwnContent}).
    */
-  private static boolean isOwnComment(ReviewResponse.Finding finding, String key, String body) {
+  private static boolean isOwnComment(String title, String description, String key, String body) {
     return SuggestionFormatter.parseFindingKey(body)
         .map(key::equals)
-        .orElseGet(() -> bodyCarriesOwnContent(finding, body));
+        .orElseGet(() -> bodyCarriesOwnContent(title, description, body));
+  }
+
+  /**
+   * The root of the thread a still-open finding was posted on (the newest when there are several),
+   * or empty when it has none (#1436). The still-open set holds no round positions, so the thread
+   * is found by the finding's own file and key or content ({@link #isOwnComment}), whatever
+   * position its marker carries.
+   */
+  static Optional<Long> openFindingThread(
+      Finding finding,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      BotIdentity botIdentity) {
+    var key = SuggestionFormatter.findingKey(finding.file(), finding.line(), finding.title());
+    return botRootComments(inlineComments, botIdentity)
+        .filter(c -> c.body() != null)
+        .filter(c -> finding.file() == null || FilePaths.same(finding.file(), c.path()))
+        .filter(c -> isOwnComment(finding.title(), finding.description(), key, c.body()))
+        .map(GitHubReviewClient.PullRequestComment::id)
+        .reduce((older, newer) -> newer);
   }
 
   /**
@@ -639,12 +658,10 @@ public class FollowUpAnalyzer {
    * so it falls back to its description, which the bot prints verbatim in the body. A finding with
    * neither matches nothing, so the caller holds rather than risk an over-clear.
    */
-  private static boolean bodyCarriesOwnContent(ReviewResponse.Finding finding, String body) {
-    String title = finding.title();
+  private static boolean bodyCarriesOwnContent(String title, String description, String body) {
     if (title != null && !title.isBlank()) {
       return body.contains(" — " + title + "**");
     }
-    String description = finding.description();
     return description != null && !description.isBlank() && body.contains(description);
   }
 
@@ -4966,7 +4983,8 @@ public class FollowUpAnalyzer {
   }
 
   /**
-   * The body with closed names and consolidated delta counts removed, wherever they sit.
+   * The body with closed names, still-open names ({@link OpenFindingNames}, #1436) and consolidated
+   * delta counts removed, wherever they sit.
    *
    * <p>{@link #isSelfAuthoredStatusBody} only recognizes a body the section <em>leads</em>, which
    * is the no-new-findings shape. A body that also carries findings opens with those instead, so it
@@ -4992,7 +5010,7 @@ public class FollowUpAnalyzer {
         if (!out.isEmpty() && index < lines.size()) {
           out.add("");
         }
-      } else if (lines.get(index).strip().startsWith(ClosedFindingNames.REVIEW_BODY_LEAD_IN)) {
+      } else if (isNamedListLeadIn(lines.get(index).strip())) {
         index++;
         index = skipWhile(lines, index, String::isBlank);
         index = skipWhile(lines, index, line -> line.strip().startsWith("- "));
@@ -5006,6 +5024,12 @@ public class FollowUpAnalyzer {
       }
     }
     return String.join("\n", out).strip();
+  }
+
+  /** Whether {@code line} opens a section naming previous findings, closed or still open. */
+  private static boolean isNamedListLeadIn(String line) {
+    return line.startsWith(ClosedFindingNames.REVIEW_BODY_LEAD_IN)
+        || line.startsWith(OpenFindingNames.REVIEW_BODY_LEAD_IN);
   }
 
   /**
@@ -5031,7 +5055,7 @@ public class FollowUpAnalyzer {
     var line = first.get();
     return ReviewResult.isUnresolvedPreviousMessage(line)
         || line.equals(FollowUpDeltaSummary.DELTA_HEADING)
-        || line.startsWith(ClosedFindingNames.REVIEW_BODY_LEAD_IN)
+        || isNamedListLeadIn(line)
         || line.startsWith(ReviewResult.NO_ISSUES_CI_PENDING_LEAD_IN)
         || line.startsWith(ReviewResult.NO_ISSUES_CI_UNREADABLE_LEAD_IN)
         || line.startsWith(ReviewResult.TRUNCATION_NOTICE_LEAD_IN)
