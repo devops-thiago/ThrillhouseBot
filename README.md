@@ -767,14 +767,17 @@ findings: `<!-- thrillhousebot:findings v=1 [...] -->`. Each entry gives the
 finding's `key` (the one in its thread marker), `file`, `line`, `risk`,
 `confidence`, `status` (`open`), `thread`, `hasSuggestion` and `carried` (open
 since an earlier review), most severe first. `thread` is `true` when the review
-is set to open an inline thread for the finding: it posts inline, its file is
-part of the pull request and it is within the per-run comment cap. It is
-`false` for a finding listed under "Things to double-check", on a file outside
-the pull request, or past the cap. The summary is written before the review
-posts, so a thread GitHub then refuses still reads `true`; the review body lists
-that finding. The cap counts threads that landed, so after a refusal a finding
-past the cap can still get a thread while it reads `false`. An empty list is `[]`. The list stops at 100 entries or 16,000
-characters, and `omitted=N` after `v=1` counts the entries left out. It contains no model-written text.
+opens an inline thread for the finding: it posts inline, its file is part of the
+pull request and it is within the per-run comment cap. It is `false` for a
+finding listed under "Things to double-check", on a file outside the pull
+request, past the cap, or whose thread GitHub refused; the review body lists a
+refused finding. The summary is written before the review posts, so the line
+first holds the threads the review expects, and the bot edits it once the review
+has posted if GitHub refused a thread or a refusal let a finding past the cap
+take the freed slot. For a finding carried from an earlier review it says only
+that the finding is one that posts inline. An empty list is `[]`. The list stops
+at 100 entries or 16,000 characters, and `omitted=N` after `v=1` counts the
+entries left out. It contains no model-written text.
 
 The risk counts, Key Findings and "Things to double-check" cover the round's
 new findings and every earlier finding still open, each listed once and marked

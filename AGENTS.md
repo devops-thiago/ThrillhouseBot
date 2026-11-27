@@ -569,9 +569,15 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   rules `postInlineComments` posts by: a round finding that posts inline, on a path
   `DiffLineResolver.isChangedFile` accepts, within `maxReviewComments` in posting order, matched by
   key; a carried finding keeps `Finding.postsInline`. The summary is written before the review, so
-  `thread` means a thread is expected, not that GitHub took it: a refused post reads `true`, and
-  since `postInlineComments` counts the cap in landed threads, a refusal frees a slot that a finding
-  `threadRule` put past the cap can take while it reads `false`. The path is the only free text and is escaped so it
+  `threadRule` can only say which threads the round expects: it cannot know a post GitHub refuses,
+  nor that `postInlineComments`, which counts the cap in landed threads, then gives the freed slot
+  to a finding past the cap. `postReview` therefore returns the threads that landed
+  (`PostedThreads`; none when a batched review was never submitted), and when they differ from the
+  announced ones `correctManifest` rewrites the line in a second summary edit. It replaces only
+  the exact line this round wrote, so another run's summary is never touched, a round that posted
+  as announced reads and writes nothing, and a failed edit is logged and never re-posts the
+  summary. The webhook's `review.openFindings` is built from the same `PostedThreads`. A review
+  post that throws leaves the announced line. The path is the only free text and is escaped so it
   can never write `-->`; the line stays one line. An empty set renders `[]` (so "nothing open" differs
   from a comment older than the manifest), and a set over `MAX_ENTRIES` entries or
   `MAX_ARRAY_CHARS` rendered characters (the path has no length bound) is cut with `omitted=N` in

@@ -44,6 +44,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.logging.Level;
 import java.util.stream.Stream;
+import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -614,7 +615,11 @@ class ReviewPublisherTest {
             0);
 
     publisher.publishSummary("auth", "o", "r", 1, firstReview, false);
-    var open = publisher.openFindings(firstReview, null);
+    var open =
+        publisher.openFindings(
+            firstReview,
+            new ReviewPublisher.PostedThreads(
+                Set.of(SuggestionFormatter.findingKey("src/A.java", 12, "NPE"))));
 
     var posted = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
     verify(commentClient)

@@ -36,13 +36,14 @@ import java.util.function.Predicate;
  * status} (always {@code open}: the set holds nothing else), {@code thread}, {@code hasSuggestion}
  * and {@code carried} (open since an earlier review). Entries run most severe first.
  *
- * <p>{@code thread} is {@code true} when the finding is expected to have an inline thread: a
- * finding of this round that the review posts inline on a file the pull request changes, within the
- * per-run comment cap, or a carried finding that posts inline. The summary is written before the
- * review posts, so a thread GitHub then refuses, which the review body lists instead, still reads
- * {@code true}. {@code false} means no thread is expected: listed under "Things to double-check",
- * on a file outside the pull request, or past the comment cap; such a finding is cleared through
- * {@code @thrillhousebot resolved}.
+ * <p>{@code thread} is {@code true} when the finding has an inline thread: a finding of this round
+ * that the review posts inline on a file the pull request changes, within the per-run comment cap,
+ * or a carried finding that posts inline. The summary is written before the review posts, so the
+ * line first says which threads the round expects; when GitHub refuses one, which the review body
+ * lists instead, or a refusal lets a finding past the cap take the freed slot, {@code
+ * ReviewPublisher} rewrites the line from the threads that landed. {@code false} means no thread:
+ * listed under "Things to double-check", on a file outside the pull request, past the comment cap
+ * or refused by GitHub; such a finding is cleared through {@code @thrillhousebot resolved}.
  *
  * <p>The array is bounded twice, so a pathological pull request cannot push the comment over
  * GitHub's size limit: at {@value #MAX_ENTRIES} entries, and at {@value #MAX_ARRAY_CHARS} rendered

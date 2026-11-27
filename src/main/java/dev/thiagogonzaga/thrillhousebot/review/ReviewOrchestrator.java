@@ -492,22 +492,24 @@ public class ReviewOrchestrator {
           auth, req.owner(), req.repo(), req.prNumber(), priorReviews);
       // summaryPosted gates the redundant-review skips: a failed summary post leaves review
       // posting enabled.
-      reviewPublisher.postReview(
-          new ReviewPublisher.PostReviewRequest(
-              auth,
-              req.owner(),
-              req.repo(),
-              req.prNumber(),
-              req.commitSha(),
-              result,
-              lineResolver,
-              summaryPosted,
-              previousFindings,
-              followUpDelta,
-              priorReviews,
-              config.review().showEvidence()
-                  ? finding -> evidence.basis().render(finding, ctx.pathInstructions(), ciCitations)
-                  : finding -> ""));
+      var postedThreads =
+          reviewPublisher.postReview(
+              new ReviewPublisher.PostReviewRequest(
+                  auth,
+                  req.owner(),
+                  req.repo(),
+                  req.prNumber(),
+                  req.commitSha(),
+                  result,
+                  lineResolver,
+                  summaryPosted,
+                  previousFindings,
+                  followUpDelta,
+                  priorReviews,
+                  config.review().showEvidence()
+                      ? finding ->
+                          evidence.basis().render(finding, ctx.pathInstructions(), ciCitations)
+                      : finding -> ""));
 
       resultSurfaced = true;
       final var doneReq = req;
@@ -586,7 +588,7 @@ public class ReviewOrchestrator {
       // #73: the verdict is final for this run once it is on the pull request. A superseded run
       // returned above without reaching here, and a verdict held on CI is announced now, not again
       // when CiHoldRevisit posts the approval.
-      var openFindings = openFindingsOf(reviewPublisher, result, ctx.lineResolver());
+      var openFindings = openFindingsOf(reviewPublisher, result, postedThreads);
       runPostResultStep(
           doneReq,
           "send the outcome notification",
@@ -875,8 +877,8 @@ public class ReviewOrchestrator {
    * the orchestrator and everything it references.
    */
   private static Supplier<OpenFindings> openFindingsOf(
-      ReviewPublisher publisher, ReviewResult result, DiffLineResolver lineResolver) {
-    return () -> publisher.openFindings(result, lineResolver);
+      ReviewPublisher publisher, ReviewResult result, ReviewPublisher.PostedThreads posted) {
+    return () -> publisher.openFindings(result, posted);
   }
 
   /**
