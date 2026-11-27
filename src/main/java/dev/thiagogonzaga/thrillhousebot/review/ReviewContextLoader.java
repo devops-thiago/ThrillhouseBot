@@ -523,6 +523,18 @@ public class ReviewContextLoader {
     public List<ReviewResponse.Finding> previousFindingsList() {
       return FollowUpAnalyzer.effectivePreviousFindings(priorAiResponses);
     }
+
+    /**
+     * Whether earlier rounds are stored for this pull request and none of them could be read: every
+     * stored response was blank or did not parse. There is then no finding to list to the model, no
+     * id its statuses can name and no round for the approve backstop to replay, so nothing from
+     * those rounds can hold the verdict. A first review stores no round, and a round that was read
+     * and raised nothing is a round that was read, so neither is this.
+     */
+    public boolean priorRoundsUnreadable() {
+      return !priorAiResponses.isEmpty()
+          && priorAiResponses.stream().noneMatch(FollowUpAnalyzer::isPersistedResponse);
+    }
   }
 
   /**

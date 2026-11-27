@@ -692,6 +692,18 @@ organization-owned app), tick **Check suite** and **Status**, and save. The
 existing `Checks: Read & write` and `Commit statuses: Read` permissions cover
 both.
 
+### Earlier reviews that cannot be read
+
+A follow-up review checks what the earlier reviews of the pull request raised,
+using the results the bot stored for them. If results are stored and none of
+them can be read, the bot cannot tell what is still open, so a review that
+finds nothing ends as `COMMENT` instead of `APPROVE`. The summary, the review
+body and the check run say why, and the bot logs a warning. A first review is
+not affected, and neither is a pull request with at least one earlier review
+the bot can read, including one that found nothing. The held review is stored
+like any other, so the next review has a readable one to work from; check the
+earlier review threads yourself before merging.
+
 ### Withdrawing an earlier approval
 
 GitHub keeps counting a reviewer's approval after the same reviewer posts a

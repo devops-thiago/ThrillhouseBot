@@ -27,6 +27,10 @@ security limits. To report a vulnerability, see
 - Features that send more data to the model or to a third party are off by
   default (CI-failure context, linked-issue context, review learnings, outgoing
   notifications, the security scan).
+- When earlier reviews are stored for a pull request and none of them can be
+  read, a review that finds nothing does not approve. It ends as `COMMENT` and
+  says why, because the bot cannot confirm that what those reviews raised is
+  closed.
 - A review that does not approve dismisses the approvals the bot gave earlier
   on the same pull request, so an approval of an older head does not go on
   counting for code the bot declined to approve. Only the bot's own reviews are
