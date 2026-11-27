@@ -19,12 +19,14 @@ import static dev.thiagogonzaga.thrillhousebot.github.GitHubStub.json;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import jakarta.ws.rs.ProcessingException;
+import java.net.URI;
 import java.net.http.HttpClient;
 import java.time.Duration;
 import java.time.Instant;
@@ -37,8 +39,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * The reads made with a caller's installation token, against a loopback GitHub: what is sent, to
- * which address and with which credential, and how much of an answer is read.
+ * The reads made with a caller's token, against a loopback GitHub: what is sent, to which address
+ * and with which credential, and how much of an answer is read.
  */
 class GitHubTokenReadsTest {
 
@@ -49,6 +51,11 @@ class GitHubTokenReadsTest {
   private static final String RUNS = "GET /api/v3/repos/o/r/actions/runs";
   private static final String RUN = "GET /api/v3/repos/o/r/actions/runs/42";
   private static final String ARTIFACTS = "GET /api/v3/repos/o/r/actions/runs/42/artifacts";
+  private static final String ARTIFACT = "GET /api/v3/repos/o/r/actions/artifacts/99";
+  private static final String ZIP = ARTIFACT + "/zip";
+  private static final String JOB = "GET /api/v3/repos/o/r/actions/jobs/7";
+  private static final String LOGS = JOB + "/logs";
+  private static final String SIGNED = "https://blob.example/signed?sig=s3cret";
 
   private static final String REPOSITORY_BODY =
       "{\"id\":1,\"name\":\"r\",\"full_name\":\"o/r\",\"owner\":{\"login\":\"o\"}}";
@@ -167,8 +174,7 @@ class GitHubTokenReadsTest {
     assertEquals("abc", runs.getFirst().headSha());
     assertEquals("success", runs.getFirst().conclusion());
     assertNull(runs.getLast().conclusion());
-    assertEquals(
-        List.of(new GitHubTokenReads.Artifact(99L, "coverage", true)), runs.getFirst().artifacts());
+    assertArtifact(runs.getFirst().artifacts());
     assertEquals(3, stub.received().size());
     assertEquals("GET /api/v3/repos/o/r", sent().get(0));
     var runsQuery = sent().get(1);
@@ -218,7 +224,7 @@ class GitHubTokenReadsTest {
 
     var artifacts = reads.completedWorkflowRuns(DEAD, "o", "r", "abc").getFirst().artifacts();
 
-    assertEquals(List.of(new GitHubTokenReads.Artifact(99L, "coverage", true)), artifacts);
+    assertArtifact(artifacts);
     assertEquals(
         List.of(REPOSITORY, RUNS, ARTIFACTS, REPOSITORY, RUN, ARTIFACTS),
         sent().stream().map(r -> r.contains("?") ? r.substring(0, r.indexOf('?')) : r).toList());
@@ -264,6 +270,188 @@ class GitHubTokenReadsTest {
     assertUnreadable(
         assertThrows(
             ProcessingException.class, () -> reads.completedWorkflowRuns(DEAD, "o", "r", "abc")));
+  }
+
+  private static void assertArtifact(List<GitHubTokenReads.Artifact> artifacts) {
+    assertEquals(1, artifacts.size());
+    assertEquals(99L, artifacts.getFirst().id());
+    assertEquals("coverage", artifacts.getFirst().name());
+    assertTrue(artifacts.getFirst().expired());
+  }
+
+  private static GitHubStub.Answer redirect(String location) {
+    return json(302, "", "Location", location);
+  }
+
+  private GitHubTokenReads.Artifact listedArtifact() {
+    givenRepositoryAndRuns(RUN_BODY);
+    stub.on(ARTIFACTS, json(200, ARTIFACTS_BODY));
+    return reads.completedWorkflowRuns(DEAD, "o", "r", "abc").getFirst().artifacts().getFirst();
+  }
+
+  private List<String> sentAfter(int count) {
+    return sent().subList(count, sent().size());
+  }
+
+  @Test
+  void anArtifactDownloadGivesOutTheRedirectAfterOneRequestAndNeverFollowsIt() {
+    var artifact = listedArtifact();
+    stub.on(ZIP, redirect(SIGNED));
+    var before = sent().size();
+
+    assertEquals(Optional.of(URI.create(SIGNED)), artifact.downloadLocation());
+
+    assertEquals(List.of(ZIP), sentAfter(before));
+    assertEquals(DEAD, credentials().getLast());
+  }
+
+  @Test
+  void aRelativeRedirectIsResolvedAgainstTheDownloadAddressAndNotRequested() {
+    var artifact = listedArtifact();
+    stub.on(ZIP, redirect("/signed-storage/artifact"));
+    var before = sent().size();
+
+    assertEquals(
+        Optional.of(URI.create(stub.url() + "/signed-storage/artifact")),
+        artifact.downloadLocation());
+
+    assertEquals(List.of(ZIP), sentAfter(before));
+  }
+
+  @Test
+  void anArtifactDownloadRejectedForItsCredentialReadsTheArtifactAgainWithAFreshOne() {
+    var artifact = listedArtifact();
+    var rejected = json(401, "{\"message\":\"Bad credentials\"}");
+    var signed = redirect(SIGNED);
+    stub.on(
+            ZIP,
+            exchange -> {
+              var dead = DEAD.equals(exchange.getRequestHeaders().getFirst("Authorization"));
+              (dead ? rejected : signed).to(exchange);
+            })
+        .on(ARTIFACT, json(200, "{\"id\":99,\"name\":\"coverage\"}"));
+    var before = sent().size();
+
+    assertEquals(Optional.of(URI.create(SIGNED)), artifact.downloadLocation());
+
+    assertEquals(List.of(ZIP, REPOSITORY, ARTIFACT, ZIP), sentAfter(before));
+    assertEquals(
+        List.of(DEAD, FRESH, FRESH, FRESH), credentials().subList(before, credentials().size()));
+  }
+
+  @Test
+  void aJobLogDownloadGivesOutTheRedirectAfterReadingTheRepositoryAndTheJob() {
+    stub.on(REPOSITORY, json(200, REPOSITORY_BODY))
+        .on(JOB, json(200, "{\"id\":7}"))
+        .on(LOGS, redirect(SIGNED));
+
+    assertEquals(Optional.of(URI.create(SIGNED)), reads.jobLogLocation(DEAD, "o", "r", 7L));
+
+    assertEquals(List.of(REPOSITORY, JOB, LOGS), sent());
+  }
+
+  @Test
+  void aRefusedDownloadOrOneThatNamesNoAddressHasNoLocation() {
+    stub.on(REPOSITORY, json(200, REPOSITORY_BODY)).on(JOB, json(200, "{\"id\":7}"));
+
+    assertEquals(Optional.empty(), reads.jobLogLocation(DEAD, "o", "r", 7L));
+    stub.on(LOGS, json(410, "{\"message\":\"Gone\"}"));
+    assertEquals(Optional.empty(), reads.jobLogLocation(DEAD, "o", "r", 7L));
+    stub.on(LOGS, json(302, ""));
+    assertEquals(Optional.empty(), reads.jobLogLocation(DEAD, "o", "r", 7L));
+    stub.on(LOGS, json(200, "the log itself"));
+    assertEquals(Optional.empty(), reads.jobLogLocation(DEAD, "o", "r", 7L));
+  }
+
+  @Test
+  void anArtifactDownloadAnsweredWithoutARedirectHasNoLocation() {
+    var artifact = listedArtifact();
+    stub.on(ZIP, json(200, "the archive itself"));
+
+    assertEquals(Optional.empty(), artifact.downloadLocation());
+  }
+
+  @Test
+  void anUnreadableAnswerOnTheWayToADownloadIsReportedWithoutWhatItSaid() {
+    stub.on(REPOSITORY, json(200, "not json"));
+
+    var failure =
+        assertThrows(ProcessingException.class, () -> reads.jobLogLocation(DEAD, "o", "r", 7L));
+
+    assertNull(failure.getCause());
+    assertEquals(
+        "GitHub App request returned an unreadable answer (HttpException)", failure.getMessage());
+  }
+
+  @Test
+  void aRenamedRepositoryIsStillFollowed() {
+    stub.on(REPOSITORY, json(301, "", "Location", stub.url() + "/api/v3/repositories/1"))
+        .on("GET /api/v3/repositories/1", json(200, REPOSITORY_BODY))
+        .on(JOB, json(200, "{\"id\":7}"))
+        .on(LOGS, redirect(SIGNED));
+
+    assertEquals(Optional.of(URI.create(SIGNED)), reads.jobLogLocation(DEAD, "o", "r", 7L));
+  }
+
+  @Test
+  void aUsersRepositoriesOfOneInstallationAreReadFromTheUserEndpointPageByPage() {
+    var path = "/api/v3/user/installations/42/repositories";
+    var second = path + "?per_page=100&page=2";
+    var first =
+        json(
+            200,
+            "{\"total_count\":2,\"repositories\":[{\"id\":1,\"full_name\":\"o/a\"}]}",
+            "Link",
+            nextLink(second));
+    var last = json(200, "{\"total_count\":2,\"repositories\":[{\"id\":2,\"full_name\":\"o/b\"}]}");
+    stub.on(
+        "GET " + path,
+        exchange -> {
+          var query = exchange.getRequestURI().getQuery();
+          (query.contains("page=2&") || query.endsWith("page=2") ? last : first).to(exchange);
+        });
+
+    var repositories = reads.userInstallationRepositories(DEAD, 42L);
+
+    assertEquals(
+        List.of("o/a", "o/b"),
+        repositories.stream().map(GitHubTokenReads.InstallationRepository::fullName).toList());
+    assertEquals(List.of("GET " + path + "?per_page=100", "GET " + second), sent());
+    assertEquals(List.of(DEAD, DEAD), credentials());
+  }
+
+  @Test
+  void aUsersRepositoryListingIsCutOffOnlyAfterAThousandPages() {
+    var path = "/api/v3/user/installations/42/repositories";
+    stub.on(
+        "GET " + path,
+        json(
+            200,
+            "{\"total_count\":1,\"repositories\":[{\"id\":1,\"full_name\":\"o/a\"}]}",
+            "Link",
+            nextLink(path + "?page=2")));
+
+    var cutOff =
+        assertThrows(
+            IllegalStateException.class, () -> reads.userInstallationRepositories(DEAD, 42L));
+
+    assertEquals("GitHub listing exceeded 1000 pages", cutOff.getMessage());
+    assertEquals(1_001, stub.received().size());
+  }
+
+  @Test
+  void aRefusedUserListingKeepsItsStatus() {
+    stub.on(
+        "GET /api/v3/user/installations/42/repositories",
+        json(401, "{\"message\":\"Bad credentials\"}"));
+
+    var rejected =
+        assertThrows(
+            ClientWebApplicationException.class,
+            () -> reads.userInstallationRepositories(DEAD, 42L));
+
+    assertEquals(401, rejected.getResponse().getStatus());
+    assertEquals(1, stub.received().size());
   }
 
   private static void assertUnreadable(ProcessingException failure) {

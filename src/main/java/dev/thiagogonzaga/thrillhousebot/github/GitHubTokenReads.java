@@ -19,13 +19,17 @@ import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.ProcessingException;
+import jakarta.ws.rs.WebApplicationException;
 import java.io.IOException;
+import java.net.URI;
 import java.net.http.HttpClient;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.Optional;
 import java.util.function.Supplier;
+import org.kohsuke.github.GHArtifact;
 import org.kohsuke.github.GHException;
 import org.kohsuke.github.GHRepository;
 import org.kohsuke.github.GHWorkflowRun;
@@ -35,8 +39,9 @@ import org.kohsuke.github.PagedIterator;
 import org.kohsuke.github.connector.GitHubConnector;
 
 /**
- * Reads made through hub4j with an installation token the caller already holds, so each one has
- * exactly the permissions and repositories of that token.
+ * Reads made through hub4j with a token the caller already holds (an installation token, or a
+ * dashboard user's access token), so each one has exactly the permissions and repositories of that
+ * token.
  *
  * <p>The client is built here with hub4j's own builder: the Quarkiverse GitHub App extension's
  * {@code GitHubClientProvider} only hands out clients for the App and for tokens it mints itself,
@@ -46,7 +51,8 @@ import org.kohsuke.github.connector.GitHubConnector;
  *
  * <p>Calls go to {@code thrillhousebot.github.api-url} through {@link GitHubAppConnector}, which
  * gives them the REST clients' failures, one attempt and {@code HTTP_REQUEST_TIMEOUT}. hub4j
- * follows a redirect itself, and takes the next page of a listing from the address GitHub names.
+ * follows a redirect itself, except that of a download, and takes the next page of a listing from
+ * the address GitHub names.
  */
 @ApplicationScoped
 public class GitHubTokenReads {
@@ -54,6 +60,9 @@ public class GitHubTokenReads {
   static final int REPOSITORIES_PER_PAGE = 100;
 
   static final int MAX_REPOSITORY_PAGES = 100;
+
+  /** Higher than {@link #MAX_REPOSITORY_PAGES}: a listing cut off here denies the dashboard. */
+  static final int MAX_USER_REPOSITORY_PAGES = 1_000;
 
   /**
    * Completed runs read for one head SHA. This is a page size, not a page walk: the request is
@@ -67,7 +76,7 @@ public class GitHubTokenReads {
   static final int ARTIFACTS_PER_PAGE = 100;
 
   private final String apiUrl;
-  private final GitHubConnector connector;
+  private final GitHubAppConnector connector;
 
   @Inject
   public GitHubTokenReads(HttpClient httpClient, ThrillhouseConfig config) {
@@ -87,8 +96,26 @@ public class GitHubTokenReads {
     }
   }
 
-  /** One uploaded artifact; {@code expired} artifacts have had their bytes deleted by GitHub. */
-  public record Artifact(long id, String name, boolean expired) {}
+  /**
+   * One uploaded artifact; {@code expired} artifacts have had their bytes deleted by GitHub. Asking
+   * where to download it is one more request.
+   */
+  public record Artifact(long id, String name, boolean expired, Supplier<Optional<URI>> download) {
+
+    /**
+     * The short-lived, pre-signed address of the archive, to be fetched without the token; empty
+     * when GitHub refused the download or named no address.
+     */
+    public Optional<URI> downloadLocation() {
+      return download.get();
+    }
+  }
+
+  /** A hub4j call that GitHub answers with a redirect to the bytes. */
+  @FunctionalInterface
+  private interface Download {
+    void start(String credential) throws IOException;
+  }
 
   /**
    * Every repository the installation token can access.
@@ -96,18 +123,33 @@ public class GitHubTokenReads {
    * @throws IllegalStateException past {@value #MAX_REPOSITORY_PAGES} pages
    */
   public List<InstallationRepository> installationRepositories(String auth) {
+    return allRepositories(auth, connector, MAX_REPOSITORY_PAGES);
+  }
+
+  /**
+   * Every repository of one installation that the user of this access token can read.
+   *
+   * @throws IllegalStateException past {@value #MAX_USER_REPOSITORY_PAGES} pages
+   */
+  public List<InstallationRepository> userInstallationRepositories(
+      String auth, long installationId) {
+    return allRepositories(
+        auth, connector.forUserInstallation(installationId), MAX_USER_REPOSITORY_PAGES);
+  }
+
+  private List<InstallationRepository> allRepositories(
+      String auth, GitHubConnector transport, int maxPages) {
     try {
       var pages =
-          client(auth)
+          client(auth, transport)
               .getInstallation()
               .listRepositories()
               .withPageSize(REPOSITORIES_PER_PAGE)
               .iterator();
       var repositories = new ArrayList<InstallationRepository>();
       for (var page = 0; pages.hasNext(); page++) {
-        if (page == MAX_REPOSITORY_PAGES) {
-          throw new IllegalStateException(
-              "GitHub listing exceeded " + MAX_REPOSITORY_PAGES + " pages");
+        if (page == maxPages) {
+          throw new IllegalStateException("GitHub listing exceeded " + maxPages + " pages");
         }
         for (var repository : pages.nextPage()) {
           repositories.add(installationRepository(repository));
@@ -117,6 +159,20 @@ public class GitHubTokenReads {
     } catch (IOException | GHException e) {
       throw unreadable(e);
     }
+  }
+
+  /**
+   * The short-lived, pre-signed address of one job's log, to be fetched without the token; empty
+   * when GitHub refused the download or named no address. For a GitHub Actions check run the job id
+   * is the check run's id. Three requests: hub4j has to read the repository and the job first.
+   */
+  public Optional<URI> jobLogLocation(String auth, String owner, String repo, long jobId) {
+    var slug = owner + "/" + repo;
+    return downloadLocation(
+        "job " + jobId + " log download on " + slug,
+        auth,
+        credential ->
+            client(credential).getRepository(slug).getWorkflowJob(jobId).downloadLogs(_ -> null));
   }
 
   /**
@@ -174,18 +230,62 @@ public class GitHubTokenReads {
               ? run
               : client(credential).getRepository(slug).getWorkflowRun(run.getId());
       return firstPage(current.listArtifacts().withPageSize(ARTIFACTS_PER_PAGE).iterator()).stream()
-          .map(artifact -> new Artifact(artifact.getId(), artifact.getName(), artifact.isExpired()))
+          .map(artifact -> artifact(credential, slug, artifact))
           .toList();
     } catch (IOException | GHException e) {
       throw unreadable(e);
     }
   }
 
+  private Artifact artifact(String listedWith, String slug, GHArtifact artifact) {
+    var id = artifact.getId();
+    return new Artifact(
+        id,
+        artifact.getName(),
+        artifact.isExpired(),
+        () ->
+            downloadLocation(
+                "artifact " + id + " download on " + slug,
+                listedWith,
+                credential -> {
+                  var current =
+                      credential.equals(listedWith)
+                          ? artifact
+                          : client(credential).getRepository(slug).getArtifact(id);
+                  current.download(_ -> null);
+                }));
+  }
+
+  /** Where a download redirects to, healing a rejected credential once (#626). */
+  private static Optional<URI> downloadLocation(String operation, String auth, Download download) {
+    try {
+      return GitHubTokenRefresh.SHARED.retrying(
+          operation, auth, credential -> redirectOf(download, credential));
+    } catch (WebApplicationException _) {
+      return Optional.empty();
+    }
+  }
+
+  private static Optional<URI> redirectOf(Download download, String credential) {
+    try {
+      download.start(credential);
+      return Optional.empty();
+    } catch (GitHubAppConnector.DownloadRedirect redirect) {
+      return redirect.location();
+    } catch (IOException | GHException e) {
+      throw unreadable(e);
+    }
+  }
+
   private GitHub client(String auth) throws IOException {
+    return client(auth, connector);
+  }
+
+  private GitHub client(String auth, GitHubConnector transport) throws IOException {
     var builder =
         new GitHubBuilder()
             .withEndpoint(apiUrl)
-            .withConnector(connector)
+            .withConnector(transport)
             .withAuthorizationProvider(() -> auth);
     FailFastGitHubCustomizer.failFast(builder);
     return builder.build();

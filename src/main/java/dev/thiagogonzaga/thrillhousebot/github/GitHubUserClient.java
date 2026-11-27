@@ -27,11 +27,9 @@ import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
  * with what that user can see: the App's installations they can access, and in each one the
  * repositories they can read (any collaborator role, team access or organization base permission).
  *
- * <p>These stay on a REST client because of hub4j limitations: it has no method for {@code GET
- * /user/installations/{installation_id}/repositories}, and it reaches {@code GET
+ * <p>The installation listing stays on a REST client because hub4j reaches {@code GET
  * /user/installations} only through {@code getMyself()}, which reads the user first and then each
- * account again for its type. This goes away once hub4j covers both; the missing method is <a
- * href="https://github.com/hub4j/github-api/issues/2352">hub4j/github-api#2352</a>.
+ * account again for its type. The repositories are read through {@link GitHubTokenReads}.
  */
 @RegisterRestClient(configKey = "github-api")
 @RegisterProvider(GitHubErrorLogger.class)
@@ -43,16 +41,6 @@ public interface GitHubUserClient {
   UserInstallations listInstallations(
       @HeaderParam("Authorization") String authorization,
       @HeaderParam("Accept") String accept,
-      @QueryParam("per_page") @DefaultValue("100") int perPage,
-      @QueryParam("page") @DefaultValue("1") int page);
-
-  @GET
-  @Path("/user/installations/{installationId}/repositories")
-  @Produces(MediaType.APPLICATION_JSON)
-  GitHubInstallationClient.InstallationRepositoriesResponse listRepositories(
-      @HeaderParam("Authorization") String authorization,
-      @HeaderParam("Accept") String accept,
-      @PathParam("installationId") long installationId,
       @QueryParam("per_page") @DefaultValue("100") int perPage,
       @QueryParam("page") @DefaultValue("1") int page);
 

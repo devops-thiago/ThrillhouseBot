@@ -32,11 +32,11 @@ import java.util.Arrays;
  * Fetches the bytes behind the pre-signed URL GitHub redirects an artifact download to — and, for
  * the opt-in CI-failure review context (#59), the tail of a job log behind the same kind of URL.
  *
- * <p>Separate from {@link GitHubActionsClient} on purpose. That redirect points at blob storage on
- * a different host, and the installation token must not travel there: an {@code Authorization}
- * header carried across the redirect would both leak a repository-scoped credential to a third
- * party and be rejected by the storage backend, which authenticates from the URL's own signature.
- * So this issues a plain, unauthenticated GET.
+ * <p>Separate from {@link GitHubTokenReads}, which gives out the URL, on purpose. That redirect
+ * points at blob storage on a different host, and the installation token must not travel there: an
+ * {@code Authorization} header carried across the redirect would both leak a repository-scoped
+ * credential to a third party and be rejected by the storage backend, which authenticates from the
+ * URL's own signature. So this issues a plain, unauthenticated GET.
  *
  * <p>The response is attacker-influenced in size (any repository can upload a large artifact), so
  * the body is read under a hard {@link #MAX_BYTES} bound. Every failure yields an empty array — a

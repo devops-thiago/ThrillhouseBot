@@ -131,6 +131,10 @@ cannot resolve its review threads.
   as before, to `GITHUB_API_URL`. The coverage lookup adds one request, to read the repository.
   These calls follow `HTTP_CONNECT_TIMEOUT` and `HTTP_REQUEST_TIMEOUT` (10s each by default)
   rather than the REST client's settings.
+- **Artifact and job log downloads and the dashboard's repository listing go through hub4j**
+  (#1314), with the same tokens and to `GITHUB_API_URL`. A job log's address now costs three
+  requests instead of one, as the repository and the job are read first. These calls follow
+  `HTTP_CONNECT_TIMEOUT` and `HTTP_REQUEST_TIMEOUT` rather than the REST client's settings.
 
 
 ### Fixed

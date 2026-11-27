@@ -21,14 +21,14 @@ import static org.mockito.Mockito.*;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.ArtifactZipFetcher;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubActionsClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCheckRunClient;
-import jakarta.ws.rs.core.Response;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubTokenReads;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
@@ -42,19 +42,19 @@ class CiFailureContextResolverTest {
   private static final URI LOG_URI = URI.create("https://blob.example/log");
 
   private GitHubCheckRunClient checkRunClient;
-  private GitHubActionsClient actionsClient;
+  private GitHubTokenReads tokenReads;
   private ArtifactZipFetcher fetcher;
 
   @BeforeEach
   void setUp() {
     checkRunClient = mock(GitHubCheckRunClient.class);
-    actionsClient = mock(GitHubActionsClient.class);
+    tokenReads = mock(GitHubTokenReads.class);
     fetcher = mock(ArtifactZipFetcher.class);
   }
 
   private CiFailureContextResolver resolver(boolean enabled, boolean logs, int maxChars) {
     return new CiFailureContextResolver(
-        checkRunClient, actionsClient, fetcher, enabled, logs, maxChars);
+        checkRunClient, tokenReads, fetcher, enabled, logs, maxChars);
   }
 
   private static CiStatusEvaluator.FailedCheck actionsFailure(
@@ -90,7 +90,7 @@ class CiFailureContextResolverTest {
 
       assertEquals("", section);
       assertFalse(resolver(false, false, 4000).enabled());
-      verifyNoInteractions(checkRunClient, actionsClient, fetcher);
+      verifyNoInteractions(checkRunClient, tokenReads, fetcher);
     }
 
     @Test
@@ -104,7 +104,7 @@ class CiFailureContextResolverTest {
     void pendingChecksAloneBuildNoSection() {
       // The usual automatic review starts while CI is still running: that is not worth a section.
       assertEquals("", resolver(true, true, 4000).resolve("a", "o", "r", evaluation(4)));
-      verifyNoInteractions(checkRunClient, actionsClient, fetcher);
+      verifyNoInteractions(checkRunClient, tokenReads, fetcher);
     }
   }
 
@@ -163,9 +163,9 @@ class CiFailureContextResolverTest {
                   .toArray(CiStatusEvaluator.FailedCheck[]::new));
       var section = resolver(true, false, 4000).resolve("a", "o", "r", evaluationOf(early));
       assertTrue(section.contains(CiFailureContextResolver.NOT_DETAILED), section);
-      clearInvocations(actionsClient);
-      when(actionsClient.downloadJobLogs(any(), any(), any(), any(), eq(99L)))
-          .thenReturn(Response.status(302).location(LOG_URI).build());
+      clearInvocations(tokenReads);
+      when(tokenReads.jobLogLocation(any(), any(), any(), eq(99L)))
+          .thenReturn(Optional.of(LOG_URI));
       when(fetcher.fetchTail(LOG_URI, CiFailureContextResolver.LOG_TAIL_BYTES))
           .thenReturn("✖ refuses an expired token\n".getBytes(StandardCharsets.UTF_8));
       var fresh = new ArrayList<>(early.failed());
@@ -175,7 +175,7 @@ class CiFailureContextResolverTest {
           resolver(true, false, 4000)
               .refresh("a", "o", "r", section, early, new CiStatusEvaluator.CiFailures(fresh, 0));
 
-      verify(actionsClient, times(1)).downloadJobLogs(any(), any(), any(), any(), anyLong());
+      verify(tokenReads, times(1)).jobLogLocation(any(), any(), any(), anyLong());
       var sentences = CiFailureCitations.parse(refreshed).overviewSentences(List.of());
       assertTrue(sentences.contains("\"job6\""), "the named-only check is still read");
       assertTrue(
@@ -192,7 +192,7 @@ class CiFailureContextResolverTest {
           SECTION, resolver(true, false, 4000).refresh("a", "o", "r", SECTION, early, fresh));
       assertSame(
           SECTION, resolver(true, false, 4000).refresh("a", "o", "r", SECTION, early, failures(0)));
-      verifyNoInteractions(checkRunClient, actionsClient, fetcher);
+      verifyNoInteractions(checkRunClient, tokenReads, fetcher);
     }
 
     @Test
@@ -202,7 +202,7 @@ class CiFailureContextResolverTest {
       assertSame(
           SECTION,
           resolver(false, false, 4000).refresh("a", "o", "r", SECTION, failures(1), fresh));
-      verifyNoInteractions(checkRunClient, actionsClient, fetcher);
+      verifyNoInteractions(checkRunClient, tokenReads, fetcher);
     }
 
     @Test
@@ -442,8 +442,8 @@ class CiFailureContextResolverTest {
   @Nested
   class JobLogs {
 
-    private Response redirect() {
-      return Response.status(302).location(LOG_URI).build();
+    private Optional<URI> redirect() {
+      return Optional.of(LOG_URI);
     }
 
     /**
@@ -452,8 +452,7 @@ class CiFailureContextResolverTest {
      */
     @Test
     void withTheTailSwitchOffOnlyTheFailingTestLinesAreShown() {
-      when(actionsClient.downloadJobLogs("a", "application/vnd.github+json", "o", "r", 1L))
-          .thenReturn(redirect());
+      when(tokenReads.jobLogLocation("a", "o", "r", 1L)).thenReturn(redirect());
       when(fetcher.fetchTail(LOG_URI, CiFailureContextResolver.LOG_TAIL_BYTES))
           .thenReturn(
               """
@@ -482,7 +481,7 @@ class CiFailureContextResolverTest {
 
     @Test
     void aLogNamingNoFailedTestAddsNothingWithTheTailSwitchOff() {
-      when(actionsClient.downloadJobLogs(any(), any(), any(), any(), anyLong()))
+      when(tokenReads.jobLogLocation(any(), any(), any(), anyLong()))
           .thenAnswer(ignored -> redirect());
       when(fetcher.fetchTail(any(), anyInt()))
           .thenReturn("npm ERR! missing script: build\n".getBytes(StandardCharsets.UTF_8));
@@ -497,8 +496,7 @@ class CiFailureContextResolverTest {
 
     @Test
     void appendsTheTailOfAFailingActionsJobLogWithoutTimestamps() {
-      when(actionsClient.downloadJobLogs("a", "application/vnd.github+json", "o", "r", 1L))
-          .thenReturn(redirect());
+      when(tokenReads.jobLogLocation("a", "o", "r", 1L)).thenReturn(redirect());
       when(fetcher.fetchTail(LOG_URI, CiFailureContextResolver.LOG_TAIL_BYTES))
           .thenReturn(
               """
@@ -517,7 +515,7 @@ class CiFailureContextResolverTest {
 
     @Test
     void theFailingTestsPrecedeTheTailWhenBothAreShown() {
-      when(actionsClient.downloadJobLogs(any(), any(), any(), any(), anyLong()))
+      when(tokenReads.jobLogLocation(any(), any(), any(), anyLong()))
           .thenAnswer(ignored -> redirect());
       when(fetcher.fetchTail(any(), anyInt()))
           .thenReturn("--- FAIL: TestOverlap (0.00s)\nFAIL\n".getBytes(StandardCharsets.UTF_8));
@@ -534,7 +532,7 @@ class CiFailureContextResolverTest {
 
     @Test
     void readsAtMostTwoLogsAndOnlyForActionsJobsThatFailedOrTimedOut() {
-      when(actionsClient.downloadJobLogs(any(), any(), any(), any(), anyLong()))
+      when(tokenReads.jobLogLocation(any(), any(), any(), anyLong()))
           .thenAnswer(ignored -> redirect());
       when(fetcher.fetchTail(any(), anyInt())).thenReturn("boom".getBytes(StandardCharsets.UTF_8));
       var cancelled =
@@ -558,9 +556,9 @@ class CiFailureContextResolverTest {
                       actionsFailure(4L, "f", 0),
                       actionsFailure(5L, "g", 0)));
 
-      verify(actionsClient).downloadJobLogs(any(), any(), any(), any(), eq(3L));
-      verify(actionsClient).downloadJobLogs(any(), any(), any(), any(), eq(4L));
-      verify(actionsClient, times(2)).downloadJobLogs(any(), any(), any(), any(), anyLong());
+      verify(tokenReads).jobLogLocation(any(), any(), any(), eq(3L));
+      verify(tokenReads).jobLogLocation(any(), any(), any(), eq(4L));
+      verify(tokenReads, times(2)).jobLogLocation(any(), any(), any(), anyLong());
       assertEquals(2, section.split("Job log tail:\nboom", -1).length - 1, section);
     }
 
@@ -572,12 +570,12 @@ class CiFailureContextResolverTest {
 
       resolver(true, true, 4000).resolve("a", "o", "r", evaluation(0, status, noConclusion));
 
-      verifyNoInteractions(actionsClient, fetcher);
+      verifyNoInteractions(tokenReads, fetcher);
     }
 
     @Test
     void anEmptyLogAddsNothing() {
-      when(actionsClient.downloadJobLogs(any(), any(), any(), any(), anyLong()))
+      when(tokenReads.jobLogLocation(any(), any(), any(), anyLong()))
           .thenAnswer(ignored -> redirect());
       when(fetcher.fetchTail(any(), anyInt())).thenReturn(new byte[0]);
 
@@ -590,14 +588,13 @@ class CiFailureContextResolverTest {
                   evaluation(0, actionsFailure(1, "x", 0), actionsFailure(2, "y", 0)));
 
       assertFalse(section.contains("Job log tail"), section);
-      verify(actionsClient, times(2)).downloadJobLogs(any(), any(), any(), any(), anyLong());
+      verify(tokenReads, times(2)).jobLogLocation(any(), any(), any(), anyLong());
     }
 
     @Test
     void aLogThatCannotBeReadIsSkipped() {
-      when(actionsClient.downloadJobLogs(any(), any(), any(), any(), eq(1L)))
-          .thenReturn(Response.status(404).build());
-      when(actionsClient.downloadJobLogs(any(), any(), any(), any(), eq(2L)))
+      when(tokenReads.jobLogLocation(any(), any(), any(), eq(1L))).thenReturn(Optional.empty());
+      when(tokenReads.jobLogLocation(any(), any(), any(), eq(2L)))
           .thenThrow(new RuntimeException("410"));
 
       var section =
@@ -614,8 +611,8 @@ class CiFailureContextResolverTest {
     }
 
     @Test
-    void aNullDownloadResponseIsSkipped() {
-      when(actionsClient.downloadJobLogs(any(), any(), any(), any(), anyLong())).thenReturn(null);
+    void aDownloadWithNoLocationIsSkipped() {
+      when(tokenReads.jobLogLocation(any(), any(), any(), anyLong())).thenReturn(Optional.empty());
 
       var section =
           resolver(true, true, 4000)
@@ -679,7 +676,7 @@ class CiFailureContextResolverTest {
     when(ciContext.includeLogs()).thenReturn(false);
     when(ciContext.maxChars()).thenReturn(4000);
 
-    var fromConfig = new CiFailureContextResolver(checkRunClient, actionsClient, fetcher, config);
+    var fromConfig = new CiFailureContextResolver(checkRunClient, tokenReads, fetcher, config);
 
     assertTrue(fromConfig.enabled());
   }
