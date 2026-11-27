@@ -627,6 +627,25 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
     return !citations(finding.title(), finding.description(), false).isEmpty();
   }
 
+  /** The failing checks and tests a finding's words cite, as its basis names them (#1435). */
+  List<String> citedNames(String title, String description) {
+    return citations(title, description, false).stream()
+        .map(
+            citation ->
+                citation.test() == null
+                    ? "failing check " + span(citation.check().name())
+                    : "failing test "
+                        + span(citation.test().name())
+                        + " of check "
+                        + span(citation.check().name()))
+        .distinct()
+        .toList();
+  }
+
+  private static String span(String name) {
+    return "`" + MarkdownSafe.inlineCode(CiFailureContextResolver.clip(name, MAX_NAME_CHARS)) + "`";
+  }
+
   /**
    * The note attached to a finding that cites a failing check, or {@code null} when it cites none.
    * It states what the section records and nothing more: the check failed on this commit, and its

@@ -90,6 +90,10 @@ cannot resolve its review threads.
 - **A file read refuses a path that leaves the repository**: a path from model output or a
   repository file with a `..` segment or a leading `/` could address another endpoint of the
   GitHub API with the bot's token. Such a path is now treated as a missing file without a request.
+- **A "Basis" block on each finding** (#1435, off by default): `REVIEW_SHOW_EVIDENCE=true` prints
+  under the description what the review established for it: the path-scoped rules covering the
+  file, the failing check the finding cites, the second pass's verdict, and the review learning
+  that demoted it. Each line is a name, path, id or fixed phrase, and is left out when empty.
 
 ### Fixed
 

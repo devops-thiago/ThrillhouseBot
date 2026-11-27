@@ -414,6 +414,15 @@ public interface ThrillhouseConfig {
     boolean agentPromptEnabled();
 
     /**
+     * Print a "Basis" block on each finding posted as a review comment, inline or file-level: the
+     * scoped rules covering the file, the failing check the finding cites, the second pass's
+     * verdict and the learning that demoted it (#1435). Default off.
+     */
+    @WithDefault("false")
+    @WithName("show-evidence")
+    boolean showEvidence();
+
+    /**
      * When a review or summary answer is not valid review JSON, send only that answer and the
      * parser's error in one small call and ask for the same content in the required shape, before
      * resending the whole prompt. Also asks again for the walkthrough's file summaries when the
