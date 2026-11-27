@@ -167,6 +167,11 @@ cannot resolve its review threads.
   approval is posted, the summary no longer says it cannot be approved or lists the checks as
   pending. While the hold stays, its table shows the checks' current state. The Agent next steps
   section, when on, follows it too. A summary posted before this change is not rewritten.
+- **A push inside the automatic review window is reviewed when the window closes**: a push that
+  arrived inside `AUTO_REVIEW_MIN_INTERVAL` was skipped and never reviewed, so an approval of the
+  previous commit could stay on code the bot had not read. The bot now keeps the latest pushed head
+  and reviews it when the window closes. Only a reopen or a repeated ready-for-review of the commit
+  just reviewed is skipped. The waiting review is held in memory, so a restart loses it.
 
 ### Security
 
