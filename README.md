@@ -150,10 +150,9 @@ deployment sets `REVIEW_LEARNINGS_ENABLED=true`; otherwise the bot replies that
 learnings are off. `/learnings` lists up to 30 entries.
 
 **Pause.** While a PR is paused, pushes are not reviewed and mentions get no
-answer. A push still dismisses an approval the bot gave an earlier commit (see
-[Withdrawing an earlier approval](#withdrawing-an-earlier-approval)). `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`,
-`/improve` and `/generate-tests` reply with a short paused notice and do
-nothing else. `/help`, `/resolve`, `/resume` and the learnings commands keep
+answer. A push still dismisses an approval the bot gave an earlier commit.
+`/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve` and
+`/generate-tests` reply with a short paused notice and do nothing else. `/help`, `/resolve`, `/resume` and the learnings commands keep
 working.
 
 **Batching.** `/describe`, `/changelog`, `/add-docs`, `/improve` and
