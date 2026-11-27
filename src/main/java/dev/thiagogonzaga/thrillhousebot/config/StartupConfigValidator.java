@@ -120,6 +120,7 @@ public class StartupConfigValidator {
     validateAutoReviewLimits(problems, config.review());
     validateCiGating(problems, config.review());
     validateCiContext(problems, config.review().ciContext());
+    validateStaticAnalysis(problems, config.review().staticAnalysis());
     validateTicketContext(problems, config.review().ticketContext());
     validateLearnings(problems, config.review());
     validateBlockingStrictness(problems, config.review());
@@ -738,6 +739,29 @@ public class StartupConfigValidator {
               + " and "
               + ThrillhouseConfig.CiContextConfig.MAX_MAX_CHARS
               + " (thrillhousebot.review.ci-context.max-chars): "
+              + maxChars);
+    }
+  }
+
+  /**
+   * Rejects an out-of-bounds {@code REVIEW_STATIC_ANALYSIS_MAX_CHARS} at boot (#34) — only when the
+   * feature is on, since a disabled section is never built — so a typo cannot let tool output crowd
+   * out the diff or leave the section too small to hold a single check.
+   */
+  private static void validateStaticAnalysis(
+      List<String> problems, ThrillhouseConfig.StaticAnalysisConfig staticAnalysis) {
+    if (!staticAnalysis.enabled()) {
+      return;
+    }
+    var maxChars = staticAnalysis.maxChars();
+    if (maxChars < ThrillhouseConfig.StaticAnalysisConfig.MIN_MAX_CHARS
+        || maxChars > ThrillhouseConfig.StaticAnalysisConfig.MAX_MAX_CHARS) {
+      problems.add(
+          "REVIEW_STATIC_ANALYSIS_MAX_CHARS must be between "
+              + ThrillhouseConfig.StaticAnalysisConfig.MIN_MAX_CHARS
+              + " and "
+              + ThrillhouseConfig.StaticAnalysisConfig.MAX_MAX_CHARS
+              + " (thrillhousebot.review.static-analysis.max-chars): "
               + maxChars);
     }
   }
