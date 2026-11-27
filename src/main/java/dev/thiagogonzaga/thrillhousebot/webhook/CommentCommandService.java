@@ -35,6 +35,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 import org.slf4j.Logger;
@@ -79,6 +80,11 @@ public class CommentCommandService {
           + " bot needs to grant it "
           + ReviewThreadService.RESOLVE_PERMISSION
           + " and accept the change on the installation.";
+
+  /** Posted when {@code /resolve} could not read the pull request's review threads (#1471). */
+  static final String RESOLVE_LISTING_FAILED_NOTICE =
+      "⚠️ GitHub did not return this pull request's review threads, so none was resolved. The bot's"
+          + " log has GitHub's reason; comment `/resolve` again to retry.";
 
   /**
    * Posted when {@code /summary} declines because the PR already carries a bot summary. The command
@@ -464,10 +470,20 @@ public class CommentCommandService {
       postComment(auth, ctx, "No open ThrillhouseBot finding threads to resolve.");
       return;
     }
-    var threads =
-        reviewThreadService.threadsByRootComment(auth, ctx.owner(), ctx.repo(), ctx.prNumber());
+    Map<Long, ReviewThreadService.ThreadRef> threads;
+    try {
+      threads =
+          reviewThreadService.threadsByRootComment(auth, ctx.owner(), ctx.repo(), ctx.prNumber());
+    } catch (RuntimeException e) {
+      log.warn("Failed to list the review threads of {} #{}", repository(ctx), num(ctx), e);
+      postComment(
+          auth,
+          ctx,
+          notPermitted(e) ? RESOLVE_NOT_PERMITTED_NOTICE : RESOLVE_LISTING_FAILED_NOTICE);
+      return;
+    }
     var resolved = 0;
-    var notPermitted = false;
+    var failed = 0;
     for (long rootCommentId : botRootCommentIds) {
       var thread = threads.get(rootCommentId);
       if (thread == null || thread.resolved()) {
@@ -476,26 +492,45 @@ public class CommentCommandService {
       try {
         if (reviewThreadService.resolve(auth, thread.id())) {
           resolved++;
+        } else {
+          failed++;
         }
       } catch (RuntimeException e) {
         log.warn(
             "Failed to resolve thread {} on {} #{}", thread.id(), repository(ctx), num(ctx), e);
-        if (e instanceof GitHubGraphQLException refusal && refusal.isNotPermitted()) {
-          notPermitted = true;
-          break;
+        if (notPermitted(e)) {
+          postComment(auth, ctx, RESOLVE_NOT_PERMITTED_NOTICE);
+          return;
         }
+        failed++;
       }
     }
-    postComment(auth, ctx, resolveOutcome(resolved, notPermitted));
+    postComment(auth, ctx, resolveOutcome(resolved, failed));
   }
 
-  private static String resolveOutcome(int resolved, boolean notPermitted) {
-    if (notPermitted) {
-      return RESOLVE_NOT_PERMITTED_NOTICE;
+  private static boolean notPermitted(RuntimeException e) {
+    return e instanceof GitHubGraphQLException refusal && refusal.isNotPermitted();
+  }
+
+  /**
+   * What {@code /resolve} answers: the threads it resolved, and the ones it tried and GitHub left
+   * open, so a run where every attempt failed never reads as nothing to resolve (#1471).
+   */
+  private static String resolveOutcome(int resolved, int failed) {
+    if (failed == 0) {
+      return resolved > 0
+          ? "✅ Resolved " + resolved + " ThrillhouseBot finding thread(s)."
+          : "No open ThrillhouseBot finding threads to resolve.";
     }
+    var leftOpen = " could not be resolved and stay(s) open; the bot's log has GitHub's reason.";
     return resolved > 0
-        ? "✅ Resolved " + resolved + " ThrillhouseBot finding thread(s)."
-        : "No open ThrillhouseBot finding threads to resolve.";
+        ? "✅ Resolved "
+            + resolved
+            + " ThrillhouseBot finding thread(s). ⚠️ "
+            + failed
+            + " more"
+            + leftOpen
+        : "⚠️ " + failed + " ThrillhouseBot finding thread(s)" + leftOpen;
   }
 
   private void handlePause(CommandContext ctx, String auth) {

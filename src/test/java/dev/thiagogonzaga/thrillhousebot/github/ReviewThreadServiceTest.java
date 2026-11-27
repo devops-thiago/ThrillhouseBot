@@ -26,6 +26,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -138,10 +139,59 @@ class ReviewThreadServiceTest {
   }
 
   @Test
-  void shouldReturnEmptyMapForMalformedResponse() throws Exception {
-    stubResponse("{\"errors\": [{\"message\": \"boom\"}]}");
+  void shouldReturnEmptyMapForAResponseWithNoThreadsAndNoErrors() throws Exception {
+    stubResponse("{\"data\": {\"repository\": null}}");
 
     assertTrue(service.threadsByRootComment("auth", "owner", "repo", 7).isEmpty());
+  }
+
+  // #1471: errors on an HTTP 200 with no thread list are a failed read, not a PR with no threads.
+  @Test
+  void shouldRaiseGitHubsErrorsWhenTheThreadListDidNotComeBack() throws Exception {
+    stubResponse(
+        "{\"data\": {\"repository\": null},"
+            + " \"errors\": [{\"type\": \"NOT_FOUND\", \"message\": \"Could not resolve\"}]}");
+
+    var refusal =
+        assertThrows(
+            GitHubGraphQLException.class,
+            () -> service.threadsByRootComment("auth", "owner", "repo", 7));
+
+    assertEquals("Could not resolve", refusal.refusal());
+  }
+
+  @Test
+  void shouldRaiseGitHubsErrorsWhenALaterPageOfThreadsDidNotComeBack() throws Exception {
+    when(graphQLClient.execute(anyString(), any()))
+        .thenReturn(
+            mapper.readTree(
+                """
+                {"data": {"repository": {"pullRequest": {"reviewThreads": {
+                  "nodes": [{"id": "T1", "isResolved": false,
+                             "comments": {"nodes": [{"databaseId": 100}]}}],
+                  "pageInfo": {"hasNextPage": true, "endCursor": "c1"}}}}}}
+                """))
+        .thenReturn(mapper.readTree("{\"errors\": [{\"message\": \"timeout\"}]}"));
+
+    assertThrows(
+        GitHubGraphQLException.class,
+        () -> service.threadsByRootComment("auth", "owner", "repo", 7));
+  }
+
+  @Test
+  void shouldKeepTheThreadsOfAResponseThatAlsoCarriesErrors() throws Exception {
+    stubResponse(
+        """
+        {"data": {"repository": {"pullRequest": {"reviewThreads": {
+          "nodes": [{"id": "T1", "isResolved": false,
+                     "comments": {"nodes": [{"databaseId": 100}]}}],
+          "pageInfo": {"hasNextPage": false}}}}},
+         "errors": [{"message": "a field could not be read"}]}
+        """);
+
+    assertEquals(
+        Map.of(100L, new ReviewThreadService.ThreadRef("T1", false)),
+        service.threadsByRootComment("auth", "owner", "repo", 7));
   }
 
   @Test
