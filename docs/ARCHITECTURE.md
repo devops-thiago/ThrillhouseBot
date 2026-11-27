@@ -99,7 +99,7 @@ arrives while a review of the same PR runs replaces any request already waiting,
 newest head is reviewed next. A manual `/review` first reads the head: if the running review
 already covers that commit, the command acknowledges it without queuing another run. A moved
 head or a failed head read queues a run. A CI-hold recheck runs once no review of that PR is queued.
-A `synchronize` event also queues the withdrawal of the bot's approval of an earlier head
+A `synchronize` or `reopened` event also queues the withdrawal of the bot's approval of an earlier head
 (`ApprovalOnPush`): the worker runs it after a review in flight and before the review the push
 queued, and it runs even when the pause, a trigger filter or the rate window stops that review.
 

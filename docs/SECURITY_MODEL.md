@@ -57,9 +57,8 @@ security limits. To report a vulnerability, see
   executor turned the work away before the dismissal ran (the dismissal is
   queued in memory), it could not list the pull request's reviews, or GitHub
   did not let it dismiss the review, which a branch protection rule that
-  restricts who may dismiss reviews does. Only a push to an open pull request
-  starts the dismissal; commits added while it was closed and present when it
-  is reopened do not. The bot
+  restricts who may dismiss reviews does. A pull request reopened with commits
+  added while it was closed is treated like a push. The bot
   logs a warning when the reviews could not be listed, saying that earlier
   approvals were not checked, and one for each approval it could not dismiss.
   A refusal for want of permission (a 403 that is not a rate limit) ends that

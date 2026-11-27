@@ -273,7 +273,7 @@ cannot resolve its review threads.
   and even after a review that ended as `COMMENT` (findings, an earlier finding still open, a CI
   hold, a partly reviewed diff), because GitHub goes on counting an approval after its author
   posts a comment review. The bot now dismisses its approvals of earlier commits as soon as the
-  push arrives, without a model call and whether or not the new head will be reviewed, with a
+  push arrives (or the pull request is reopened on another commit), without a model call and whether or not the new head will be reviewed, with a
   message saying commits were pushed after the approval and naming the new head. A review that
   does not end in an approval also dismisses every approval the bot still has before it posts,
   with a message naming the head it reviewed. Only the bot's own reviews are dismissed. A review

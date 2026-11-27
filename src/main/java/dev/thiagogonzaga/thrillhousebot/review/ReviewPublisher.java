@@ -38,6 +38,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -934,20 +935,26 @@ public class ReviewPublisher {
    * timeout, a 5xx, a 404 or 422 (the review is gone or was dismissed since the listing), or a rate
    * limit that outlasted the write retries. The older approvals are still tried after it. An
    * approval that could not be dismissed stays until a later push or round withdraws it or a person
-   * dismisses it.
+   * dismisses it. Returns whether at least one approval was dismissed.
    *
    * <p>An approval already dismissed when commits were pushed ({@link #withdrawApprovalsAfterPush})
    * is {@code DISMISSED} in the listing and is skipped here.
    */
-  private void withdrawStandingApprovals(
+  private boolean withdrawStandingApprovals(
       ApprovalWithdrawal withdrawal, List<GitHubReviewClient.ReviewResponse> reviews) {
+    var dismissed = false;
     for (int i = reviews.size() - 1; i >= 0; i--) {
       var review = reviews.get(i);
-      if (isStandingBotApproval(review)
-          && dismissApproval(withdrawal, review) == Dismissal.REFUSED) {
-        return;
+      if (!isStandingBotApproval(review)) {
+        continue;
       }
+      var outcome = dismissApproval(withdrawal, review);
+      if (outcome == Dismissal.REFUSED) {
+        break;
+      }
+      dismissed |= outcome == Dismissal.DONE;
     }
+    return dismissed;
   }
 
   /**
@@ -956,8 +963,10 @@ public class ReviewPublisher {
    * ApprovalOnPush}). The same walk and rules as a round that does not approve, with the message
    * for this case, under a write-retry budget of its own so a throttled dismissal cannot hold the
    * pull request's worker for longer than a review's publication may.
+   *
+   * @return whether at least one approval was dismissed
    */
-  void withdrawApprovalsAfterPush(
+  boolean withdrawApprovalsAfterPush(
       String auth,
       String owner,
       String repo,
@@ -972,10 +981,12 @@ public class ReviewPublisher {
             prNumber,
             approvalWithdrawnOnPushMessage(headSha),
             "commits were pushed after it and " + headSha + " has not been reviewed");
+    var dismissed = new AtomicBoolean();
     GitHubWriteBudget.within(
         owner + "/" + repo + " #" + prNumber,
         config.github().writeRetryBudget(),
-        () -> withdrawStandingApprovals(withdrawal, reviews));
+        () -> dismissed.set(withdrawStandingApprovals(withdrawal, reviews)));
+    return dismissed.get();
   }
 
   /**

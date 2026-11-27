@@ -24,6 +24,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -36,10 +37,15 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
+import io.opentelemetry.api.OpenTelemetry;
 import jakarta.ws.rs.WebApplicationException;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
+import java.util.OptionalLong;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -69,8 +75,13 @@ class ApprovalOnPushTest {
           BotIdentity.of(BOT),
           new PendingReviewGuard());
 
+  private static final long WINDOW_MS = 60_000;
+  private final AtomicLong now = new AtomicLong(1_000);
+  private final AutoReviewRateLimiter limiter =
+      new AutoReviewRateLimiter(WINDOW_MS, 10_000, now::get);
+
   private final ApprovalOnPush approvalOnPush =
-      new ApprovalOnPush(authClient, reviewClient, prClient, publisher);
+      new ApprovalOnPush(authClient, reviewClient, prClient, publisher, limiter);
 
   @BeforeEach
   void stubs() {
@@ -124,6 +135,113 @@ class ApprovalOnPushTest {
     verifyDismissed(1L, "sha2");
     verify(reviewClient, never())
         .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+  }
+
+  @Test
+  void dismissalMakesTheRateWindowForgetTheHeadItsReviewCovered() {
+    limiter.recordCompletion("o", "r", 1, "sha1");
+    reviewsAre(review(1L, "APPROVED", "sha1", BOT));
+
+    approvalOnPush.withdraw(PUSH);
+
+    assertTrue(limiter.isThrottled("o", "r", 1), "the window itself stays");
+    assertEquals(
+        OptionalLong.of(1_000 + WINDOW_MS),
+        limiter.reviewDueAt("o", "r", 1, "sha1"),
+        "a return to sha1 is reviewed when the window closes");
+  }
+
+  @Test
+  void pushThatDismissesNothingLeavesTheCoveredHeadCovered() {
+    limiter.recordCompletion("o", "r", 1, "sha1");
+    reviewsAre(review(1L, "APPROVED", "sha1", BOT));
+    when(reviewClient.dismissReview(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), anyLong(), anyString()))
+        .thenThrow(new WebApplicationException(502));
+
+    approvalOnPush.withdraw(PUSH);
+
+    // The approval of sha1 still stands, so a return to sha1 needs no review.
+    assertEquals(OptionalLong.empty(), limiter.reviewDueAt("o", "r", 1, "sha1"));
+  }
+
+  @Test
+  void headForcedBackToTheApprovedCommitInsideTheWindowIsReviewedWhenTheWindowCloses()
+      throws InterruptedException {
+    var orchestrator = mock(ReviewOrchestrator.class);
+    when(orchestrator.review(any())).thenReturn(true);
+    var deferred = new DeferredReviews(100, now::get);
+    var executor = Executors.newSingleThreadExecutor();
+    var dispatcher =
+        new ReviewDispatcher(
+            executor,
+            orchestrator,
+            limiter,
+            new AutoReviewSlots(4, 50),
+            deferred,
+            mock(ReviewSkipEmitter.class),
+            mock(CiHoldRevisit.class),
+            approvalOnPush,
+            mock(RunningReviewCoverage.class),
+            OpenTelemetry.noop());
+    try {
+      // The review of A approves it and opens the rate window.
+      dispatcher.dispatch(request("shaA"));
+      verify(orchestrator, timeout(5000)).review(request("shaA"));
+      awaitIdle(dispatcher);
+      reviewsAre(review(1L, "APPROVED", "shaA", BOT));
+
+      // B is pushed inside the window: the approval of A goes at once, B waits for the window.
+      headIs("shaB");
+      assertTrue(dispatcher.dispatchApprovalWithdrawal(push("shaB")));
+      assertTrue(dispatcher.deferThrottled(request("shaB")));
+      verify(reviewClient, timeout(5000))
+          .dismissReview(
+              "auth",
+              ACCEPT,
+              "o",
+              "r",
+              1,
+              1L,
+              ReviewPublisher.approvalWithdrawnOnPushMessage("shaB"));
+      awaitIdle(dispatcher);
+      reviewsAre(review(1L, "DISMISSED", "shaA", BOT));
+
+      // The branch is forced back to A, still inside the window. A has no approval left, so the
+      // event is kept in place of B's instead of being skipped as already reviewed.
+      headIs("shaA");
+      assertTrue(dispatcher.dispatchApprovalWithdrawal(push("shaA")));
+      assertTrue(dispatcher.deferThrottled(request("shaA")));
+      awaitIdle(dispatcher);
+
+      now.addAndGet(WINDOW_MS + 1);
+      var due = deferred.takeDue();
+      assertEquals(List.of(request("shaA")), due);
+      due.forEach(dispatcher::dispatchDeferred);
+
+      verify(orchestrator, timeout(5000).times(2)).review(request("shaA"));
+      verify(orchestrator, never()).review(request("shaB"));
+    } finally {
+      executor.shutdownNow();
+      assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+    }
+  }
+
+  private static ApprovalOnPush.Push push(String sha) {
+    return new ApprovalOnPush.Push("o", "r", 1, sha, 77L);
+  }
+
+  private static ReviewOrchestrator.ReviewRequest request(String sha) {
+    return new ReviewOrchestrator.ReviewRequest(
+        "o", "r", 1, sha, "title", "", "base", "main", 77L, 7L, false, "main");
+  }
+
+  private static void awaitIdle(ReviewDispatcher dispatcher) {
+    var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    while (dispatcher.stateCount() > 0 && System.nanoTime() < deadline) {
+      Thread.onSpinWait();
+    }
+    assertEquals(0, dispatcher.stateCount());
   }
 
   @Test

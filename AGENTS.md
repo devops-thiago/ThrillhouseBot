@@ -364,7 +364,8 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   A first review, and a readable round that raised nothing, are not this
   (`UnconfirmedDeclineAcrossRoundsTest`).
 - **A push withdraws the bot's approval of an earlier head, with or without a review.** A
-  `pull_request` `synchronize` event queues `ApprovalOnPush.withdraw` through
+  `pull_request` `synchronize` or `reopened` event (a closed pull request's branch can gain
+  commits) queues `ApprovalOnPush.withdraw` through
   `ReviewDispatcher.dispatchApprovalWithdrawal` before the pause check, the trigger filters and
   the rate window in `WebhookEvents.handlePullRequest`: those stop the review of the new head,
   which is exactly when an approval of the old one would otherwise stay. It never runs on the
@@ -379,8 +380,12 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   through `ReviewPublisher.withdrawApprovalsAfterPush`, the walk below with
   `approvalWithdrawnOnPushMessage`: a fixed text, no model or user text. A failure is logged at
   warn and never stops the queued review (`ReviewDispatcher.withdrawApproval`); a rejected
-  executor frees the delivery for a redelivery. Only `synchronize` triggers it (not `reopened`),
-  and the queued withdrawal is in memory, so a restart before it runs loses it.
+  executor frees the delivery for a redelivery. The queued withdrawal is in memory, so a restart
+  before it runs loses it. When at least one approval was dismissed, `ApprovalOnPush` calls
+  `AutoReviewRateLimiter.forgetCoveredHead`: the window stays, but the head its review covered is
+  forgotten, so a force-push back to that commit inside the window is deferred to the window's
+  end (`reviewDueAt`) and reviewed, not skipped as covered with no approval left. The
+  ready-for-review lift memory is separate; leave it alone there.
 - **A round that does not approve withdraws the bot's standing approvals.** GitHub keeps counting
   an `APPROVED` review after its author posts a `COMMENT` one, so `ReviewPublisher.publishReview`
   calls `withdrawStandingApprovals` before any post unless the round ends in an `APPROVE` review

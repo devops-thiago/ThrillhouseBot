@@ -27,10 +27,11 @@ import java.util.Optional;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 /**
- * Withdraws the bot's approval when commits are pushed after it. An approval is given for one head;
- * once the head moves, GitHub goes on counting it until someone dismisses it, and the review of the
- * new head may run late, fail or never run (a draft, a label or branch filter, a paused pull
- * request, a restart while the review waits for a limit). So a {@code synchronize} event dismisses
+ * Withdraws the bot's approval when commits are pushed after it, or when a pull request is reopened
+ * on a head other than the one it approved. An approval is given for one head; once the head moves,
+ * GitHub goes on counting it until someone dismisses it, and the review of the new head may run
+ * late, fail or never run (a draft, a label or branch filter, a paused pull request, a restart
+ * while the review waits for a limit). So a {@code synchronize} or {@code reopened} event dismisses
  * the bot's standing approvals at once, whether or not a review follows. The model is never called.
  *
  * <p>Runs on the dispatcher's per-pull-request worker, before the review the same push queued and
@@ -44,7 +45,10 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
  * <p>Nothing is dismissed while the bot has a standing approval of the current head, so a
  * force-push back to the approved commit keeps it. Otherwise every standing approval goes, through
  * the walk a round that does not approve uses ({@link ReviewPublisher#withdrawApprovalsAfterPush}).
- * A review of the new head that approves posts a new approval as usual.
+ * A review of the new head that approves posts a new approval as usual. A dismissal also makes the
+ * rate limiter forget the head its last review covered ({@link
+ * AutoReviewRateLimiter#forgetCoveredHead}), so a head that returns to the commit whose approval
+ * was just withdrawn is reviewed when the window closes, not skipped as already reviewed.
  */
 @ApplicationScoped
 public class ApprovalOnPush {
@@ -59,17 +63,20 @@ public class ApprovalOnPush {
   private final GitHubReviewClient reviewClient;
   private final GitHubPullRequestClient prClient;
   private final ReviewPublisher reviewPublisher;
+  private final AutoReviewRateLimiter autoReviewRateLimiter;
 
   @Inject
   public ApprovalOnPush(
       GitHubAuthClient authClient,
       @RestClient GitHubReviewClient reviewClient,
       @RestClient GitHubPullRequestClient prClient,
-      ReviewPublisher reviewPublisher) {
+      ReviewPublisher reviewPublisher,
+      AutoReviewRateLimiter autoReviewRateLimiter) {
     this.authClient = authClient;
     this.reviewClient = reviewClient;
     this.prClient = prClient;
     this.reviewPublisher = reviewPublisher;
+    this.autoReviewRateLimiter = autoReviewRateLimiter;
   }
 
   /**
@@ -91,8 +98,12 @@ public class ApprovalOnPush {
           head, push.owner(), push.repo(), push.prNumber(), push.headSha());
       return;
     }
-    reviewPublisher.withdrawApprovalsAfterPush(
-        auth, push.owner(), push.repo(), push.prNumber(), head, approvals);
+    if (reviewPublisher.withdrawApprovalsAfterPush(
+        auth, push.owner(), push.repo(), push.prNumber(), head, approvals)) {
+      // The commit the last automatic review covered has no approval any more: if the head comes
+      // back to it inside the rate window, it is reviewed again when the window closes.
+      autoReviewRateLimiter.forgetCoveredHead(push.owner(), push.repo(), push.prNumber());
+    }
   }
 
   /** The bot's approvals GitHub still counts, oldest first; empty when the listing failed. */

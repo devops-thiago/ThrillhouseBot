@@ -73,6 +73,13 @@ public class WebhookEvents {
   private static final Set<String> AUTO_REVIEW_ACTIONS =
       Set.of("opened", ACTION_REOPENED, ACTION_SYNCHRONIZE, ACTION_READY_FOR_REVIEW);
 
+  /**
+   * pull_request actions after which the head may not be the commit the bot approved: a push, and a
+   * reopening, since the branch of a closed pull request can gain commits.
+   */
+  private static final Set<String> HEAD_MOVING_ACTIONS =
+      Set.of(ACTION_SYNCHRONIZE, ACTION_REOPENED);
+
   private static final String EVENT_PULL_REQUEST = "pull_request";
   private static final String ACTION_CLOSED = "closed";
 
@@ -389,11 +396,12 @@ public class WebhookEvents {
   }
 
   /**
-   * On a push ({@code synchronize}), queues the withdrawal of the approvals the bot gave earlier
-   * heads of the pull request ({@link ApprovalOnPush}). It is queued for a paused pull request, a
-   * draft and one a label, author or branch filter excludes as well: those stop the review of the
-   * new head, which is when an approval of the old one would otherwise stay for good. Only this
-   * action does it: a pull request reopened with commits added while it was closed is not covered.
+   * On a push ({@code synchronize}) or a reopening, queues the withdrawal of the approvals the bot
+   * gave earlier heads of the pull request ({@link ApprovalOnPush}). It is queued for a paused pull
+   * request, a draft and one a label, author or branch filter excludes as well: those stop the
+   * review of the new head, which is when an approval of the old one would otherwise stay for good.
+   * A pull request reopened on the commit the bot approved keeps the approval ({@link
+   * ApprovalOnPush}).
    *
    * @return {@code false} only when the executor rejected the task, so the delivery is forgotten
    *     and a redelivery can retry
@@ -401,7 +409,7 @@ public class WebhookEvents {
   private boolean withdrawalQueued(WebhookPayload payload) {
     var pr = payload.pullRequest();
     var headSha = pr.head().sha();
-    if (!ACTION_SYNCHRONIZE.equals(payload.action()) || headSha == null || headSha.isBlank()) {
+    if (!HEAD_MOVING_ACTIONS.contains(payload.action()) || headSha == null || headSha.isBlank()) {
       return true;
     }
     var repo = payload.repository();

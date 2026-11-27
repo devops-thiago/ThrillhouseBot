@@ -886,9 +886,32 @@ class WebhookEventsTest {
     verify(deduplicator, never()).forget(anyString());
   }
 
+  @Test
+  void aReopenedPullRequestQueuesTheApprovalWithdrawalAheadOfItsReview() {
+    when(reviewDispatcher.dispatch(any(ReviewOrchestrator.ReviewRequest.class))).thenReturn(true);
+
+    deliverPullRequest("reopened", "reopened", 55, "owner/repo", "sha55");
+
+    var order = inOrder(reviewDispatcher);
+    order.verify(reviewDispatcher).dispatchApprovalWithdrawal(PUSH_TO_55);
+    order.verify(reviewDispatcher).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
+  void aReopenedPullRequestTheFiltersRejectStillQueuesTheApprovalWithdrawal() {
+    when(triggerFilter.skipReason(any(), any()))
+        .thenReturn(
+            Optional.of(new ReviewTriggerFilter.Skip(ReviewSkipReason.DRAFT, "PR is a draft")));
+
+    deliverPullRequest("reopened-draft", "reopened", 55, "owner/repo", "sha55");
+
+    verify(reviewDispatcher).dispatchApprovalWithdrawal(PUSH_TO_55);
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
   @ParameterizedTest
-  @ValueSource(strings = {"opened", "reopened", "ready_for_review"})
-  void onlyAPushQueuesAnApprovalWithdrawal(String action) {
+  @ValueSource(strings = {"opened", "ready_for_review"})
+  void anActionThatLeavesTheHeadAloneQueuesNoApprovalWithdrawal(String action) {
     when(reviewDispatcher.dispatch(any(ReviewOrchestrator.ReviewRequest.class))).thenReturn(true);
 
     deliverPullRequest("not-a-push", action, 55, "owner/repo", "sha55");
