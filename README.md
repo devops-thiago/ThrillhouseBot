@@ -1632,9 +1632,10 @@ token figures come from the database, so they still work.
 ## Restricted-network deployment
 
 To keep code inside your network, run the model yourself and allow only the
-connections the bot needs. The bot is a GitHub App for GitHub.com, so it can
-never be fully offline: it must reach GitHub. GitHub Enterprise Server is not
-supported.
+connections the bot needs. The bot is a GitHub App, so it can never be fully
+offline: it must reach your GitHub. The table below names the `github.com`
+addresses. For GitHub Enterprise, including the settings for Enterprise Server,
+see [GitHub Enterprise](https://github.com/devops-thiago/ThrillhouseBot/blob/main/docs/GITHUB_ENTERPRISE.md).
 
 ### Outbound connections
 

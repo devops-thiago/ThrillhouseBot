@@ -44,7 +44,8 @@ cannot resolve its review threads.
 - **The App asks for `Contents: Read & write`** (#1471): GitHub refuses to resolve a review
   thread without it, so an app registered from the manifest or installer never could. The bot
   writes no file, commit or branch.
-
+- **A GitHub Enterprise setup guide**: `docs/GITHUB_ENTERPRISE.md` and a docs-site page say which
+  GitHub Enterprise products work and what to set up on GitHub for an organization (#1488).
 ### Fixed
 
 - **A clear or decline comment says what it matched** (#1463): the reply lists the open findings
