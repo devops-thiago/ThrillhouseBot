@@ -23,9 +23,11 @@ jobs:
     name: released-history
     runs-on: ubuntu-latest
     steps:
+      # No ref: under pull_request_target the default checkout is the base branch, which is the
+      # only code this job runs. Naming a pull request ref here, even the base commit, reads as an
+      # untrusted checkout to workflow scanners.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 0
           persist-credentials: false
       # The check reads GitHub's test merge of the pull request into its base, against that
