@@ -103,9 +103,17 @@ final class PathMentions {
       Pattern.compile(
           "(?<![\\w./@~:\\\\+-])([\\w+-][\\w.+-]*+(?:/[\\w.+-]++)*+/?)(:\\d++(?:-\\d++)?+)?");
 
-  /** A URL, which holds path-shaped segments that are not repository paths. */
-  private static final Pattern URL =
-      Pattern.compile("(?i)\\b(?:[a-z][a-z0-9+.-]*+://|www\\.)[^\\s<>()\\[\\]`\"']++");
+  /** What a URL scheme holds after its first letter, besides letters and digits. */
+  private static final String SCHEME_PUNCTUATION = "+.-";
+
+  /** What follows a URL's scheme. */
+  private static final String SCHEME_CLOSE = "://";
+
+  /** What opens a URL written without a scheme, in any case. */
+  private static final String WWW = "www.";
+
+  /** What ends a URL, besides whitespace. */
+  private static final String URL_END = "<>()[]`\"'";
 
   /** The extensions that make a bare name a file name. */
   private static final Set<String> EXTENSIONS =
@@ -788,7 +796,7 @@ final class PathMentions {
   private Rewrite rewrite(String text, Set<String> written) {
     var out = new StringBuilder(text.length());
     var unresolved = new ArrayList<int[]>();
-    var urls = new SpanCursor(spans(URL, text));
+    var urls = new SpanCursor(urlSpans(text));
     var fences = new SpanCursor(fences(text));
     var quotes = new SpanCursor(quotedCode(text));
     var matcher = TOKEN.matcher(text);
@@ -1051,7 +1059,7 @@ final class PathMentions {
     if (absent != null) {
       return absent;
     }
-    var urls = new SpanCursor(spans(URL, suggested));
+    var urls = new SpanCursor(urlSpans(suggested));
     var tokens = TOKEN.matcher(suggested);
     while (tokens.find()) {
       String token = stripTrailingDots(tokens.group(1));
@@ -1272,13 +1280,102 @@ final class PathMentions {
         || (next == ':' && at + 1 < text.length() && !Character.isWhitespace(text.charAt(at + 1)));
   }
 
-  private static List<int[]> spans(Pattern pattern, String text) {
+  /**
+   * Where the URLs of {@code text} start and end. A URL holds path-shaped segments that are not
+   * repository paths: a scheme and {@code ://}, or {@code www.}, starting at a letter that does not
+   * carry on a word ({@link #followsAWord}), and then everything up to whitespace, a bracket, a
+   * backtick or a quote. A scheme is a letter and then letters, digits, plus signs, full stops and
+   * hyphens.
+   *
+   * <p>A run of scheme characters is read once: where it ends is the same for every letter in it,
+   * so a run nothing follows with {@code ://} is not read again from each of its letters.
+   */
+  static List<int[]> urlSpans(String text) {
     var spans = new ArrayList<int[]>();
-    var matcher = pattern.matcher(text);
-    while (matcher.find()) {
-      spans.add(new int[] {matcher.start(), matcher.end()});
+    int schemeEnd = 0;
+    int at = 0;
+    while (at < text.length()) {
+      int end = -1;
+      if (isAsciiLetter(text.charAt(at)) && !followsAWord(text, at)) {
+        if (schemeEnd <= at) {
+          schemeEnd = schemeEnd(text, at);
+        }
+        end = urlEnd(text, at, schemeEnd);
+      }
+      if (end < 0) {
+        at++;
+      } else {
+        spans.add(new int[] {at, end});
+        at = end;
+      }
     }
     return spans;
+  }
+
+  /**
+   * Whether the character at {@code at} carries on a word, as a word boundary in a regular
+   * expression reads it: an ASCII letter, digit or underscore stands right before it, or combining
+   * marks do, on a letter or digit of any script.
+   */
+  private static boolean followsAWord(String text, int at) {
+    int before = at - 1;
+    while (before >= 0 && Character.getType(text.charAt(before)) == Character.NON_SPACING_MARK) {
+      before--;
+    }
+    if (before < 0) {
+      return false;
+    }
+    char base = text.charAt(before);
+    return before == at - 1 ? CallSites.isWord(base) : Character.isLetterOrDigit(base);
+  }
+
+  /** Where the run of scheme characters holding the letter at {@code from} ends. */
+  private static int schemeEnd(String text, int from) {
+    int at = from + 1;
+    while (at < text.length() && isSchemeCharacter(text.charAt(at))) {
+      at++;
+    }
+    return at;
+  }
+
+  /**
+   * Where the URL starting at {@code at} ends, {@code schemeEnd} being where the scheme characters
+   * from there end; -1 when none starts there.
+   */
+  private static int urlEnd(String text, int at, int schemeEnd) {
+    if (text.startsWith(SCHEME_CLOSE, schemeEnd)) {
+      int body = schemeEnd + SCHEME_CLOSE.length();
+      int end = urlBodyEnd(text, body);
+      if (end > body) {
+        return end;
+      }
+    }
+    if (text.regionMatches(true, at, WWW, 0, WWW.length())) {
+      int body = at + WWW.length();
+      int end = urlBodyEnd(text, body);
+      if (end > body) {
+        return end;
+      }
+    }
+    return -1;
+  }
+
+  private static int urlBodyEnd(String text, int from) {
+    int at = from;
+    while (at < text.length()
+        && !CallSites.isSpace(text.charAt(at))
+        && URL_END.indexOf(text.charAt(at)) < 0) {
+      at++;
+    }
+    return at;
+  }
+
+  private static boolean isAsciiLetter(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+  }
+
+  private static boolean isSchemeCharacter(char c) {
+    return isAsciiLetter(c) || CallSites.isDigit(c) || SCHEME_PUNCTUATION.indexOf(c) >= 0;
   }
 
   /** The fenced code blocks of {@code text}, an unclosed one running to the end. */

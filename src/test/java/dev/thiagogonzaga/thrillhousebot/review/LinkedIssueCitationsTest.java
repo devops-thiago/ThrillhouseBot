@@ -19,9 +19,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import java.time.Duration;
 import java.util.List;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
@@ -1123,5 +1125,21 @@ class LinkedIssueCitationsTest {
 
     assertEquals(1, gaps.size());
     assertFalse(gaps.getFirst().contains("declined"));
+  }
+
+  /**
+   * A linked-issue bullet whose criterion holds 130,000 single quotes that each open a passage
+   * nothing closes. Each used to be read to the end of the line: 16,000 characters took 0.6
+   * seconds.
+   */
+  @Test
+  void quotesThatNeverCloseInACriterionAreReadOnce() {
+    var gap = "Linked issue #228: annual-plan subscribers are charged" + " 'a".repeat(130_000);
+
+    assertEquals(
+        List.of(gap),
+        assertTimeoutPreemptively(
+            Duration.ofSeconds(10),
+            () -> LinkedIssueCitations.screenGaps(List.of(gap), KOTLIN_228)));
   }
 }
