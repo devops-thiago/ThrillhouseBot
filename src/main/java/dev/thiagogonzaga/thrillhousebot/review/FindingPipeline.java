@@ -608,7 +608,8 @@ public class FindingPipeline {
             evidence.selectedLearnings(),
             lineResolver::getLineText,
             evidence.contextEvidence(),
-            ctx.instructions().content());
+            ctx.instructions().content(),
+            evidence.basis());
     // #1076: a path no file resolves leaves the description; the finding stays.
     return mentions.screen(
         FollowUpAnalyzer.withoutOpenThreadDuplicates(

@@ -46,6 +46,11 @@ cannot resolve its review threads.
   writes no file, commit or branch.
 - **A GitHub Enterprise setup guide**: `docs/GITHUB_ENTERPRISE.md` and a docs-site page say which
   GitHub Enterprise products work and what to set up on GitHub for an organization (#1488).
+- **A "Basis" block on each finding** (#1435, off by default): `REVIEW_SHOW_EVIDENCE=true` prints
+  under the description what the review established for it: the path-scoped rules covering the
+  file, the failing check the finding cites, the second pass's verdict, and the review learning
+  that demoted it. Each line is a name, path, id or fixed phrase, and is left out when empty.
+
 ### Fixed
 
 - **A clear or decline comment says what it matched** (#1463): the reply lists the open findings

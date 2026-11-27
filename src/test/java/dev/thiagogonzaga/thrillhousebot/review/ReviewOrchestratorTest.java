@@ -3026,6 +3026,78 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void showEvidencePutsTheBasisOnTheInlineComment() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = mock(ReviewSession.class);
+        session.id = 1L;
+        when(session.getRepository()).thenReturn("owner/repo");
+        when(session.getPrNumber()).thenReturn(42);
+        when(session.getPrTitle()).thenReturn("Test PR");
+        when(session.getCommitSha()).thenReturn("abcdefgh");
+        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+        mockedStatic
+            .when(
+                () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+
+        when(reviewConfig.showEvidence()).thenReturn(true);
+        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(checkRunClient.createCheckRun(
+                anyString(), anyString(), anyString(), anyString(), any()))
+            .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
+        doNothing()
+            .when(checkRunClient)
+            .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
+        when(prClient.getPullRequestFiles(
+                anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of(fileDiffWithLine("src/Main.java", 10)));
+        when(prClient.compareCommits(
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+        when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of());
+        when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
+            .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
+        when(aiReviewService.review(any(ReviewSession.class), any()))
+            .thenReturn(
+                new ReviewResponse(
+                    List.of(
+                        new ReviewResponse.Finding(
+                            "medium",
+                            "src/Main.java",
+                            10,
+                            "Style",
+                            "Improve naming\n\n" + FindingVerificationService.UNVERIFIED_NOTE,
+                            null,
+                            null)),
+                    List.of(),
+                    null));
+        orchestrator.review(
+            new ReviewOrchestrator.ReviewRequest(
+                "owner",
+                "repo",
+                42,
+                "abcdefgh",
+                "Test PR",
+                "",
+                "base1234567",
+                "main",
+                123L,
+                TestScopes.REPOSITORY_ID,
+                false));
+
+        var formatted = ArgumentCaptor.forClass(Finding.class);
+        verify(suggestionFormatter, atLeastOnce())
+            .formatReviewComment(formatted.capture(), anyBoolean(), anyInt());
+        assertTrue(
+            formatted
+                .getValue()
+                .description()
+                .contains("**Basis**\n- Verified: not screened by the second pass"));
+      }
+    }
+
+    @Test
     void shouldPostSummaryIssueCommentOnFirstReviewWithFindings() {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = mock(ReviewSession.class);

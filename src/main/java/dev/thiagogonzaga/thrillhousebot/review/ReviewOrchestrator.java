@@ -431,6 +431,7 @@ public class ReviewOrchestrator {
           floorOnRefreshedCi(
               session, reviewed, ciFailures, renderedCiFailures, ctx.reviewableFiles());
 
+      var ciCitations = CiFailureCitations.parse(renderedCiFailures, ctx.reviewableFiles());
       // #1074: the description findings the summary names must quote or paraphrase this text.
       var result =
           verdictBuilder.build(
@@ -439,7 +440,7 @@ public class ReviewOrchestrator {
               ciEvaluation,
               plan,
               PromptSections.prContext(req.prTitle(), req.prDescription()) + "\n" + linkedIssues,
-              CiFailureCitations.parse(renderedCiFailures, ctx.reviewableFiles()),
+              ciCitations,
               // #1148: the description alone, never the issue text, is read for citations.
               new VerdictBuilder.LinkedIssueContext(
                   linkedIssues,
@@ -488,7 +489,10 @@ public class ReviewOrchestrator {
               summaryPosted,
               previousFindings,
               followUpDelta,
-              priorReviews));
+              priorReviews,
+              config.review().showEvidence()
+                  ? finding -> evidence.basis().render(finding, ctx.pathInstructions(), ciCitations)
+                  : finding -> ""));
 
       resultSurfaced = true;
       final var doneReq = req;
