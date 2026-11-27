@@ -20,6 +20,7 @@ import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubGraphQLException;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
@@ -246,7 +247,7 @@ public class MaintainerReplyService {
         task.question(), botRoot.path(), FollowUpAnalyzer.threadLines(botRoot))) {
       ack = THREAD_CLEAR_OTHER_FINDING_ACK;
     } else {
-      ack = resolveThread(auth, task) ? threadClearedAck(botIdentity) : THREAD_CLEAR_PENDING_ACK;
+      ack = resolveAndAcknowledge(auth, task);
     }
     replyInThread(auth, task, ack);
     Log.infof(
@@ -276,18 +277,19 @@ public class MaintainerReplyService {
   }
 
   /**
-   * Resolves the task's review thread, reporting whether it is resolved afterwards (already
-   * resolved counts). Any failure reads as not resolved, so the acknowledgement never claims a
-   * close GitHub did not confirm.
+   * Resolves the task's review thread and returns the acknowledgement for the outcome (already
+   * resolved counts as resolved). Any failure reads as not resolved, so the acknowledgement never
+   * claims a close GitHub did not confirm; a missing App permission is named (#1471).
    */
-  private boolean resolveThread(String auth, ReplyTask task) {
+  private String resolveAndAcknowledge(String auth, ReplyTask task) {
     try {
       var thread =
           reviewThreadService
               .threadsByRootComment(auth, task.owner(), task.repo(), task.prNumber())
               .get(task.rootCommentId());
-      return thread != null
-          && (thread.resolved() || reviewThreadService.resolve(auth, thread.id()));
+      var closed =
+          thread != null && (thread.resolved() || reviewThreadService.resolve(auth, thread.id()));
+      return closed ? threadClearedAck(botIdentity) : THREAD_CLEAR_PENDING_ACK;
     } catch (RuntimeException e) {
       Log.warnf(
           e,
@@ -296,7 +298,9 @@ public class MaintainerReplyService {
           task.owner(),
           task.repo(),
           task.prNumber());
-      return false;
+      return e instanceof GitHubGraphQLException refusal && refusal.isNotPermitted()
+          ? THREAD_CLEAR_NOT_PERMITTED_ACK
+          : THREAD_CLEAR_PENDING_ACK;
     }
   }
 
@@ -330,6 +334,18 @@ public class MaintainerReplyService {
   static final String THREAD_CLEAR_PENDING_ACK =
       "This thread could not be resolved just now. The next review reads this reply and closes the"
           + " finding the thread belongs to.";
+
+  /**
+   * Acknowledgement when GitHub refused the resolve because the App lacks the permission. It keeps
+   * the thread and the finding apart: the review applies the directive to the finding's status
+   * without resolving anything on GitHub, so only the thread waits for the permission.
+   */
+  static final String THREAD_CLEAR_NOT_PERMITTED_ACK =
+      "This thread stays open: GitHub does not let this App resolve review threads. Whoever runs"
+          + " the bot needs to grant it "
+          + ReviewThreadService.RESOLVE_PERMISSION
+          + " and accept the change on the installation. The finding does not wait for that: the"
+          + " next review reads this reply and stops tracking the finding as open.";
 
   /**
    * Acknowledgement posted for an {@code @thrillhousebot resolved} comment that names at least one

@@ -22,10 +22,12 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubGraphQLException;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
@@ -245,6 +247,43 @@ class MaintainerReplyServiceTest {
 
     assertEquals(MaintainerReplyService.THREAD_CLEAR_PENDING_ACK, threadAck());
     verifyNoInteractions(replyAssistant);
+  }
+
+  // #1471: a missing App permission is permanent, so the ack names it instead of "just now".
+  @Test
+  void aRefusalForAMissingPermissionGetsTheAckThatNamesIt() {
+    authorize();
+    botFindingThread();
+    when(reviewThreadService.threadsByRootComment(AUTH, "owner", "repo", 42))
+        .thenReturn(Map.of(99L, new ReviewThreadService.ThreadRef("T99", false)));
+    when(reviewThreadService.resolve(AUTH, "T99"))
+        .thenThrow(refusal("Resource not accessible by integration"));
+
+    service.handle(threadReply("@thrillhousebot resolved", "OWNER"));
+
+    assertEquals(MaintainerReplyService.THREAD_CLEAR_NOT_PERMITTED_ACK, threadAck());
+    assertTrue(threadAck().contains("`Contents: Read & write`"));
+    verifyNoInteractions(replyAssistant);
+  }
+
+  @Test
+  void anyOtherRefusalGetsTheAckThatClaimsNoClose() {
+    authorize();
+    botFindingThread();
+    when(reviewThreadService.threadsByRootComment(AUTH, "owner", "repo", 42))
+        .thenReturn(Map.of(99L, new ReviewThreadService.ThreadRef("T99", false)));
+    when(reviewThreadService.resolve(AUTH, "T99"))
+        .thenThrow(refusal("Could not resolve to a node"));
+
+    service.handle(threadReply("@thrillhousebot resolved", "OWNER"));
+
+    assertEquals(MaintainerReplyService.THREAD_CLEAR_PENDING_ACK, threadAck());
+  }
+
+  private static GitHubGraphQLException refusal(String message) {
+    var errors = JsonNodeFactory.instance.arrayNode();
+    errors.addObject().put("message", message);
+    return GitHubGraphQLException.from(errors);
   }
 
   @Test

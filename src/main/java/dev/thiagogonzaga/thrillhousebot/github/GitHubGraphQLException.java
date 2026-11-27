@@ -40,6 +40,10 @@ public final class GitHubGraphQLException extends RuntimeException {
   private static final Pattern THROTTLE_WORDING =
       Pattern.compile("(?i)secondary rate limit|rate limit exceeded|submitted too quickly");
 
+  /** GitHub's wording for an operation the App's permissions do not cover. */
+  private static final Pattern NOT_PERMITTED_WORDING =
+      Pattern.compile("(?i)resource not accessible by integration");
+
   private static final int TOO_MANY_REQUESTS = 429;
 
   private final String refusal;
@@ -82,6 +86,11 @@ public final class GitHubGraphQLException extends RuntimeException {
   /** Whether GitHub said it was rate limiting the call rather than refusing it. */
   public boolean isThrottled() {
     return throttled;
+  }
+
+  /** Whether GitHub refused because the App lacks a permission, which no retry can change. */
+  public boolean isNotPermitted() {
+    return NOT_PERMITTED_WORDING.matcher(refusal).find();
   }
 
   /**

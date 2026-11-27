@@ -20,6 +20,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
@@ -53,6 +54,8 @@ import java.util.concurrent.Executors;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.ArgumentMatchers;
 import org.mockito.Mock;
@@ -8156,6 +8159,34 @@ class ReviewOrchestratorTest {
       verify(reviewThreadService).resolve(AUTH, "T4");
       verify(reviewThreadService, never()).resolve(AUTH, "T2");
       verify(reviewThreadService, never()).resolve(AUTH, "T3");
+    }
+
+    // #1471: resolve raises GitHub's refusal, and one refused thread must not cost the rest.
+    @ParameterizedTest
+    @ValueSource(
+        strings = {"Resource not accessible by integration", "Could not resolve to a node"})
+    void shouldKeepResolvingAfterGitHubRefusesOneThread(String message) {
+      var statuses =
+          List.of(
+              new ReviewResult.PreviousFindingStatus(1, "resolved", "fixed"),
+              new ReviewResult.PreviousFindingStatus(2, "resolved", "fixed"));
+      when(followUpAnalyzer.matchFindingThreads(
+              ArgumentMatchers.<List<ReviewResponse.Finding>>any(), any(), any()))
+          .thenReturn(Map.of(1, 100L, 2, 200L));
+      when(reviewThreadService.threadsByRootComment(AUTH, "owner", "repo", 5))
+          .thenReturn(
+              Map.of(
+                  100L, new ReviewThreadService.ThreadRef("T1", false),
+                  200L, new ReviewThreadService.ThreadRef("T2", false)));
+      var errors = JsonNodeFactory.instance.arrayNode();
+      errors.addObject().put("message", message);
+      when(reviewThreadService.resolve(AUTH, "T1")).thenThrow(GitHubGraphQLException.from(errors));
+      when(reviewThreadService.resolve(AUTH, "T2")).thenReturn(true);
+
+      reviewPublisher.resolveAddressedThreads(
+          AUTH, request(), List.of(), List.of(rootComment()), statuses);
+
+      verify(reviewThreadService).resolve(AUTH, "T2");
     }
 
     /**

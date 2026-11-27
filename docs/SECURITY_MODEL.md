@@ -79,10 +79,14 @@ Attackers considered:
 
 ### Least privilege
 
-The App manifest (`manifest.json`) asks for `contents: read`, `actions: read`,
+The App manifest (`manifest.json`) asks for `contents: write`, `actions: read`,
 `statuses: read`, `checks: write`, `pull_requests: write` and `issues: write`.
 Issues write is needed because pull request conversation comments, labels and
-reactions go through the Issues API; linked issues are only read. Every
+reactions go through the Issues API; linked issues are only read.
+Contents write is needed only because GitHub refuses `resolveReviewThread`
+without it. The bot writes no file, commit or branch, but an installation token
+carries the permission, so a leaked token or private key could; an operator who
+sets Contents to read gives up thread resolution and nothing else. Every
 workflow declares its token permissions, read-only unless a workflow or job
 needs a write scope, such as the image push or the Dependency Review comment.
 The container images run as an unprivileged user (UID 1001 on UBI9-micro,

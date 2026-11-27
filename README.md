@@ -280,11 +280,18 @@ Create the GitHub App before starting the bot; its credentials go in `.env`.
 |---|---|
 | Webhook URL | `https://<your-host>/api/webhook` |
 | Webhook secret | Random string |
-| Repository permissions | Pull requests: R/W, Checks: R/W, Contents: Read, Issues: R/W, Actions: Read, Commit statuses: Read |
+| Repository permissions | Pull requests: R/W, Checks: R/W, Contents: R/W, Issues: R/W, Actions: Read, Commit statuses: Read |
 | Organization permissions | Members: Read (shows installation-wide dashboard counters to organization members) |
 | Subscribe to events | Pull request, Issue comment, Pull request review comment, Check suite, Status, Repository |
 | Identifying and authorizing users | Enabled (for dashboard login) |
 | Callback URL | `https://<your-host>/api/auth/callback` |
+
+Contents R/W is there for one operation: GitHub refuses to resolve a review
+thread without it, although its documentation does not say so. The bot writes no
+file, commit or branch. An app registered with Contents: Read keeps reviewing,
+but cannot resolve its own threads; change it under **Settings → Developer
+settings → GitHub Apps → your app → Permissions & events → Repository
+permissions**, then accept the new permission on each installation.
 
 ## Configuration
 
