@@ -40,6 +40,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.WeakHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -213,6 +214,26 @@ public class SecurityScan {
   private static final Pattern CONTENT_MARKER =
       Pattern.compile("<!-- thrillhousebot:scan-content=([0-9a-f]+) -->");
 
+  /** The marker where the scan writes it: alone, at the very end of a finding's description. */
+  private static final Pattern TRAILING_CONTENT_MARKER =
+      Pattern.compile("\\n\\n<!-- thrillhousebot:scan-content=[0-9a-f]+ -->$");
+
+  /**
+   * A finding's description as it is posted: prose ({@link MarkdownSafe#prose}), with the hidden
+   * content marker a scan finding ends with kept as the comment it is. Only that marker, in that
+   * place, on a finding the scan raised ({@link #raisedByScan}): any other comment in the text, a
+   * marker of another kind included, is escaped with the rest.
+   */
+  static String postedDescription(String title, String description) {
+    if (raisedByScan(title, description)) {
+      var marker = TRAILING_CONTENT_MARKER.matcher(description);
+      if (marker.find()) {
+        return MarkdownSafe.prose(description.substring(0, marker.start())) + marker.group();
+      }
+    }
+    return MarkdownSafe.prose(description);
+  }
+
   /** Hex digits of the content fingerprint kept: enough to tell two values apart, no more. */
   private static final int FINGERPRINT_HEX = 8;
 
@@ -240,6 +261,10 @@ public class SecurityScan {
 
   /** The secret the content fingerprint is keyed from ({@link #fingerprintKey}). */
   private final String serverSecret;
+
+  /** What {@link #scanOnce} has read, held weakly by the file list it was read from. */
+  private final Map<List<GitHubPullRequestClient.FileDiff>, Result> scans =
+      Collections.synchronizedMap(new WeakHashMap<>());
 
   @Inject
   public SecurityScan(ThrillhouseConfig config) {
@@ -324,13 +349,74 @@ public class SecurityScan {
    * @param detections the scan's findings, in file then line order
    * @param redactions the matched secret values to scrub out of every other text, longest first
    * @param scannedFiles the files the scan read, so a finding it no longer sees there can be closed
+   * @param waivers the lines an allow marker kept out of the findings, each once however many rules
+   *     matched it
    */
-  record Result(List<Detection> detections, List<Redaction> redactions, List<String> scannedFiles) {
+  record Result(
+      List<Detection> detections,
+      List<Redaction> redactions,
+      List<String> scannedFiles,
+      List<Waiver> waivers) {
     Result {
       detections = List.copyOf(detections);
       redactions = List.copyOf(redactions);
       scannedFiles = List.copyOf(scannedFiles);
+      waivers = waivers.stream().distinct().toList();
     }
+
+    /** A pass in which no allow marker kept a match out. */
+    Result(List<Detection> detections, List<Redaction> redactions, List<String> scannedFiles) {
+      this(detections, redactions, scannedFiles, List.of());
+    }
+  }
+
+  /**
+   * A line a rule matched and an allow marker kept out of the findings. It holds where the match
+   * was and which marker covered it, never the line's text: for a secret, that text is the secret.
+   */
+  record Waiver(String file, int line, String marker) {}
+
+  /** Waived lines the scope note names before rolling the rest up as a count. */
+  static final int WAIVERS_NAMED_CAP = 30;
+
+  /**
+   * The summary's scope note for the lines an allow marker exempted (empty when there are none, or
+   * the scan is off). The marker is a comment anyone who can push to the pull request can write, so
+   * a match it silences is listed where a maintainer reads the review, in place of leaving no
+   * trace. The line's content is never shown.
+   */
+  String formatWaivers(List<GitHubPullRequestClient.FileDiff> files) {
+    if (!enabled() || files == null || files.isEmpty()) {
+      return "";
+    }
+    var waivers = scanOnce(files).waivers();
+    if (waivers.isEmpty()) {
+      return "";
+    }
+    var named = waivers.subList(0, Math.min(WAIVERS_NAMED_CAP, waivers.size()));
+    var sb = new StringBuilder();
+    sb.append(waivers.size())
+        .append(waivers.size() == 1 ? " line" : " lines")
+        .append(" the security scan matched ")
+        .append(waivers.size() == 1 ? "was" : "were")
+        .append(" not reported because of an allow marker; check that each is a deliberate")
+        .append(" exemption (");
+    for (int i = 0; i < named.size(); i++) {
+      var waiver = named.get(i);
+      sb.append(i == 0 ? "" : ", ")
+          .append('`')
+          .append(MarkdownSafe.inlineCode(waiver.file()))
+          .append(':')
+          .append(waiver.line())
+          .append("` by `")
+          .append(waiver.marker())
+          .append('`');
+    }
+    int more = waivers.size() - named.size();
+    if (more > 0) {
+      sb.append(", and ").append(more).append(" more");
+    }
+    return sb.append(")\n").toString();
   }
 
   /**
@@ -347,7 +433,7 @@ public class SecurityScan {
     }
     return merge(
         response,
-        scan(ctx.reviewableFiles()),
+        scanOnce(ctx.reviewableFiles()),
         ctx.previousFindingsList(),
         FollowUpAnalyzer.settledPreviousIds(ctx.priorAiResponses()),
         FollowUpAnalyzer.openEarlierRoundFindings(
@@ -572,11 +658,28 @@ public class SecurityScan {
         : Scrubber.of(result.redactions());
   }
 
+  /**
+   * {@link #scan} of {@code files}, read once per review: the merge and the summary's scope note
+   * both need it, and both are handed the same list. The result is kept for as long as that list
+   * is, and a list with the same files gives the same result.
+   */
+  Result scanOnce(List<GitHubPullRequestClient.FileDiff> files) {
+    var known = scans.get(files);
+    if (known != null) {
+      return known;
+    }
+    // Read outside the map's lock, so one review's scan never waits on another's.
+    var result = scan(files);
+    scans.put(files, result);
+    return result;
+  }
+
   /** Reads every file the review covers, minus the skipped globs and files with no patch text. */
   Result scan(List<GitHubPullRequestClient.FileDiff> files) {
     var detections = new ArrayList<Detection>();
     var redactions = new ArrayList<Redaction>();
     var scanned = new ArrayList<String>();
+    var waivers = new ArrayList<Waiver>();
     for (var file : files) {
       if (file.patch() == null || file.patch().isBlank() || skippedFiles.matches(file.filename())) {
         continue;
@@ -584,50 +687,76 @@ public class SecurityScan {
       scanned.add(file.filename());
       var patch = PatchLines.parse(file.patch());
       if (secretsEnabled) {
-        scanSecrets(file.filename(), patch, detections, redactions);
+        scanSecrets(file.filename(), patch, detections, redactions, waivers);
       }
       if (iacEnabled) {
-        scanIac(file, patch, detections);
+        scanIac(file, patch, detections, waivers);
       }
     }
     redactions.sort(Comparator.comparingInt((Redaction r) -> r.literal().length()).reversed());
-    return new Result(detections, redactions, scanned);
+    return new Result(detections, redactions, scanned, waivers);
   }
 
   private void scanSecrets(
-      String filename, PatchLines patch, List<Detection> detections, List<Redaction> redactions) {
+      String filename,
+      PatchLines patch,
+      List<Detection> detections,
+      List<Redaction> redactions,
+      List<Waiver> waivers) {
     var lines = patch.lines();
     int first = detections.size();
     for (int i = 0; i < lines.size(); i++) {
-      var line = lines.get(i);
-      if (!line.added() || allowed(lines, i, ALLOW_SECRET_MARKER)) {
+      var hits = lines.get(i).added() ? secretHits(lines, i) : List.<SecretScanner.Hit>of();
+      if (hits.isEmpty()) {
         continue;
       }
-      // The body must follow in the same hunk: the next patch line of another hunk is not what
-      // follows the header in the file.
-      var next =
-          i + 1 < lines.size() && lines.get(i + 1).hunk() == line.hunk()
-              ? lines.get(i + 1).text()
-              : null;
-      for (var hit : SecretScanner.scan(line.text(), next, entropyThreshold)) {
-        var redacted = SecretScanner.redact(hit);
-        var flagged = flaggedContent(lines, i, hit.rule());
-        detections.add(
-            new Detection(
-                hit.rule(),
-                secretFinding(
-                    filename, line.number(), hit, contentFingerprint(hit.rule(), flagged)),
-                legacyContentFingerprint(hit.rule(), flagged),
-                identifierOf(hit),
-                Set.of()));
-        if (hit.rule() == SecurityRule.PRIVATE_KEY) {
-          addPemMaterial(lines, i, redactions);
-        } else {
-          redactions.add(new Redaction(hit.literal(), "[redacted: " + redacted + "]"));
+      if (allowed(lines, i, ALLOW_SECRET_MARKER)) {
+        // Recorded only when a rule matched: a marker on a line that holds no secret waives
+        // nothing.
+        waivers.add(new Waiver(filename, lines.get(i).number(), ALLOW_SECRET_MARKER));
+      } else {
+        for (var hit : hits) {
+          detect(filename, lines, i, hit, detections, redactions);
         }
       }
     }
     withAliases(lines, detections.subList(first, detections.size()));
+  }
+
+  /** What the secret rules match on the added line at {@code index}. */
+  private List<SecretScanner.Hit> secretHits(List<PatchLines.Line> lines, int index) {
+    var line = lines.get(index);
+    // The body must follow in the same hunk: the next patch line of another hunk is not what
+    // follows the header in the file.
+    var next =
+        index + 1 < lines.size() && lines.get(index + 1).hunk() == line.hunk()
+            ? lines.get(index + 1).text()
+            : null;
+    return SecretScanner.scan(line.text(), next, entropyThreshold);
+  }
+
+  /** Records one match as a detection, and what of it must never be repeated. */
+  private void detect(
+      String filename,
+      List<PatchLines.Line> lines,
+      int index,
+      SecretScanner.Hit hit,
+      List<Detection> detections,
+      List<Redaction> redactions) {
+    var flagged = flaggedContent(lines, index, hit.rule());
+    detections.add(
+        new Detection(
+            hit.rule(),
+            secretFinding(
+                filename, lines.get(index).number(), hit, contentFingerprint(hit.rule(), flagged)),
+            legacyContentFingerprint(hit.rule(), flagged),
+            identifierOf(hit),
+            Set.of()));
+    if (hit.rule() == SecurityRule.PRIVATE_KEY) {
+      addPemMaterial(lines, index, redactions);
+    } else {
+      redactions.add(new Redaction(hit.literal(), "[redacted: " + SecretScanner.redact(hit) + "]"));
+    }
   }
 
   /**
@@ -670,10 +799,15 @@ public class SecurityScan {
   }
 
   private static void scanIac(
-      GitHubPullRequestClient.FileDiff file, PatchLines patch, List<Detection> detections) {
+      GitHubPullRequestClient.FileDiff file,
+      PatchLines patch,
+      List<Detection> detections,
+      List<Waiver> waivers) {
     var lines = patch.lines();
     for (var hit : IacScanner.scan(file.filename(), patch, "added".equals(file.status()))) {
-      if (!allowed(lines, hit.index(), ALLOW_IAC_MARKER)) {
+      if (allowed(lines, hit.index(), ALLOW_IAC_MARKER)) {
+        waivers.add(new Waiver(file.filename(), lines.get(hit.index()).number(), ALLOW_IAC_MARKER));
+      } else {
         detections.add(new Detection(hit.rule(), iacFinding(file.filename(), hit)));
       }
     }

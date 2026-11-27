@@ -239,7 +239,7 @@ public class CommentCommandService {
     executor.execute(
         () -> {
           try {
-            postComment(authClient.getAuthHeader(ctx.installationId()), ctx, notice);
+            postComment(authClient.getAuthHeader(ctx.installationId(), ctx.repo()), ctx, notice);
           } catch (RuntimeException e) {
             log.warn(
                 "Failed to post {} notice on {}/{} #{}",
@@ -255,7 +255,7 @@ public class CommentCommandService {
   /** Visible for tests: performs the command effect on the calling thread. */
   void execute(CommandContext ctx) {
     try {
-      var auth = authClient.getAuthHeader(ctx.installationId());
+      var auth = authClient.getAuthHeader(ctx.installationId(), ctx.repo());
       switch (ctx.command()) {
         case HELP -> postComment(auth, ctx, HELP_TEXT);
         case SUMMARY -> handleSummary(ctx, auth);

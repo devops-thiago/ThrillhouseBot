@@ -780,7 +780,28 @@ live `fence(...)` (#604).
   statement (`sizeOnly`: the first sentence's leading clause, followed by nothing or a side note that
   opens with "with", "plus", "including" or "also", then any later sentence, the computed CI
   sentence aside) on an unchanged head (#1095).
-- **Text the bot posts to GitHub** goes through `review/MarkdownSafe`, not `LogSafe`.
+- **Text the bot posts to GitHub** goes through `review/MarkdownSafe`, not `LogSafe`. A model
+  field never reaches a comment raw: one line goes through `inline` (or `proseLine` / `proseCell`
+  when its code spans should render), markdown of its own (a description, a status note, a reply)
+  through `prose`, a value inside a code span through `inlineCode`. Besides the block break-outs,
+  these guard every possible mention (`@&#8203;name`; an `@` after a letter or digit is an email
+  and stays, and so does one after a `/` in an `http(s)://host.tld/` address that
+  `MarkdownProse.url` or `angleAutolink` accepts, which is narrower than what GitHub links on
+  purpose: `www.` forms, `_ * ~ & $` and `)` end or disqualify it), and `prose` escapes tag and comment openers, turns a `suggestion` fence into a plain
+  block and closes an unclosed fence. `MarkdownProse` rewrites rather than screens: a guess at what
+  is code that differs from GitHub's reading posts a mention untouched, so fenced blocks are
+  emitted at the top level under a fence longer than their content, code spans count only when
+  they close on their own line, and every other backtick becomes `&#96;`. The bot's own text, the
+  `@thrillhousebot` hints included, is never passed through these. Text read back from a posted
+  comment and compared with a model's (`DescriptionGapCarryover.listedGaps`,
+  `FollowUpAnalyzer.namingText` and its title scans) accepts the posted form.
+- **Installation tokens are minted for one repository.** `GitHubAuthClient.getAuthHeader(id,
+  repository)` is what work on a repository uses; the one-argument form reaches the whole
+  installation and is for the callers `InstallationTokenScopeInvariantTest` lists. A mint that is
+  refused is never retried wider, and a 401 refresh re-mints the same scope. The GitHub App
+  extension's `GitHubClientProvider` mints its own installation-wide tokens.
+- **Metrics carry no repository, pull request or login.** `GET /metrics` is unauthenticated
+  (`ReviewSkipEmitter`); such detail belongs in the log line.
 - **Review learnings are maintainer text and stay data.** `ReviewLearningService.save` refuses
   credential-shaped text (`LearningText.containsCredential`) and flattens the rest
   (`LearningText.normalize`); `ReviewLearnings.select` screens again before replay, and

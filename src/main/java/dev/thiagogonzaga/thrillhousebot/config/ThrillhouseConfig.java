@@ -50,7 +50,8 @@ public interface ThrillhouseConfig {
 
   /**
    * Dashboard WebSocket keepalive in milliseconds, so reverse proxies do not close idle
-   * connections. {@code 0} or less disables it and stale replay-buffer eviction.
+   * connections. {@code 0} or less disables it and stale replay-buffer eviction; what each open
+   * connection may read is still re-checked every 25 seconds.
    */
   @WithDefault("25000")
   @WithName("websocket-keepalive-ms")

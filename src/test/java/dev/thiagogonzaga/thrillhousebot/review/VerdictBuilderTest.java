@@ -2012,6 +2012,41 @@ class VerdictBuilderTest {
   }
 
   /**
+   * A line the security scan matched and an allow marker exempted is named in the review-scope
+   * note, so the exemption is visible where the review is read. The line's content is not shown.
+   */
+  @Test
+  void linesAnAllowMarkerExemptedFromTheSecurityScanAreDisclosedInTheReviewScopeNote() {
+    var key = new FakeCredentials(4242).googleApiKey();
+    var patch = "@@ -0,0 +1,2 @@\n+A=1\n+KEY=" + key + " # thrillhousebot:allow-secret\n";
+    var ctx =
+        contextWithLineCapOmissions(
+            0, List.of(new FileDiff("deploy/prod.env", "added", 2, 0, 2, patch)));
+    var scanning =
+        new VerdictBuilder(
+            new PrSummaryGenerator(false),
+            followUpAnalyzer,
+            BotIdentity.from(List.of("thrillhousebot[bot]")),
+            CiGatingMode.STRICT,
+            BlockingStrictness.BALANCED,
+            new SecurityScan(true, true, 3.5, List.of()));
+
+    var result = scanning.build(ctx, CLEAN_RESPONSE, CI_CLEAR, FULL_COVERAGE);
+
+    assertTrue(
+        result
+            .summaryMarkdown()
+            .startsWith(
+                PrSummaryGenerator.SUMMARY_HEADING
+                    + "\n\n> **AI review scope:** 1 line the security scan matched was not"
+                    + " reported because of an allow marker; check that each is a deliberate"
+                    + " exemption (`deploy/prod.env:2` by `thrillhousebot:allow-secret`)\n\n"),
+        result.summaryMarkdown());
+    assertFalse(result.summaryMarkdown().contains(key.substring(0, 8)), result.summaryMarkdown());
+    assertEquals(ReviewState.APPROVE, result.reviewState(), "a disclosed waiver holds nothing");
+  }
+
+  /**
    * #806 — findings carried from a run that stood down for HEAD_MOVED are disclosed in the same
    * review-scope blockquote, so a quiet replacement after a loud discard reads as "carried N and
    * cleared them", never as a clean pass over a clean head.

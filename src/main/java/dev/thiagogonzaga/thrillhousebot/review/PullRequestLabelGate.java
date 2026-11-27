@@ -152,7 +152,7 @@ public class PullRequestLabelGate {
       long installationId, String owner, String repo, int prNumber) {
     String auth;
     try {
-      auth = authClient.getAuthHeader(installationId);
+      auth = authClient.getAuthHeader(installationId, repo);
     } catch (RuntimeException e) {
       Log.warnf(e, "Could not authenticate to read the labels on %s/%s #%d", owner, repo, prNumber);
       return Optional.empty();

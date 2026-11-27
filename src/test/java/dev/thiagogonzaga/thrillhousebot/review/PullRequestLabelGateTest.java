@@ -85,7 +85,7 @@ class PullRequestLabelGateTest {
 
   @Test
   void readsEveryPageOfLabelsAsTheInstallation() {
-    when(authClient.getAuthHeader(123L)).thenReturn(AUTH);
+    when(authClient.getAuthHeader(123L, "repo")).thenReturn(AUTH);
     page(1, IntStream.range(0, 100).mapToObj(i -> label("l" + i)).toList());
     page(2, List.of(label("dependencies")));
 
@@ -129,7 +129,8 @@ class PullRequestLabelGateTest {
 
   @Test
   void aFailedTokenMakesTheSetUnreadableWithoutAnyRead() {
-    when(authClient.getAuthHeader(anyLong())).thenThrow(new RuntimeException("token down"));
+    when(authClient.getAuthHeader(anyLong(), anyString()))
+        .thenThrow(new RuntimeException("token down"));
 
     assertTrue(gate.currentLabels(123L, "owner", "repo", 42).isEmpty());
     verifyNoInteractions(labelClient);

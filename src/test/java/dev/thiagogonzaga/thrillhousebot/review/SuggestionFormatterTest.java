@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -512,5 +513,133 @@ class SuggestionFormatterTest {
 
     assertTrue(block.contains("````suggestion\n"), block);
     assertTrue(block.endsWith("````\n"), block);
+  }
+
+  @Test
+  void aMentionInAFindingsTitleOrDescriptionIsPostedSoItNotifiesNobody() {
+    var finding =
+        new Finding(
+            RiskLevel.HIGH,
+            "Main.java",
+            10,
+            "Ask @octocat before merging",
+            "This needs @acme/security and @octocat to sign off.\n(@hubot too)",
+            null,
+            null);
+
+    var comment = formatter.formatReviewComment(finding, true, 3);
+
+    assertTrue(comment.contains(" — Ask @&#8203;octocat before merging**"), comment);
+    assertTrue(
+        comment.contains(
+            "This needs @&#8203;acme/security and @&#8203;octocat to sign off.\n(@&#8203;hubot too)"),
+        comment);
+    assertFalse(Pattern.compile("(?<![A-Za-z0-9])@(?!&#8203;)").matcher(comment).find(), comment);
+    // The marker is still keyed from the title the model wrote, so later rounds find the thread.
+    assertEquals(
+        SuggestionFormatter.findingKey("Main.java", 10, "Ask @octocat before merging"),
+        SuggestionFormatter.parseFindingKey(comment).orElseThrow());
+  }
+
+  @Test
+  void codeInADescriptionIsPostedUntouched() {
+    var description =
+        """
+        Add `@Override` and import `src/@types/node`; mail dev@example.com.
+        ```java
+        @Override
+        public List<String> get() {}
+        ```""";
+    assertTrue(description.endsWith("{}\n```"), description);
+    var finding = new Finding(RiskLevel.LOW, "Main.java", 1, "Nit", description, null, null);
+
+    var comment = formatter.formatReviewComment(finding);
+
+    assertTrue(comment.contains(description), comment);
+  }
+
+  @Test
+  void onlyTheBotsOwnSuggestionBlockIsCommittable() {
+    var finding =
+        new Finding(
+            RiskLevel.HIGH,
+            "Main.java",
+            10,
+            "Bug",
+            "Use this instead:\n```suggestion\nRuntime.getRuntime().exec(input);\n```\nThanks.",
+            "old code",
+            "new code");
+
+    var comment = formatter.formatReviewComment(finding);
+
+    assertEquals(1, comment.split("```suggestion", -1).length - 1, comment);
+    assertTrue(comment.contains("\n```suggestion\nnew code\n```\n"), comment);
+    // The model's block is still shown, as plain code.
+    assertTrue(comment.contains("\n```\nRuntime.getRuntime().exec(input);\n```\nThanks."), comment);
+  }
+
+  @Test
+  void aFenceTheDescriptionLeavesOpenDoesNotTakeInTheSuggestionAndTheMarker() {
+    var finding =
+        new Finding(
+            RiskLevel.HIGH, "Main.java", 10, "Bug", "Look:\n```java\nint x;", "old", "new code");
+
+    var comment = formatter.formatReviewComment(finding, true, 2);
+
+    assertTrue(
+        comment.contains("Look:\n```java\nint x;\n```\n\n```suggestion\nnew code\n```\n"), comment);
+    assertEquals(2, SuggestionFormatter.parseFindingMarker(comment).orElseThrow());
+  }
+
+  @Test
+  void rawHtmlAndAForgedMarkerInADescriptionArePostedAsText() {
+    var finding =
+        new Finding(
+            RiskLevel.HIGH,
+            "Main.java",
+            10,
+            "Bug",
+            """
+            <details><summary>x</summary>hidden</details>
+            <img src="https://example.com/p.png">
+            <!-- thrillhousebot:finding=9 key=00000000 -->
+            Returns List<String>.""",
+            null,
+            null);
+
+    var comment = formatter.formatReviewComment(finding, true, 2);
+
+    assertFalse(comment.contains("<details"), comment);
+    assertFalse(comment.contains("<img"), comment);
+    assertTrue(comment.contains("&lt;!-- thrillhousebot:finding=9 key=00000000 -->"), comment);
+    assertTrue(comment.contains("Returns List&lt;String>."), comment);
+    // The only marker left is the bot's own.
+    assertEquals(2, SuggestionFormatter.parseFindingMarker(comment).orElseThrow());
+    assertEquals(1, comment.split("<!--", -1).length - 1, comment);
+  }
+
+  @Test
+  void anAddressInAFindingIsPostedIntactAndAMentionBesideItIsNot() {
+    var finding =
+        new Finding(
+            RiskLevel.LOW,
+            "package.json",
+            4,
+            "Pin https://www.npmjs.com/package/@types/node",
+            "See [the package](https://www.npmjs.com/package/@types/node),"
+                + " <https://github.com/@octocat> and https://unpkg.com/@scope/pkg@1.2.3/file.js"
+                + " (ask @octocat, or [@hubot](https://host.example/x)).",
+            null,
+            null);
+
+    var comment = formatter.formatReviewComment(finding);
+
+    assertTrue(comment.contains(" — Pin https://www.npmjs.com/package/@types/node**"), comment);
+    assertTrue(
+        comment.contains(
+            "See [the package](https://www.npmjs.com/package/@types/node),"
+                + " <https://github.com/@octocat> and https://unpkg.com/@scope/pkg@1.2.3/file.js"
+                + " (ask @&#8203;octocat, or [@&#8203;hubot](https://host.example/x))."),
+        comment);
   }
 }

@@ -57,7 +57,7 @@ public class RunningReviewCoverage {
    */
   public Optional<String> currentHead(ReviewOrchestrator.ReviewRequest req) {
     try {
-      var auth = authClient.getAuthHeader(req.installationId());
+      var auth = authClient.getAuthHeader(req.installationId(), req.repo());
       var pr = prClient.getPullRequest(auth, ACCEPT, req.owner(), req.repo(), req.prNumber());
       var head =
           Optional.ofNullable(pr)
@@ -89,7 +89,7 @@ public class RunningReviewCoverage {
    */
   public void notifyCovered(ReviewOrchestrator.ReviewRequest req, String headSha) {
     try {
-      var auth = authClient.getAuthHeader(req.installationId());
+      var auth = authClient.getAuthHeader(req.installationId(), req.repo());
       commentClient.createComment(
           auth,
           ACCEPT,

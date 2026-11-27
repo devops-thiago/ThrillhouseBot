@@ -97,6 +97,40 @@ class GitHubAppApiTest {
   }
 
   @Test
+  void aRepositoryTokenIsAskedForThatRepositoryAlone() {
+    stub.on("GET /app/installations/7", json(200, INSTALLATION))
+        .on("POST /app/installations/7/access_tokens", json(201, TOKEN));
+
+    assertEquals("ghs_minted", appApi.createRepositoryToken(7, "widgets"));
+
+    assertEquals(
+        List.of("GET /app", "GET /app/installations/7", "POST /app/installations/7/access_tokens"),
+        requests());
+    assertEquals("{\"repositories\":[\"widgets\"]}", stub.received().get(2).body());
+  }
+
+  @Test
+  void aRepositoryTokenTheInstallationDoesNotCoverIsRefusedAndNothingWiderIsAsked() {
+    stub.on("GET /app/installations/7", json(200, INSTALLATION))
+        .on("POST /app/installations/7/access_tokens", json(422, "{\"message\":\"nope\"}"));
+
+    assertThrows(RuntimeException.class, () -> appApi.createRepositoryToken(7, "elsewhere"));
+
+    assertEquals(1, requests().stream().filter(r -> r.startsWith("POST ")).count());
+  }
+
+  @Test
+  void anUnreadableRepositoryTokenAnswerKeepsTheAnswerOutOfTheException() {
+    stub.on("GET /app/installations/7", json(200, INSTALLATION))
+        .on("POST /app/installations/7/access_tokens", json(201, "{\"token\": ghs_secret"));
+
+    var failure =
+        assertThrows(ProcessingException.class, () -> appApi.createRepositoryToken(7, "widgets"));
+
+    assertFalse(String.valueOf(failure.getMessage()).contains("ghs_secret"));
+  }
+
+  @Test
   void aGoneInstallationIsTheRestClientsNotFound() {
     var refused =
         assertThrows(ClientWebApplicationException.class, () -> appApi.createInstallationToken(7));
