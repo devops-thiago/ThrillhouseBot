@@ -192,6 +192,9 @@ cannot resolve its review threads.
   previous commit could stay on code the bot had not read. The bot now keeps the latest pushed head
   and reviews it when the window closes. Only a reopen or a repeated ready-for-review of the commit
   just reviewed is skipped. The waiting review is held in memory, so a restart loses it.
+- **A failed read of a pull request's reviews is logged as a warning**: it was a debug line that
+  read as a normal first review. Reaching the limit of 1,000 reviews read per pull request is logged
+  too.
 
 ### Security
 
