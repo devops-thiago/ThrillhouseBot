@@ -838,6 +838,10 @@ public class ReviewPublisher {
    * Every such approval is dismissed, newest first, not only the latest, so an older one cannot
    * count again once the newest is gone.
    *
+   * <p>The approvals come from the run's one listing of the pull request's reviews, which {@link
+   * GitHubReviewClient#listReviews} pages through (up to 1,000 reviews). A listing that failed
+   * reaches here empty, so that round dismisses nothing; the next one reads the reviews again.
+   *
    * <p>Best-effort: a dismissal GitHub refuses (on a protected branch its API reference asks for a
    * repository administrator or a place on the rule's list of who may dismiss reviews) or that
    * fails is logged and the round is published as usual. The walk stops at a refusal (a 4xx

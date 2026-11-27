@@ -45,8 +45,9 @@ security limits. To report a vulnerability, see
   Known limitations in the README). A restart signs dashboard users out.
 - The bot's approval is not withdrawn at the moment commits are pushed. It is
   dismissed when the review of the new head finishes without approving, and it
-  stays if that review never runs or fails, or if a branch protection rule
-  stops the App from dismissing reviews (the bot logs a warning). If the bot's
+  stays if that review never runs or fails, if the bot could not read the pull
+  request's reviews, or if a branch protection rule stops the App from
+  dismissing reviews (the bot logs a warning). If the bot's
   approval counts towards a required review, turn on "Dismiss stale pull
   request approvals when new commits are pushed" for the branch.
 - Only the latest release gets security fixes.
