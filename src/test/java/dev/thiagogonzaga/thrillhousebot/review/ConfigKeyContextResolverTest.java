@@ -499,11 +499,19 @@ class ConfigKeyContextResolverTest {
     @ParameterizedTest
     @ValueSource(
         strings = {
-          "+def home():\n+    \"\"\"Returns the home directory.\n+\n"
-              + "+    Defaults to os.getenv(\"HOME\") when unset.\n+    \"\"\"\n+    return HOME",
+          """
+          +def home():
+          +    \"""Returns the home directory.
+          +
+          +    Defaults to os.getenv("HOME") when unset.
+          +    \"""
+          +    return HOME""",
           " doc = '''\n+reads os.environ at boot\n-old line\n '''",
-          "+/* The limit used to come from\n+   os.Getenv(\"X\"), and still falls back to\n"
-              + "+   os.Getenv(\"Y\") */\n+limit := 3",
+          """
+          +/* The limit used to come from
+          +   os.Getenv("X"), and still falls back to
+          +   os.Getenv("Y") */
+          +limit := 3""",
           "+<!--\n+import.meta.env.VITE_X\n+-->",
           "+x = 1 --[[ was\n+os.getenv(\"X\")\n+]]",
           "+doc = \"\"\"a\n+{os.environ} and {getenv(1)}\n+\"\"\"",
@@ -527,8 +535,10 @@ class ConfigKeyContextResolverTest {
           "+/* a\n+   b */ v := os.Getenv(\"X\")",
           "+v = f\"\"\"\n+  {os.environ['X']}\n+\"\"\"",
           "+v = \"\"\"\n+  ${process.env.X}\n+\"\"\"",
-          "     the end of a docstring that began above the hunk.\n     \"\"\"\n"
-              + "+    return os.getenv(\"X\")",
+          """
+               the end of a docstring that began above the hunk.
+               \"""
+          +    return os.getenv("X")""",
           "+    return os.getenv(\"X\")\n+\n+def next():\n+    \"\"\"A docstring the hunk cuts.",
           "+/* open\n@@ -9 +9 @@\n+v = os.getenv(\"X\")\n+# */",
           "+rm -rf build/*\n+v = os.getenv(\"X\")",
