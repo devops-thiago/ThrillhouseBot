@@ -477,14 +477,39 @@ jobs:
             echo "pom.xml is already at ${NEXT}; nothing to bump"
             exit 0
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           BRANCH="chore/bump-${NEXT}"
-          git checkout -b "$BRANCH"
-          # The DCO check accepts a bot commit only when it is signed off or carries a
-          # verified signature. A commit pushed with GITHUB_TOKEN is unsigned, so sign it off.
-          git commit -s -am "chore: bump version to ${NEXT} after ${TAG}"
-          git push -f origin "$BRANCH"
+          # The job checks out main (ref: main above), so HEAD is main's tip.
+          BASE_SHA=$(git rev-parse HEAD)
+          # main requires signed commits, and a commit pushed with GITHUB_TOKEN is unsigned, so
+          # the commit is made through the API, which GitHub signs as github-actions[bot]. The
+          # sign-off keeps the DCO check satisfied as well. The branch is created at main's tip,
+          # or moved back to it when a rerun finds it, so each run starts the bump from main.
+          if ! gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f ref="refs/heads/${BRANCH}" -f sha="$BASE_SHA" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/heads/${BRANCH}" \
+              -f sha="$BASE_SHA" -F force=true >/dev/null
+          fi
+          additions=$(git diff --name-only -z | while IFS= read -r -d '' path; do
+            jq -n --arg path "$path" --arg contents "$(base64 -w0 "$path")" '{path: $path, contents: $contents}'
+          done | jq -s .)
+          commit=$(jq -n \
+            --arg repo "$GITHUB_REPOSITORY" --arg branch "$BRANCH" --arg head "$BASE_SHA" \
+            --arg headline "chore: bump version to ${NEXT} after ${TAG}" \
+            --arg body "Signed-off-by: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>" \
+            --argjson additions "$additions" \
+            '{query: "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }",
+              variables: {input: {
+                branch: {repositoryNameWithOwner: $repo, branchName: $branch},
+                expectedHeadOid: $head,
+                message: {headline: $headline, body: $body},
+                fileChanges: {additions: $additions}}}}' \
+            | gh api graphql --input - -q '.data.createCommitOnBranch.commit.oid')
+          verified=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${commit}" -q '.commit.verification.verified')
+          if [ "$verified" != "true" ]; then
+            echo "::error::Bump commit ${commit} is not signed; main requires signed commits."
+            exit 1
+          fi
+          echo "Signed bump commit ${commit} on ${BRANCH}"
           # Branch on the outcome instead of masking every failure: success or an
           # already-existing PR is fine; anything else (e.g. the "Allow GitHub
           # Actions to create and approve pull requests" repo setting being off)
