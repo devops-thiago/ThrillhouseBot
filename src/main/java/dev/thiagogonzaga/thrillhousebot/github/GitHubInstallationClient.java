@@ -29,15 +29,6 @@ import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 public interface GitHubInstallationClient {
 
   @GET
-  @Path("/app/installations")
-  @Produces(MediaType.APPLICATION_JSON)
-  List<Installation> listInstallations(
-      @HeaderParam("Authorization") String authorization,
-      @HeaderParam("Accept") String accept,
-      @QueryParam("per_page") @DefaultValue("100") int perPage,
-      @QueryParam("page") @DefaultValue("1") int page);
-
-  @GET
   @Path("/installation/repositories")
   @Produces(MediaType.APPLICATION_JSON)
   InstallationRepositoriesResponse listInstallationRepositories(

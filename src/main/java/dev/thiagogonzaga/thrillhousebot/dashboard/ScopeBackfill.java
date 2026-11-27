@@ -107,13 +107,11 @@ public class ScopeBackfill {
     if (names.isEmpty()) {
       return new Result(0, 0, 0);
     }
-    var jwt = "Bearer " + authClient.generateAppJwt();
-    var installations =
-        allPages(page -> installationClient.listInstallations(jwt, ACCEPT, PER_PAGE, page));
+    var installationIds = authClient.listInstallationIds();
     var byName = new HashMap<String, Match>();
     var byOwner = new HashMap<String, Installed>();
-    for (var installation : installations) {
-      installed(installation).ifPresent(i -> index(i, byName, byOwner));
+    for (var installationId : installationIds) {
+      installed(installationId).ifPresent(i -> index(i, byName, byOwner));
     }
     int matched = 0;
     int rows = 0;
@@ -142,9 +140,9 @@ public class ScopeBackfill {
   /** A matched repository and when it was created ({@code null} when GitHub did not say). */
   private record Match(RepoScope scope, Instant createdAt) {}
 
-  private Optional<Installed> installed(GitHubInstallationClient.Installation installation) {
+  private Optional<Installed> installed(long installationId) {
     try {
-      var auth = authClient.getAuthHeader(installation.id());
+      var auth = authClient.getAuthHeader(installationId);
       var repositories = new HashMap<String, Long>();
       var createdAt = new HashMap<Long, Instant>();
       for (var repo :
@@ -163,12 +161,12 @@ public class ScopeBackfill {
           }
         }
       }
-      return Optional.of(new Installed(installation.id(), auth, repositories, createdAt));
+      return Optional.of(new Installed(installationId, auth, repositories, createdAt));
     } catch (RuntimeException e) {
       log.warn(
           "Scope backfill could not list the repositories of installation {}; its rows stay"
               + " hidden until the next start: {}",
-          installation.id(),
+          installationId,
           e.getMessage());
       return Optional.empty();
     }

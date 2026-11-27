@@ -92,10 +92,15 @@ For the same reason, replace the bot by stopping the old process before the new
 one starts. `docker compose up -d` does this. In Kubernetes, use
 `replicas: 1` with the `Recreate` deployment strategy, not `RollingUpdate`.
 
-Within the one process there is no review queue or worker limit: each review
-runs on its own virtual thread. Model calls are not limited either unless
-`AI_MAX_CONCURRENT_CALLS` sets a cap, so the model provider is what limits how
-many reviews run at once.
+Within the one process each review runs on its own virtual thread. Automatic
+reviews are limited per repository: at most `AUTO_REVIEW_MAX_CONCURRENT_PER_REPO`
+(default `4`) run at once, up to `AUTO_REVIEW_MAX_QUEUED_PER_REPO` (default `50`)
+wait for a slot, and one past that is skipped and counted as
+`REPOSITORY_QUEUE_FULL`. Across repositories `AI_MAX_CONCURRENT_CALLS` (default
+`16`) caps the model calls in flight, and `REVIEW_MAX_TOKENS_PER_REVIEW`
+(default `1000000`) caps what one review spends. A manual `/review` takes no
+repository slot. Setting any of these to `0` turns that limit off; then the
+model provider is what limits how many reviews run at once.
 
 ## Health endpoints
 
