@@ -916,12 +916,15 @@ public class ReviewPublisher {
    * <p>The approvals come from the run's one listing of the pull request's reviews, which {@link
    * GitHubReviewClient#listReviews} pages through (up to 1,000 reviews). A listing that failed
    * reaches here empty, so that round dismisses nothing; the next one reads the reviews again.
+   * {@link ReviewContextLoader#fetchPriorReviews} logs both that failure and a full walk at warn.
    *
    * <p>Best-effort: a dismissal GitHub refuses (on a protected branch its API reference asks for a
    * repository administrator or a place on the rule's list of who may dismiss reviews) or that
-   * fails is logged and the round is published as usual. The walk stops at a refusal (a 4xx
-   * answer), since the same refusal would meet every other call. A failure of any other kind (a
-   * timeout, a 5xx) says nothing about the next call, so the older approvals are still tried. An
+   * fails is logged and the round is published as usual. The walk stops only at a permission
+   * refusal (a 403 that is not a rate limit, {@link #isPermissionRefusal}), since the same refusal
+   * would meet every other call. Any other failure is about that one call or that one review: a
+   * timeout, a 5xx, a 404 or 422 (the review is gone or was dismissed since the listing), or a rate
+   * limit that outlasted the write retries. The older approvals are still tried after it. An
    * approval that could not be dismissed stays until a later round withdraws it or a person
    * dismisses it.
    */
@@ -943,12 +946,19 @@ public class ReviewPublisher {
         && botIdentity.matches(review.user().login());
   }
 
+  private static final String DISMISSAL_REFUSED_HINT =
+      "GitHub refused the call, so the bot's older approvals were not tried. Check that the App has"
+          + " Pull requests: write and that branch protection lets it dismiss reviews";
+
+  private static final String DISMISSAL_FAILED_HINT =
+      "The failure is not a permission refusal, so the bot's older approvals are still tried";
+
   /** How one dismissal call ended. */
   private enum Dismissal {
     DONE,
-    /** GitHub answered with a 4xx: the App may not dismiss reviews here. */
+    /** GitHub answered 403 without throttling: the App may not dismiss reviews here. */
     REFUSED,
-    /** No answer, or a server error: the next call may still succeed. */
+    /** No answer, a server error, a throttle or a 4xx about this review: the next call may work. */
     FAILED
   }
 
@@ -969,19 +979,33 @@ public class ReviewPublisher {
           approval.id(), post.owner(), post.repo(), post.prNumber(), post.commitSha());
       return Dismissal.DONE;
     } catch (RuntimeException e) {
+      var refused = isPermissionRefusal(e);
       Log.warnf(
           e,
           "Could not dismiss approval %d on %s/%s #%d although the round for %s did not approve —"
               + " it still counts towards the pull request's approvals until someone dismisses it."
-              + " Check that the App has Pull requests: write and that branch protection lets it"
-              + " dismiss reviews",
+              + " %s",
           approval.id(),
           post.owner(),
           post.repo(),
           post.prNumber(),
-          post.commitSha());
-      return isRefusal(e) ? Dismissal.REFUSED : Dismissal.FAILED;
+          post.commitSha(),
+          refused ? DISMISSAL_REFUSED_HINT : DISMISSAL_FAILED_HINT);
+      return refused ? Dismissal.REFUSED : Dismissal.FAILED;
     }
+  }
+
+  /**
+   * Whether GitHub refused this call for want of permission ({@link
+   * GitHubApiError#isPermissionRefusal()}). Every other answer says nothing about the App's right
+   * to dismiss reviews here: a 404 or 422 is about the one review, and a 429 or a rate-limit 403 is
+   * a throttle the write retries did not outlast.
+   */
+  private static boolean isPermissionRefusal(RuntimeException failure) {
+    return webApplicationFailure(failure)
+        .flatMap(GitHubApiError::of)
+        .filter(GitHubApiError::isPermissionRefusal)
+        .isPresent();
   }
 
   /**

@@ -124,6 +124,21 @@ class GitHubApiErrorTest {
     }
 
     @Test
+    void onlyA403ThatIsNotAThrottleIsAPermissionRefusal() {
+      assertTrue(GitHubApiError.from(outbound(403, PERMISSION_BODY)).isPermissionRefusal());
+      assertTrue(GitHubApiError.from(outbound(403, null)).isPermissionRefusal());
+      assertFalse(
+          GitHubApiError.from(outbound(403, SECONDARY_LIMIT_BODY, "Retry-After", "60"))
+              .isPermissionRefusal());
+      assertFalse(
+          GitHubApiError.from(outbound(403, "{}", "x-ratelimit-remaining", "0"))
+              .isPermissionRefusal());
+      assertFalse(GitHubApiError.from(outbound(429, "{}")).isPermissionRefusal());
+      assertFalse(GitHubApiError.from(outbound(404, "{}")).isPermissionRefusal());
+      assertFalse(GitHubApiError.from(outbound(422, UNRESOLVABLE_LINE_BODY)).isPermissionRefusal());
+    }
+
+    @Test
     void aPermissionRefusalIsNotAThrottleAndMustNotBeRepeated() {
       var error =
           GitHubApiError.from(outbound(403, PERMISSION_BODY, "x-ratelimit-remaining", "42"));

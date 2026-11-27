@@ -446,6 +446,15 @@ public final class GitHubApiError {
   }
 
   /**
+   * Whether GitHub refused the call for want of permission: a 403 that {@link #isThrottled()} does
+   * not read as a primary or secondary rate limit. The same refusal would meet a second call of the
+   * same kind, which is not true of a throttle or of a 404 or 422 about one resource.
+   */
+  public boolean isPermissionRefusal() {
+    return status == 403 && !isThrottled();
+  }
+
+  /**
    * Whether this failure is worth a warning in the log. Reads probe for optional files ({@code
    * .github/instructions}, the repo settings file) and treat 404 as "absent", so a 404 is expected
    * traffic and only clutters the log at warning level; an auth, throttle or server failure is not.
