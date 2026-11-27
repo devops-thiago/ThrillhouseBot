@@ -339,8 +339,9 @@ default 3.5). `IacScanner` matches admin ports open to the internet, public S3 b
 IAM, privileged pods, host namespaces, a final Dockerfile stage running as root and disabled
 encryption. `SecurityRule` holds each rule's severity and title. A `thrillhousebot:allow-secret` or
 `thrillhousebot:allow-iac` comment on the line or the line above suppresses a match, and the
-summary's review-scope note lists each suppressed line by `path:line` and marker
-(`SecurityScan.formatWaivers`). `REVIEW_SECURITY_SCAN_SKIPPED_FILES` excludes fixture paths.
+summary's review-scope note counts the suppressed lines and names the first 30 by `path:line` and
+marker (`SecurityScan.formatWaivers`). The note reuses the scan the merge ran
+(`SecurityScan.scanOnce`). `REVIEW_SECURITY_SCAN_SKIPPED_FILES` excludes fixture paths.
 
 The merge runs after verification, so no model grades a pattern match and the verifier's
 fail-open marking never applies to one. A model finding that reports the same defect nearby is

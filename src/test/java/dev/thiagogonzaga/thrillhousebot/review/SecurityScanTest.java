@@ -22,7 +22,11 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -284,6 +288,35 @@ class SecurityScanTest {
     assertEquals("", scan(false, true).formatWaivers(files));
     assertEquals("", scan(true, true).formatWaivers(List.of()));
     assertEquals("", scan(true, true).formatWaivers(null));
+  }
+
+  @Test
+  void aLineTwoRulesMatchIsOneWaiver() {
+    var marker = "thrillhousebot:allow-iac";
+    var once = new SecurityScan.Waiver("pod.yaml", 4, marker);
+
+    var result =
+        new SecurityScan.Result(
+            List.of(),
+            List.of(),
+            List.of("pod.yaml"),
+            List.of(once, new SecurityScan.Waiver("pod.yaml", 4, marker), once));
+
+    assertEquals(List.of(once), result.waivers());
+  }
+
+  @Test
+  void theSummaryNoteReusesTheScanTheMergeRan() {
+    var files =
+        List.of(added("a.env", "KEY=" + fake.googleApiKey() + " # thrillhousebot:allow-secret"));
+    var scan = spy(scan(true, true));
+
+    var first = scan.scanOnce(files);
+    var note = scan.formatWaivers(files);
+
+    assertSame(first, scan.scanOnce(new ArrayList<>(files)));
+    assertTrue(note.startsWith("1 line the security scan matched"), note);
+    verify(scan, times(1)).scan(any());
   }
 
   @Test

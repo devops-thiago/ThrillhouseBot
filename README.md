@@ -981,8 +981,9 @@ accept a line, put `thrillhousebot:allow-secret` (or `thrillhousebot:allow-iac`)
 in a comment on that line or the line above; above is the only place a
 Dockerfile instruction can take one. JSON cannot hold a comment, so put such a
 JSON file in the skipped globs. Anyone who can push to the pull request can
-write the marker, so every line it exempts is listed in the summary's review
-scope note by `path:line` and marker (never by content); check that each one is
+write the marker, so the summary's review scope note counts the lines it
+exempts and names them by `path:line` and marker (never by content): the first
+30 are named and the rest are given as a count. Check that each one is
 deliberate.
 
 IAM list elements use their file format: YAML ARN/URL slashes, non-whitespace

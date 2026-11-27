@@ -40,6 +40,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.WeakHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -261,6 +262,10 @@ public class SecurityScan {
   /** The secret the content fingerprint is keyed from ({@link #fingerprintKey}). */
   private final String serverSecret;
 
+  /** What {@link #scanOnce} has read, held weakly by the file list it was read from. */
+  private final Map<List<GitHubPullRequestClient.FileDiff>, Result> scans =
+      Collections.synchronizedMap(new WeakHashMap<>());
+
   @Inject
   public SecurityScan(ThrillhouseConfig config) {
     this(
@@ -344,6 +349,8 @@ public class SecurityScan {
    * @param detections the scan's findings, in file then line order
    * @param redactions the matched secret values to scrub out of every other text, longest first
    * @param scannedFiles the files the scan read, so a finding it no longer sees there can be closed
+   * @param waivers the lines an allow marker kept out of the findings, each once however many rules
+   *     matched it
    */
   record Result(
       List<Detection> detections,
@@ -354,7 +361,7 @@ public class SecurityScan {
       detections = List.copyOf(detections);
       redactions = List.copyOf(redactions);
       scannedFiles = List.copyOf(scannedFiles);
-      waivers = List.copyOf(waivers);
+      waivers = waivers.stream().distinct().toList();
     }
 
     /** A pass in which no allow marker kept a match out. */
@@ -382,7 +389,7 @@ public class SecurityScan {
     if (!enabled() || files == null || files.isEmpty()) {
       return "";
     }
-    var waivers = scan(files).waivers();
+    var waivers = scanOnce(files).waivers();
     if (waivers.isEmpty()) {
       return "";
     }
@@ -426,7 +433,7 @@ public class SecurityScan {
     }
     return merge(
         response,
-        scan(ctx.reviewableFiles()),
+        scanOnce(ctx.reviewableFiles()),
         ctx.previousFindingsList(),
         FollowUpAnalyzer.settledPreviousIds(ctx.priorAiResponses()),
         FollowUpAnalyzer.openEarlierRoundFindings(
@@ -649,6 +656,22 @@ public class SecurityScan {
     return secretsEnabled
         ? Scrubber.of(result.redactions(), entropyThreshold)
         : Scrubber.of(result.redactions());
+  }
+
+  /**
+   * {@link #scan} of {@code files}, read once per review: the merge and the summary's scope note
+   * both need it, and both are handed the same list. The result is kept for as long as that list
+   * is, and a list with the same files gives the same result.
+   */
+  Result scanOnce(List<GitHubPullRequestClient.FileDiff> files) {
+    var known = scans.get(files);
+    if (known != null) {
+      return known;
+    }
+    // Read outside the map's lock, so one review's scan never waits on another's.
+    var result = scan(files);
+    scans.put(files, result);
+    return result;
   }
 
   /** Reads every file the review covers, minus the skipped globs and files with no patch text. */

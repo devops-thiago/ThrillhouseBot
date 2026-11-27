@@ -81,8 +81,9 @@ cannot resolve its review threads.
 - **Lines exempted from the security scan are listed in the summary**: a
   `thrillhousebot:allow-secret` or `thrillhousebot:allow-iac` comment silenced a match with no
   trace, and anyone who can push to the pull request can write one. The summary's review-scope
-  note now names each exempted line by `path:line` and marker, never by content, so a reviewer
-  can check that each one is deliberate.
+  note now counts the exempted lines and names them by `path:line` and marker, never by content
+  (the first 30 are named, the rest are a count), so a reviewer can check that each one is
+  deliberate.
 - **The hosted installer no longer sends the manifest code to smee.io**: with a Smee channel as
   the host, GitHub redirected the browser to the channel URL with the one-time `?code=` that
   converts into the new App's private key and secrets. The redirect now goes to
