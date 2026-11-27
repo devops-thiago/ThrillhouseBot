@@ -576,7 +576,7 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   announced ones `correctManifest` rewrites the line in a second summary edit. It replaces only
   the exact line this round wrote, so another run's summary is never touched, a round that posted
   as announced reads and writes nothing, and a failed edit is logged and never re-posts the
-  summary. The webhook's `review.openFindings` is built from the same `PostedThreads`. A review
+  summary. The webhook's `review.open_findings` is built from the same `PostedThreads`. A review
   post that throws leaves the announced line. The path is the only free text and is escaped so it
   can never write `-->`; the line stays one line. An empty set renders `[]` (so "nothing open" differs
   from a comment older than the manifest), and a set over `MAX_ENTRIES` entries or

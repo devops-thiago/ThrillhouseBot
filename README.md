@@ -1454,12 +1454,12 @@ PR title is sent. `NOTIFICATIONS_WEBHOOK_INCLUDE_CONTENT=true` adds
 first, each with `severity`, `file`, `line` and `title`); descriptions and code
 are never sent. `session_url` is built from `DASHBOARD_URL`.
 
-`NOTIFICATIONS_WEBHOOK_INCLUDE_OPEN_FINDINGS=true` adds `review.openFindings`
+`NOTIFICATIONS_WEBHOOK_INCLUDE_OPEN_FINDINGS=true` adds `review.open_findings`
 to the `json` format, with or without content: every finding still open on the pull request, including ones carried from earlier
 rounds, as the summary comment's findings manifest lists them.
 
 ```json
-"openFindings": {
+"open_findings": {
   "v": 1,
   "entries": [
     { "key": "1a2b3c4d", "file": "src/A.java", "line": 12, "risk": "high",

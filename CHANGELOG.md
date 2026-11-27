@@ -62,7 +62,7 @@ cannot resolve its review threads.
   (#1487).
 - **Open findings in the review webhook** (#1443): with `NOTIFICATIONS_WEBHOOK_INCLUDE_OPEN_FINDINGS`
   (new, default off), a `review.completed` payload in the `json` format carries
-  `review.openFindings`, the entries of the summary comment's findings manifest: file paths and
+  `review.open_findings`, the entries of the summary comment's findings manifest: file paths and
   lines, no titles. Off, nothing new leaves the process.
 - **The App asks for `Contents: Read & write`** (#1471): GitHub refuses to resolve a review
   thread without it, so an app registered from the manifest or installer never could. The bot

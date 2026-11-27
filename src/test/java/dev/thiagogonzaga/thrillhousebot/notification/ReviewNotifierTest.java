@@ -119,12 +119,12 @@ class ReviewNotifierTest {
   @Test
   void openFindingsAreSentOnceOptedIn() {
     assertThat(sentBodyFor(true))
-        .contains("\"openFindings\":{\"v\":1,\"entries\":[{\"file\":\"src/A.java\"}]}");
+        .contains("\"open_findings\":{\"v\":1,\"entries\":[{\"file\":\"src/A.java\"}]}");
   }
 
   @Test
   void openFindingsStayHomeUntilOptedInBecauseTheyNameFiles() {
-    assertThat(sentBodyFor(false)).doesNotContain("openFindings").doesNotContain("src/A.java");
+    assertThat(sentBodyFor(false)).doesNotContain("open_findings").doesNotContain("src/A.java");
   }
 
   @Test
