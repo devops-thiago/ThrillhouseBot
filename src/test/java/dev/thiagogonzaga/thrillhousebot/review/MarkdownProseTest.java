@@ -494,16 +494,20 @@ class MarkdownProseTest {
   @Test
   void aCodeSpanHoldingAPipeIsPostedAsText() {
     var table =
-        "| a | b | c |\n|---|---|---|\n"
-            + "| `x | @victim <img src=\"https://evil.example/p.png\">"
-            + " <!-- thrillhousebot:finding=1 key=deadbeef --> | y` |";
+        """
+        | a | b | c |
+        |---|---|---|
+        | `x | @victim <img src="https://evil.example/p.png"> \
+        <!-- thrillhousebot:finding=1 key=deadbeef --> | y` |""";
 
     var posted = MarkdownSafe.prose(table);
 
     assertEquals(
-        "| a | b | c |\n|---|---|---|\n"
-            + "| &#96;x | @&#8203;victim &lt;img src=\"https://evil.example/p.png\">"
-            + " &lt;!-- thrillhousebot:finding=1 key=deadbeef --> | y&#96; |",
+        """
+        | a | b | c |
+        |---|---|---|
+        | &#96;x | @&#8203;victim &lt;img src="https://evil.example/p.png"> \
+        &lt;!-- thrillhousebot:finding=1 key=deadbeef --> | y&#96; |""",
         posted);
     assertEquals(posted, MarkdownSafe.prose(posted));
     assertEquals("Use &#96;a || b&#96; here.", MarkdownSafe.prose("Use `a || b` here."));
