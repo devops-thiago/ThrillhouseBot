@@ -69,7 +69,6 @@ cannot resolve its review threads.
   writes no file, commit or branch.
 - **A GitHub Enterprise setup guide**: `docs/GITHUB_ENTERPRISE.md` and a docs-site page say which
   GitHub Enterprise products work and what to set up on GitHub for an organization (#1488).
-
 ### Fixed
 
 - **A clear or decline comment says what it matched** (#1463): the reply lists the open findings
@@ -100,6 +99,33 @@ cannot resolve its review threads.
   approval is posted, the summary no longer says it cannot be approved or lists the checks as
   pending. While the hold stays, its table shows the checks' current state. The Agent next steps
   section, when on, follows it too. A summary posted before this change is not rewritten.
+- **A push inside the automatic review window is reviewed when the window closes**: a push that
+  arrived inside `AUTO_REVIEW_MIN_INTERVAL` was skipped and never reviewed, so an approval of the
+  previous commit could stay on code the bot had not read. The bot now keeps the latest pushed head
+  and reviews it when the window closes. Only a reopen or a repeated ready-for-review of the commit
+  just reviewed is skipped. The waiting review is held in memory, so a restart loses it.
+- **A failed read of a pull request's reviews is logged as a warning**: it was a debug line that
+  read as a normal first review. Reaching the limit of 1,000 reviews read per pull request is logged
+  too.
+- **A re-raised finding that quotes unchanged code is a repeat, not a gap (#1397)**: a finding
+  raised again after its fix was kept as "a gap the fix left" even when its quote sat only on lines
+  the pull request did not change. It is now dropped as a repeat of the answered finding.
+- **An added line that starts with `++` is read as added (#1396)**: a line such as `++i;` was
+  mistaken for the diff's file header when the bot collected changed names and configuration keys,
+  so what it declared was missed.
+- **A suggestion's new code loses a copied line number (#1364)**: when the quoted old code kept its
+  diff markers and a new line dropped them, the copied line number stayed in the suggestion.
+- **An environment read named in a docstring is not a read (#1473)**: a read named inside a
+  multi-line docstring or block comment counted as one when the bot chose which changed files to
+  fetch for configuration-key context.
+- **The findings manifest's `thread` value follows the threads that were opened (#1465)**: when
+  GitHub refused a thread, or a refusal let a finding past the comment cap take the freed slot, the
+  summary's manifest still carried the value announced before the review posted. The bot now
+  corrects the manifest line after the review posts.
+- **`/resolve` says when it could not read or resolve the threads (#1471)**: it answered that there
+  were no open finding threads when GitHub failed to return the pull request's review threads, and
+  reported nothing when every resolve attempt failed. It now says the threads could not be read, or
+  how many it tried and GitHub left open.
 
 ### Security
 
