@@ -56,8 +56,8 @@ instructions file and the repository settings file.
 flowchart TD
     GH[GitHub event] -->|HMAC check, delivery parse<br/>Quarkiverse GitHub App| WH[WebhookEvents]
     WH -->|pull_request: pause, trigger filters,<br/>auto-review window| DSP
-    WH -->|/review: 👀, pause, write access, open PR| DSP
-    WH -->|other commands: 👀| CMD[CommentCommandService]
+    WH -->|/review: write access, 👀, pause, open PR| DSP
+    WH -->|other commands: write access, 👀| CMD[CommentCommandService]
     WH -->|mention or reply to a finding| REP[MaintainerReplyDispatcher]
     WH -->|check_suite or status| CIR[CI-hold recheck]
     WH -->|200 OK| GH
@@ -76,15 +76,16 @@ flowchart TD
 The Quarkiverse GitHub App extension verifies the signature and parses the delivery inside its
 route; `WebhookEvents` then drops a redelivered delivery id, routes the event and returns before
 any review work starts. Only cheap gates run on the request thread: the pause lookup, the trigger
-filters, the 👀 reaction on a command (bounded by `ACK_REACTION_TIMEOUT`, default `3s`) and the
-write-access check for `/review` (bounded by `MANUAL_TRIGGER_AUTH_TIMEOUT`, default `5s`). No
+filters, the write-access check for a command (bounded by `MANUAL_TRIGGER_AUTH_TIMEOUT`, default
+`5s`) and then the 👀 reaction (bounded by `ACK_REACTION_TIMEOUT`, default `3s`). The check comes
+first: a command from a commenter it refuses is dropped with no reaction and no reply. No
 installation client is built on the ack path: the observers receive the raw event only.
 
 | Event | What it starts |
 |---|---|
-| `pull_request` `opened`, `reopened`, `synchronize`, `ready_for_review` | An automatic review, unless the PR is paused, filtered out by the `WEBHOOK_*` trigger settings (drafts, labels, base branches), or reviewed less than `AUTO_REVIEW_MIN_INTERVAL` ago (default `0`, window off). `ready_for_review` clears that window. |
+| `pull_request` `opened`, `reopened`, `synchronize`, `ready_for_review` | An automatic review, unless the PR is paused, filtered out by the `WEBHOOK_*` trigger settings (drafts, labels, base branches), or reviewed less than `AUTO_REVIEW_MIN_INTERVAL` ago (default `1m`; `0` turns the window off). `ready_for_review` clears that window once per head commit. |
 | `issue_comment` with `/review` or `@thrillhousebot review` | A manual review. It bypasses the trigger filters and the rate-limit window, and needs write access. On a closed or merged PR it posts a notice instead of reviewing. |
-| `issue_comment` with another command | The command: `/help`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`, `/resolve`, `/pause`, `/resume`, `/learnings`, `/remember`, `/forget`. `/summary` runs a review that posts a new summary comment. |
+| `issue_comment` with another command | For a commenter with write access, the command: `/help`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`, `/resolve`, `/pause`, `/resume`, `/learnings`, `/remember`, `/forget`. `/summary` runs a review that posts a new summary comment. Anyone else gets only `/help`, once per pull request per hour (`HelpReplyLimiter`). |
 | `issue_comment` mentioning the bot without a command | A conversational reply in the PR conversation. No 👀 reaction. |
 | `pull_request_review_comment` | A reply in the review thread when it mentions the bot, and finding-feedback capture when it answers a finding. |
 | `check_suite` `completed`, `status` | A recheck of any verdict held on pending CI for that commit. |
@@ -230,9 +231,10 @@ finding verifier, the summary check, response repair) repeat the same way, and s
 on-request commands and maintainer replies, whose calls are metered per command or reply.
 Each call is bounded by `AI_TIMEOUT` (default 300 s).
 
-`AI_MAX_CONCURRENT_CALLS` caps model calls in flight across the process (default `0`, no cap); a
-call past the cap waits for a slot. `REVIEW_MAX_TOKENS_PER_REVIEW` caps the tokens one review may
-spend across all its calls, retries, verifier and summary included (default `0`, no cap). Once it
+`AI_MAX_CONCURRENT_CALLS` caps model calls in flight across the process (default `16`; `0` means no
+cap); a call past the cap waits for a slot. `REVIEW_MAX_TOKENS_PER_REVIEW` caps the tokens one
+review may spend across all its calls, retries, verifier and summary included (default `1000000`;
+`0` means no cap). Once it
 is reached, the remaining batches are disclosed as not reviewed and the summary falls back to
 counts.
 
@@ -598,13 +600,17 @@ that fails, is cut, or is skipped at a cap leaves a counts-only summary that say
 
 Reviews, CI rechecks, comment commands, replies and notification deliveries share one
 virtual-thread executor with no size limit. Load is bounded by per-PR serialization in
-`ReviewDispatcher`, the model call cap and GitHub write pacing.
+`ReviewDispatcher`, the per-repository slots for automatic reviews (`AutoReviewSlots`: a review past
+the running limit waits on its worker, one past the queue limit is skipped), the model call cap and
+GitHub write pacing.
 
 | Limit | Setting | Default |
 |---|---|---|
-| Model calls in flight, process-wide (`ModelCallGate`) | `AI_MAX_CONCURRENT_CALLS` | `0` (no cap) |
+| Time between automatic reviews of one PR (`AutoReviewRateLimiter`) | `AUTO_REVIEW_MIN_INTERVAL` | `1m` |
+| Automatic reviews of one repository running, and waiting (`AutoReviewSlots`) | `AUTO_REVIEW_MAX_CONCURRENT_PER_REPO`, `AUTO_REVIEW_MAX_QUEUED_PER_REPO` | `4`, `50` |
+| Model calls in flight, process-wide (`ModelCallGate`) | `AI_MAX_CONCURRENT_CALLS` | `16` |
 | Planned calls per review | `REVIEW_MAX_AI_CALLS` | `6` |
-| Tokens per review (`ReviewTokenLedger`) | `REVIEW_MAX_TOKENS_PER_REVIEW` | `0` (no cap) |
+| Tokens per review (`ReviewTokenLedger`) | `REVIEW_MAX_TOKENS_PER_REVIEW` | `1000000` |
 | Spacing between content-creating GitHub writes, and the longest wait (`GitHubWritePacer`) | `GITHUB_WRITE_MIN_INTERVAL`, `GITHUB_WRITE_MAX_WAIT` | `1s`, `90s` |
 
 The following state lives in memory, per process, and is lost on restart:
@@ -744,7 +750,7 @@ diff, filtered by the ignore globs.
 
 | Package | Responsibility | Notable classes |
 |---|---|---|
-| `webhook/` | The webhook entry: the Quarkiverse GitHub App extension verifies the signature and parses deliveries, then applies trigger filters, pause state and the auto-review window, drops redeliveries, acks commands with 👀, routes commands and replies, starts CI-hold rechecks | `WebhookEvents`, `WebhookDeduplicator`, `SeenDeliveries`, `DeliveryPurge`, `TriggerDetector`, `ReviewTriggerFilter`, `ManualReviewAuthorizer`, `AckReactionService`, `CommentCommandService`, `LearningCommands`, `PrPauseService` |
+| `webhook/` | The webhook entry: the Quarkiverse GitHub App extension verifies the signature and parses deliveries, then applies trigger filters, pause state and the auto-review window, drops redeliveries, checks a commenter's write access before acking a command with 👀, routes commands and replies, starts CI-hold rechecks | `WebhookEvents`, `WebhookDeduplicator`, `SeenDeliveries`, `DeliveryPurge`, `TriggerDetector`, `ReviewTriggerFilter`, `ManualReviewAuthorizer`, `AckReactionService`, `HelpReplyLimiter`, `CommentCommandService`, `LearningCommands`, `PrPauseService` |
 | `review/` | Everything from "a review was requested" to "the result is on GitHub": dispatch, context, prompt assembly, budgeting, the finding chain, the security scan, follow-up reconciliation, verdict, publishing, CI gating, learnings, replies and the on-request commands | `ReviewDispatcher`, `ReviewOrchestrator`, `ReviewContextLoader`, `ReviewPromptAssembler`, `DiffBudgetPlanner`, `FindingPipeline`, `FindingScreen`, `SecurityScan`, `FollowUpAnalyzer`, `VerdictBuilder`, `ReviewPublisher`, `FindingsManifest`, `PrSummaryGenerator`, `CiStatusEvaluator`, `CiHoldRevisit`, `TicketContextResolver`, `ReviewLearnings`, `MaintainerReplyService` |
 | `review/ai/` | The LangChain4j layer: AI service interfaces and prompts, streaming and retries, response parsing and salvage, the verifier, the token ledger and the call gate | `AiReviewService`, `PrReviewer`, `PrSummarizer`, `FindingVerifier`, `FindingVerificationService`, `ReviewResponseParser`, `ReplyAssistant`, `ModelCallGate`, `ReviewTokenLedger` |
 | `github/` | GitHub REST and GraphQL clients, app auth, write pacing and retry, the instructions file and repository settings | `GitHubAuthClient`, `GitHubReviewClient`, `GitHubCheckRunClient`, `GitHubWritePacer`, `GitHubWriteRetry`, `InstructionsResolver`, `RepoSettingsResolver`, `ReviewThreadService` |

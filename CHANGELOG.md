@@ -96,6 +96,27 @@ cannot resolve its review threads.
   (RHSA-2026:81532) with the fixes for CVE-2026-89161, CVE-2026-86145 and CVE-2026-103111, so their
   `.trivyignore` entries are removed. CVE-2026-84782 (`libssl3`, DTLS only) stays ignored for the
   `-distroless` image: Debian has a fixed package, but the distroless base has not picked it up.
+- **Automatic reviews are bounded without any setting**: a pull request author needs no write
+  access to start a review, and until now every limit on automatic reviews shipped switched off,
+  so the number of pull requests and pushes alone decided how many reviews and model calls ran.
+  The defaults are now `AUTO_REVIEW_MIN_INTERVAL=1m`, `REVIEW_MAX_TOKENS_PER_REVIEW=1000000` and
+  `AI_MAX_CONCURRENT_CALLS=16`, and two new settings limit one repository to four automatic
+  reviews at once (`AUTO_REVIEW_MAX_CONCURRENT_PER_REPO`) with up to fifty waiting, one per pull
+  request (`AUTO_REVIEW_MAX_QUEUED_PER_REPO`). Reviews past the first limit wait and are still
+  reviewed; one past the second is skipped as `REPOSITORY_QUEUE_FULL`. Converting a pull request
+  to draft and back no longer starts a new review of the same commit each time: ready-for-review
+  lifts the interval once per head commit. Setting any of these to `0` turns it off, as before.
+  **What you will notice:** a push, reopen or repeated ready-for-review within a minute of an
+  automatic review of the same pull request is skipped (`RATE_LIMITED`) and not reviewed later,
+  so push again or comment `/review`; a deployment that raised `REVIEW_MAX_INPUT_TOKENS` or
+  `REVIEW_MAX_AI_CALLS` should raise `REVIEW_MAX_TOKENS_PER_REVIEW` too (the bot warns at startup
+  when the planned input is above it); and a provider that allows fewer than sixteen concurrent
+  requests still needs `AI_MAX_CONCURRENT_CALLS` set to its limit.
+- **The bot writes nothing for a command before checking who sent it**: `/review` on a paused pull
+  request posted the paused notice for any commenter, every command got the 👀 reaction whoever
+  sent it, and `/help` was answered every time anyone asked. The write-access check now comes
+  first, so a commenter it refuses gets no reaction, no notice and no reply, and `/help` from a
+  commenter without write access is answered once per pull request per hour.
 
 ## [0.9.3] - 2026-11-26
 

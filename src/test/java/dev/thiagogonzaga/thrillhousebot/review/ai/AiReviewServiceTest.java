@@ -1066,7 +1066,8 @@ class AiReviewServiceTest {
 
   @Test
   void aDisabledCeilingNeverBlocksACallEvenWithHugeRecordedSpend() {
-    // #499(d) characterization: REVIEW_MAX_TOKENS_PER_REVIEW=0 (the default) leaves the call and
+    // #499(d) characterization: REVIEW_MAX_TOKENS_PER_REVIEW=0 (the ceiling off) leaves the call
+    // and
     // retry behavior exactly as before the ceiling existed.
     ReviewSession session = reviewSession();
     when(reviewConfig.maxTokensPerReview()).thenReturn(0L);

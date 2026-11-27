@@ -91,6 +91,8 @@ class WebhookEventsTest {
 
   @Mock private AckReactionService ackReactionService;
 
+  private final HelpReplyLimiter helpReplyLimiter = new HelpReplyLimiter();
+
   @Mock private ReviewSkipEmitter skipEmitter;
 
   @Mock private FindingFeedbackCaptureService findingFeedbackCapture;
@@ -387,12 +389,16 @@ class WebhookEventsTest {
   }
 
   private WebhookEvents newEvents(ReviewTriggerFilter filter) {
+    return newEvents(filter, autoReviewRateLimiter);
+  }
+
+  private WebhookEvents newEvents(ReviewTriggerFilter filter, AutoReviewRateLimiter limiter) {
     return new WebhookEvents(
         config,
         triggerDetector,
         filter,
         labelGate,
-        autoReviewRateLimiter,
+        limiter,
         reviewDispatcher,
         replyDispatcher,
         deduplicator,
@@ -400,6 +406,7 @@ class WebhookEventsTest {
         commentCommandService,
         prPauseService,
         ackReactionService,
+        helpReplyLimiter,
         skipEmitter,
         findingFeedbackCapture,
         ciHoldRegistry,
@@ -934,8 +941,9 @@ class WebhookEventsTest {
   }
 
   @Test
-  void shouldClearRateLimitAndDispatchReadyForReviewEvenWhenThrottled() {
+  void theFirstReadyForReviewOfAHeadIsDispatchedEvenWhenThrottled() {
     when(reviewConfig.autoReviewMinInterval()).thenReturn(Duration.ofHours(1));
+    when(autoReviewRateLimiter.clearForReadyHead("org", "svc", 57, "sha57")).thenReturn(true);
     when(autoReviewRateLimiter.isThrottled("org", "svc", 57)).thenReturn(true);
 
     var body =
@@ -944,9 +952,111 @@ class WebhookEventsTest {
 
     deliver("pull_request", event("pull_request", DELIVERY, body));
 
-    verify(autoReviewRateLimiter).clearForPr("org", "svc", 57);
     verify(autoReviewRateLimiter, never()).isThrottled("org", "svc", 57);
     verify(reviewDispatcher).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
+  void aReadyForReviewWhoseHeadAlreadyLiftedTheWindowIsThrottled() {
+    when(reviewConfig.autoReviewMinInterval()).thenReturn(Duration.ofHours(1));
+    when(autoReviewRateLimiter.clearForReadyHead("org", "svc", 57, "sha57")).thenReturn(false);
+    when(autoReviewRateLimiter.isThrottled("org", "svc", 57)).thenReturn(true);
+
+    var body =
+        buildPullRequestPayload("ready_for_review", 57, "org/svc", "sha57", "main")
+            .getBytes(StandardCharsets.UTF_8);
+
+    deliver("pull_request", event("pull_request", DELIVERY, body));
+
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+    verify(skipEmitter)
+        .recordSkip(
+            eq(ReviewSkipReason.RATE_LIMITED), anyLong(), eq("org"), eq("svc"), eq(57), any());
+  }
+
+  @Test
+  void convertingToDraftAndBackDoesNotStartAReviewOfTheSameHeadAgain() {
+    when(reviewConfig.autoReviewMinInterval()).thenReturn(Duration.ofHours(1));
+    var limiter = limiterWithInterval(Duration.ofHours(1));
+    events = newEvents(triggerFilter, limiter);
+    // A review of an earlier push just completed, so the window is open.
+    limiter.recordCompletion("org", "svc", 57);
+
+    deliverPullRequest("ready-1", "ready_for_review", 57, "org/svc", "sha57");
+    // The review that the first ready-for-review started completes.
+    limiter.recordCompletion("org", "svc", 57);
+    deliverPullRequest("ready-2", "ready_for_review", 57, "org/svc", "sha57");
+    deliverPullRequest("ready-3", "ready_for_review", 57, "org/svc", "sha57");
+
+    // Only the first ready-for-review of the head ran; the repeats were throttled.
+    verify(reviewDispatcher, times(1)).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+    verify(skipEmitter, times(2))
+        .recordSkip(
+            eq(ReviewSkipReason.RATE_LIMITED), anyLong(), eq("org"), eq("svc"), eq(57), any());
+
+    // A new head marked ready is reviewed inside the window, once.
+    deliverPullRequest("ready-4", "ready_for_review", 57, "org/svc", "sha58");
+    verify(reviewDispatcher, times(2)).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
+  void anUnchangedHeadReopenedInsideTheDefaultWindowIsNotReviewedAgain()
+      throws NoSuchMethodException {
+    // The interval an operator gets without setting anything.
+    var shipped =
+        io.quarkus.runtime.configuration.DurationConverter.parseDuration(
+            ThrillhouseConfig.ReviewConfig.class
+                .getMethod("autoReviewMinInterval")
+                .getAnnotation(io.smallrye.config.WithDefault.class)
+                .value());
+    when(reviewConfig.autoReviewMinInterval()).thenReturn(shipped);
+    var limiter = limiterWithInterval(shipped);
+    events = newEvents(triggerFilter, limiter);
+    limiter.recordCompletion("owner", "repo", 61);
+
+    deliverPullRequest("reopen-1", "reopened", 61, "owner/repo", "sha61");
+    deliverPullRequest("reopen-2", "reopened", 61, "owner/repo", "sha61");
+
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+    verify(skipEmitter, times(2))
+        .recordSkip(
+            eq(ReviewSkipReason.RATE_LIMITED), anyLong(), eq("owner"), eq("repo"), eq(61), any());
+  }
+
+  @Test
+  void withTheIntervalSetToZeroEveryReopenAndReadyForReviewIsReviewed() {
+    when(reviewConfig.autoReviewMinInterval()).thenReturn(Duration.ZERO);
+    var limiter = limiterWithInterval(Duration.ZERO);
+    events = newEvents(triggerFilter, limiter);
+    limiter.recordCompletion("owner", "repo", 62);
+
+    deliverPullRequest("off-1", "reopened", 62, "owner/repo", "sha62");
+    deliverPullRequest("off-2", "ready_for_review", 62, "owner/repo", "sha62");
+    deliverPullRequest("off-3", "ready_for_review", 62, "owner/repo", "sha62");
+
+    verify(reviewDispatcher, times(3)).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+    verify(skipEmitter, never())
+        .recordSkip(eq(ReviewSkipReason.RATE_LIMITED), anyLong(), any(), any(), anyInt(), any());
+  }
+
+  /** A real limiter reading {@code interval} the way the application builds it. */
+  private static AutoReviewRateLimiter limiterWithInterval(Duration interval) {
+    var limiterConfig = mock(ThrillhouseConfig.class);
+    var limiterReview = mock(ThrillhouseConfig.ReviewConfig.class);
+    when(limiterConfig.review()).thenReturn(limiterReview);
+    when(limiterReview.autoReviewMinInterval()).thenReturn(interval);
+    return new AutoReviewRateLimiter(limiterConfig);
+  }
+
+  private void deliverPullRequest(
+      String deliveryId, String action, int prNumber, String fullName, String headSha) {
+    deliver(
+        "pull_request",
+        event(
+            "pull_request",
+            deliveryId,
+            buildPullRequestPayload(action, prNumber, fullName, headSha, "main")
+                .getBytes(StandardCharsets.UTF_8)));
   }
 
   /** A controller gating on the real filter with {@code dependencies} excluded (#1021). */
@@ -1258,6 +1368,8 @@ class WebhookEventsTest {
   void shouldSkipManualReviewOnPausedPr() {
     when(triggerDetector.detectCommand("/review")).thenReturn(CommentCommand.REVIEW);
     when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+    when(manualReviewAuthorizer.isAuthorized("owner", "repo", 12345L, "octocat", "OWNER"))
+        .thenReturn(true);
     when(prPauseService.isPaused(any(), eq("owner"), eq("repo"), eq(77))).thenReturn(true);
 
     var body =
@@ -1266,10 +1378,31 @@ class WebhookEventsTest {
 
     deliver("issue_comment", event("issue_comment", DELIVERY, body));
 
-    // A paused PR neither authorizes nor dispatches the review; it just posts the paused notice.
+    // A paused PR does not dispatch the review; a commenter with write access gets the notice.
     verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
-    verifyNoInteractions(manualReviewAuthorizer);
     verify(commentCommandService).notifyPaused(any(CommentCommandService.CommandContext.class));
+  }
+
+  @Test
+  void aStrangersReviewOnAPausedPrPostsNothingAndGetsNoReaction() {
+    when(triggerDetector.detectCommand("/review")).thenReturn(CommentCommand.REVIEW);
+    when(triggerDetector.isBotComment("stranger")).thenReturn(false);
+    when(prPauseService.isPaused(any(), eq("owner"), eq("repo"), eq(77))).thenReturn(true);
+    when(manualReviewAuthorizer.isAuthorized("owner", "repo", 12345L, "stranger", "NONE"))
+        .thenReturn(false);
+
+    var body =
+        buildIssueCommentPayload("created", 77, "owner/repo", "stranger", "/review", "NONE")
+            .getBytes(StandardCharsets.UTF_8);
+
+    deliver("issue_comment", event("issue_comment", DELIVERY, body));
+
+    // Anyone can comment on a public pull request, so nothing is written for a commenter the
+    // authorization refused: no paused notice, no reaction, no review.
+    verify(commentCommandService, never()).notifyPaused(any());
+    verifyNoInteractions(ackReactionService);
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+    verify(deduplicator, never()).forget(anyString());
   }
 
   @Test
@@ -1338,8 +1471,7 @@ class WebhookEventsTest {
     assertEquals("repo", ctx.getValue().repo());
     assertEquals(77, ctx.getValue().prNumber());
     assertEquals(12345L, ctx.getValue().installationId());
-    // /help must not consult authorization or the review dispatcher.
-    verifyNoInteractions(manualReviewAuthorizer);
+    // /help is answered for a commenter the authorization refused, and never starts a review.
     verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
   }
 
@@ -1347,6 +1479,8 @@ class WebhookEventsTest {
   void shouldRouteAddDocsCommandToCommandService() {
     when(triggerDetector.detectCommand("/add-docs")).thenReturn(CommentCommand.ADD_DOCS);
     when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+    when(manualReviewAuthorizer.isAuthorized("owner", "repo", 12345L, "octocat", "OWNER"))
+        .thenReturn(true);
 
     var body =
         buildIssueCommentPayload("created", 77, "owner/repo", "octocat", "/add-docs")
@@ -1358,7 +1492,7 @@ class WebhookEventsTest {
     verify(commentCommandService).handle(ctx.capture());
     assertEquals(CommentCommand.ADD_DOCS, ctx.getValue().command());
     assertEquals(77, ctx.getValue().prNumber());
-    // The command service (not the controller) does the authorization and the AI work.
+    // The command service checks the commenter again and does the AI work.
     verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
   }
 
@@ -1366,6 +1500,8 @@ class WebhookEventsTest {
   void shouldRouteImproveCommandToCommandServiceAndAckIt() {
     when(triggerDetector.detectCommand("/improve")).thenReturn(CommentCommand.IMPROVE);
     when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+    when(manualReviewAuthorizer.isAuthorized("owner", "repo", 12345L, "octocat", "OWNER"))
+        .thenReturn(true);
 
     var body =
         buildIssueCommentPayload("created", 77, "owner/repo", "octocat", "/improve")
@@ -1380,7 +1516,7 @@ class WebhookEventsTest {
     // The ack reaction (#315) covers /improve like every other comment command.
     verify(ackReactionService)
         .addEyes(12345L, "owner", "repo", 1L, AckReactionService.CommentKind.ISSUE);
-    // The command service (not the controller) does the authorization and the AI work.
+    // The command service checks the commenter again and does the AI work.
     verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
   }
 
@@ -1389,6 +1525,8 @@ class WebhookEventsTest {
     when(triggerDetector.detectCommand("/generate-tests"))
         .thenReturn(CommentCommand.GENERATE_TESTS);
     when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+    when(manualReviewAuthorizer.isAuthorized("owner", "repo", 12345L, "octocat", "OWNER"))
+        .thenReturn(true);
 
     var body =
         buildIssueCommentPayload("created", 77, "owner/repo", "octocat", "/generate-tests")
@@ -1400,7 +1538,7 @@ class WebhookEventsTest {
     verify(commentCommandService).handle(ctx.capture());
     assertEquals(CommentCommand.GENERATE_TESTS, ctx.getValue().command());
     assertEquals(77, ctx.getValue().prNumber());
-    // New commands inherit the 👀 ack and the command service's authorization/pause gates.
+    // New commands inherit the 👀 ack and the command service's pause gates.
     verify(ackReactionService)
         .addEyes(12345L, "owner", "repo", 1L, AckReactionService.CommentKind.ISSUE);
     verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
@@ -1439,7 +1577,7 @@ class WebhookEventsTest {
   }
 
   @Test
-  void shouldAddEyesReactionEvenWhenReviewUnauthorized() {
+  void anUnauthorizedReviewGetsNoReaction() {
     when(triggerDetector.detectCommand("/review")).thenReturn(CommentCommand.REVIEW);
     when(triggerDetector.isBotComment("stranger")).thenReturn(false);
     when(manualReviewAuthorizer.isAuthorized(
@@ -1452,10 +1590,8 @@ class WebhookEventsTest {
 
     deliver("issue_comment", event("issue_comment", DELIVERY, body));
 
-    // The ack fires before authorization: the commenter still sees the command was noticed even
-    // when it is then rejected.
-    verify(ackReactionService)
-        .addEyes(12345L, "owner", "repo", 1L, AckReactionService.CommentKind.ISSUE);
+    // The commenter is checked before the reaction: a refused command leaves no trace on the PR.
+    verifyNoInteractions(ackReactionService);
     verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
   }
 
@@ -1463,6 +1599,8 @@ class WebhookEventsTest {
   void shouldAddEyesReactionOnReviewCommandOnPausedPr() {
     when(triggerDetector.detectCommand("/review")).thenReturn(CommentCommand.REVIEW);
     when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+    when(manualReviewAuthorizer.isAuthorized("owner", "repo", 12345L, "octocat", "OWNER"))
+        .thenReturn(true);
     when(prPauseService.isPaused(any(), eq("owner"), eq("repo"), eq(77))).thenReturn(true);
 
     var body =
@@ -1471,8 +1609,85 @@ class WebhookEventsTest {
 
     deliver("issue_comment", event("issue_comment", DELIVERY, body));
 
-    // The ack also precedes the pause gate — the command itself was still seen.
+    // The ack precedes the pause gate for a commenter with write access.
     verify(ackReactionService)
+        .addEyes(12345L, "owner", "repo", 1L, AckReactionService.CommentKind.ISSUE);
+  }
+
+  @ParameterizedTest
+  @EnumSource(
+      value = CommentCommand.class,
+      names = {"NONE", "HELP", "REVIEW"},
+      mode = EnumSource.Mode.EXCLUDE)
+  void aStrangersCommandIsDroppedWithoutAReaction(CommentCommand command) {
+    when(triggerDetector.detectCommand("/command")).thenReturn(command);
+    when(triggerDetector.isBotComment("stranger")).thenReturn(false);
+    when(manualReviewAuthorizer.isAuthorized("owner", "repo", 12345L, "stranger", "NONE"))
+        .thenReturn(false);
+
+    var body =
+        buildIssueCommentPayload("created", 88, "owner/repo", "stranger", "/command", "NONE")
+            .getBytes(StandardCharsets.UTF_8);
+
+    deliver("issue_comment", event("issue_comment", DELIVERY, body));
+
+    verifyNoInteractions(ackReactionService, commentCommandService);
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+    verify(deduplicator, never()).forget(anyString());
+  }
+
+  @Test
+  void helpFromACommenterWithoutWriteAccessIsAnsweredOncePerPullRequest() {
+    when(triggerDetector.detectCommand("/help")).thenReturn(CommentCommand.HELP);
+    when(triggerDetector.isBotComment("stranger")).thenReturn(false);
+    when(manualReviewAuthorizer.isAuthorized("owner", "repo", 12345L, "stranger", "NONE"))
+        .thenReturn(false);
+
+    for (var delivery : List.of("help-1", "help-2", "help-3")) {
+      deliver(
+          "issue_comment",
+          event(
+              "issue_comment",
+              delivery,
+              buildIssueCommentPayload("created", 88, "owner/repo", "stranger", "/help", "NONE")
+                  .getBytes(StandardCharsets.UTF_8)));
+    }
+
+    // One answer and one reaction, however often the commenter asks.
+    verify(commentCommandService, times(1)).handle(any());
+    verify(ackReactionService, times(1))
+        .addEyes(12345L, "owner", "repo", 1L, AckReactionService.CommentKind.ISSUE);
+
+    // Another pull request has its own allowance.
+    deliver(
+        "issue_comment",
+        event(
+            "issue_comment",
+            "help-4",
+            buildIssueCommentPayload("created", 89, "owner/repo", "stranger", "/help", "NONE")
+                .getBytes(StandardCharsets.UTF_8)));
+    verify(commentCommandService, times(2)).handle(any());
+  }
+
+  @Test
+  void helpFromACommenterWithWriteAccessIsAlwaysAnswered() {
+    when(triggerDetector.detectCommand("/help")).thenReturn(CommentCommand.HELP);
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+    when(manualReviewAuthorizer.isAuthorized("owner", "repo", 12345L, "octocat", "OWNER"))
+        .thenReturn(true);
+
+    for (var delivery : List.of("help-1", "help-2", "help-3")) {
+      deliver(
+          "issue_comment",
+          event(
+              "issue_comment",
+              delivery,
+              buildIssueCommentPayload("created", 88, "owner/repo", "octocat", "/help")
+                  .getBytes(StandardCharsets.UTF_8)));
+    }
+
+    verify(commentCommandService, times(3)).handle(any());
+    verify(ackReactionService, times(3))
         .addEyes(12345L, "owner", "repo", 1L, AckReactionService.CommentKind.ISSUE);
   }
 
