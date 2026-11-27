@@ -18,13 +18,12 @@ package dev.thiagogonzaga.thrillhousebot.github;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.Response;
-import java.util.List;
 import org.eclipse.microprofile.rest.client.annotation.RegisterProvider;
 import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 
 /**
- * The repository lookup that has to see a redirect, and the shapes of the installation and
- * repository listings {@link GitHubUserClient} reads.
+ * The repository lookup that has to see a redirect, and the shapes of the installation listing
+ * {@link GitHubUserClient} reads.
  *
  * <p>The lookup stays on a REST client because of a hub4j limitation: hub4j follows a redirect
  * itself and never gives out the {@code 301} or its {@code Location}, which carries the repository
@@ -55,17 +54,5 @@ public interface GitHubInstallationClient {
    */
   record Installation(long id, Account account, @JsonProperty("suspended_at") String suspendedAt) {
     public record Account(String login, String type) {}
-  }
-
-  record InstallationRepositoriesResponse(
-      @JsonProperty("total_count") int totalCount, List<Repository> repositories) {
-    public InstallationRepositoriesResponse(int totalCount, List<Repository> repositories) {
-      this.totalCount = totalCount;
-      this.repositories = repositories == null ? List.of() : List.copyOf(repositories);
-    }
-
-    public record Repository(long id, String name, Owner owner) {
-      public record Owner(String login) {}
-    }
   }
 }

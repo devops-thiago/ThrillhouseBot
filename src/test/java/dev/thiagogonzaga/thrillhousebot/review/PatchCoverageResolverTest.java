@@ -22,12 +22,10 @@ import static org.mockito.Mockito.*;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.ArtifactZipFetcher;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubActionsClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubTokenReads;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
-import jakarta.ws.rs.core.Response;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -35,6 +33,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
@@ -87,12 +86,12 @@ class PatchCoverageResolverTest {
       """;
 
   private final GitHubTokenReads tokenReads = mock(GitHubTokenReads.class);
-  private final GitHubActionsClient actionsClient = mock(GitHubActionsClient.class);
   private final AtomicInteger artifactListings = new AtomicInteger();
+  private Optional<URI> downloadLocation = Optional.empty();
   private final ArtifactZipFetcher zipFetcher = mock(ArtifactZipFetcher.class);
 
   private PatchCoverageResolver resolver(boolean enabled) {
-    return new PatchCoverageResolver(tokenReads, actionsClient, zipFetcher, enabled);
+    return new PatchCoverageResolver(tokenReads, zipFetcher, enabled);
   }
 
   private static ReviewOrchestrator.ReviewRequest request() {
@@ -150,8 +149,8 @@ class PatchCoverageResolverTest {
         });
   }
 
-  private static GitHubTokenReads.Artifact artifact(String name, boolean expired) {
-    return new GitHubTokenReads.Artifact(99L, name, expired);
+  private GitHubTokenReads.Artifact artifact(String name, boolean expired) {
+    return new GitHubTokenReads.Artifact(99L, name, expired, () -> downloadLocation);
   }
 
   private void givenRuns(GitHubTokenReads.WorkflowRun... runs) {
@@ -159,10 +158,7 @@ class PatchCoverageResolverTest {
   }
 
   private void givenDownloadRedirectsTo(URI location) {
-    var response = mock(Response.class);
-    when(response.getLocation()).thenReturn(location);
-    when(actionsClient.downloadArtifact(any(), any(), eq("o"), eq("r"), eq(99L)))
-        .thenReturn(response);
+    downloadLocation = Optional.ofNullable(location);
   }
 
   /** The prompt section alone; the tests that care about a refusal read the whole resolution. */
@@ -179,7 +175,7 @@ class PatchCoverageResolverTest {
     void contributesNothingAndCallsNoApiWhenTheDeploymentSwitchIsOff() {
       assertEquals("", resolve(false, ARTIFACT));
 
-      verifyNoInteractions(tokenReads, actionsClient, zipFetcher);
+      verifyNoInteractions(tokenReads, zipFetcher);
     }
 
     @Test
@@ -189,7 +185,7 @@ class PatchCoverageResolverTest {
           resolver(true).resolve("token", request(), RepoSettings.EMPTY, changedFile()),
           "the common case: a repository that declares nothing gets no coverage context");
 
-      verifyNoInteractions(tokenReads, actionsClient, zipFetcher);
+      verifyNoInteractions(tokenReads, zipFetcher);
     }
 
     @Test
@@ -198,7 +194,7 @@ class PatchCoverageResolverTest {
           PatchCoverageResolver.Resolution.NONE,
           resolver(true).resolve("token", request(), settingsNaming(ARTIFACT), List.of()));
 
-      verifyNoInteractions(tokenReads, actionsClient, zipFetcher);
+      verifyNoInteractions(tokenReads, zipFetcher);
     }
 
     @Test
@@ -243,7 +239,7 @@ class PatchCoverageResolverTest {
           PatchCoverageResolver.Resolution.NONE,
           resolver(true).resolve("token", blankSha, settingsNaming(ARTIFACT), changedFile()));
 
-      verifyNoInteractions(tokenReads, actionsClient, zipFetcher);
+      verifyNoInteractions(tokenReads, zipFetcher);
     }
 
     @Test
@@ -251,13 +247,13 @@ class PatchCoverageResolverTest {
       var config = mock(ThrillhouseConfig.class, RETURNS_DEEP_STUBS);
       when(config.review().patchCoverage().enabled()).thenReturn(false);
 
-      var injected = new PatchCoverageResolver(tokenReads, actionsClient, zipFetcher, config);
+      var injected = new PatchCoverageResolver(tokenReads, zipFetcher, config);
 
       assertEquals(
           PatchCoverageResolver.Resolution.NONE,
           injected.resolve("token", request(), settingsNaming(ARTIFACT), changedFile()),
           "the CDI constructor must wire thrillhousebot.review.patch-coverage.enabled");
-      verifyNoInteractions(tokenReads, actionsClient, zipFetcher);
+      verifyNoInteractions(tokenReads, zipFetcher);
     }
   }
 
@@ -398,7 +394,7 @@ class PatchCoverageResolverTest {
               }));
 
       assertEquals("", resolve(true, ARTIFACT));
-      verifyNoInteractions(actionsClient, zipFetcher);
+      verifyNoInteractions(zipFetcher);
     }
 
     @Test
@@ -417,8 +413,6 @@ class PatchCoverageResolverTest {
     @Test
     void degradesToNoContextWhenTheDownloadEndpointAnswersWithNothing() {
       givenRunWithArtifact(ARTIFACT);
-      when(actionsClient.downloadArtifact(any(), any(), eq("o"), eq("r"), eq(99L)))
-          .thenReturn(null);
 
       assertEquals("", resolve(true, ARTIFACT));
       verifyNoInteractions(zipFetcher);

@@ -19,6 +19,7 @@ import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.AllowedAccounts;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubApiError;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubTokenReads;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubUserClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstallationChange;
 import dev.thiagogonzaga.thrillhousebot.github.InstallationRepository;
@@ -126,6 +127,7 @@ public class DashboardAccessChecker {
 
   private final ThrillhouseConfig config;
   private final GitHubUserClient userClient;
+  private final GitHubTokenReads tokenReads;
   private final GitHubClientProvider clientProvider;
   private final AllowedAccounts allowedAccounts;
   private final Supplier<Instant> clock;
@@ -139,20 +141,23 @@ public class DashboardAccessChecker {
   public DashboardAccessChecker(
       ThrillhouseConfig config,
       @RestClient GitHubUserClient userClient,
+      GitHubTokenReads tokenReads,
       GitHubClientProvider clientProvider,
       AllowedAccounts allowedAccounts) {
-    this(config, userClient, clientProvider, allowedAccounts, Instant::now);
+    this(config, userClient, tokenReads, clientProvider, allowedAccounts, Instant::now);
   }
 
   /** Visible for tests: allows controlling cache expiry. */
   DashboardAccessChecker(
       ThrillhouseConfig config,
       GitHubUserClient userClient,
+      GitHubTokenReads tokenReads,
       GitHubClientProvider clientProvider,
       AllowedAccounts allowedAccounts,
       Supplier<Instant> clock) {
     this.config = config;
     this.userClient = userClient;
+    this.tokenReads = tokenReads;
     this.clientProvider = clientProvider;
     this.allowedAccounts = allowedAccounts;
     this.clock = clock;
@@ -284,14 +289,9 @@ public class DashboardAccessChecker {
    */
   private Map<Long, String> repositories(String userAuth, long installationId) {
     var repositories = new HashMap<Long, String>();
-    List<GitHubInstallationClient.InstallationRepositoriesResponse.Repository> listed;
+    List<GitHubTokenReads.InstallationRepository> listed;
     try {
-      listed =
-          allPages(
-              page ->
-                  userClient
-                      .listRepositories(userAuth, ACCEPT, installationId, PER_PAGE, page)
-                      .repositories());
+      listed = tokenReads.userInstallationRepositories(userAuth, installationId);
     } catch (WebApplicationException e) {
       var status = e.getResponse().getStatus();
       // A 403 can also be GitHub throttling the call; that is not a refusal, so it fails the
@@ -309,11 +309,9 @@ public class DashboardAccessChecker {
     }
     for (var repo : listed) {
       if (repo.id() > 0
-          && repo.name() != null
-          && repo.owner() != null
-          && repo.owner().login() != null
+          && repo.fullName() != null
           && !removed(removedRepositories, new RepoScope(installationId, repo.id()))) {
-        repositories.putIfAbsent(repo.id(), repo.owner().login() + "/" + repo.name());
+        repositories.putIfAbsent(repo.id(), repo.fullName());
       }
     }
     return repositories;

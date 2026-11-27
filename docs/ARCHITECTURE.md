@@ -49,9 +49,10 @@ The `github/` package handles app authentication and installation tokens (throug
 GitHub App extension's application client) and GitHub API calls for pull request files, reviews and
 review comments, issue comments, check runs, labels, reactions, thread resolution over GraphQL, the
 instructions file and the repository settings file. Workflow run, artifact and installation
-repository listings go through hub4j with the installation token the caller holds
-(`GitHubTokenReads`); what hub4j cannot express, such as an artifact's download redirect, stays on
-a REST client.
+repository listings, artifact and job log download addresses, and a dashboard user's repository
+listing go through hub4j with the token the caller holds (`GitHubTokenReads`). Where hub4j has no
+method, the connector under it covers the call; the renamed repository's redirect and a user's
+installation listing stay on REST clients.
 
 ## Request flow
 

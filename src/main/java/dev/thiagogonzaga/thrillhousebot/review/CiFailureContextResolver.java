@@ -17,8 +17,8 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.ArtifactZipFetcher;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubActionsClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCheckRunClient;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubTokenReads;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -278,7 +278,7 @@ public class CiFailureContextResolver {
       Pattern.compile("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z ?");
 
   private final GitHubCheckRunClient checkRunClient;
-  private final GitHubActionsClient actionsClient;
+  private final GitHubTokenReads tokenReads;
   private final ArtifactZipFetcher fetcher;
   private final boolean enabled;
   private final boolean includeLogs;
@@ -287,12 +287,12 @@ public class CiFailureContextResolver {
   @Inject
   public CiFailureContextResolver(
       @RestClient GitHubCheckRunClient checkRunClient,
-      @RestClient GitHubActionsClient actionsClient,
+      GitHubTokenReads tokenReads,
       ArtifactZipFetcher fetcher,
       ThrillhouseConfig config) {
     this(
         checkRunClient,
-        actionsClient,
+        tokenReads,
         fetcher,
         config.review().ciContext().enabled(),
         config.review().ciContext().includeLogs(),
@@ -302,13 +302,13 @@ public class CiFailureContextResolver {
   /** Visible for tests: the switches and the cap are passed directly. */
   CiFailureContextResolver(
       GitHubCheckRunClient checkRunClient,
-      GitHubActionsClient actionsClient,
+      GitHubTokenReads tokenReads,
       ArtifactZipFetcher fetcher,
       boolean enabled,
       boolean includeLogs,
       int maxChars) {
     this.checkRunClient = checkRunClient;
-    this.actionsClient = actionsClient;
+    this.tokenReads = tokenReads;
     this.fetcher = fetcher;
     this.enabled = enabled;
     this.includeLogs = includeLogs;
@@ -624,13 +624,13 @@ public class CiFailureContextResolver {
 
   /** The end of one job's log, or no bytes when it could not be read. */
   private byte[] logBytes(String auth, String owner, String repo, long jobId) {
-    try (var response = actionsClient.downloadJobLogs(auth, ACCEPT, owner, repo, jobId)) {
-      var location = response == null ? null : response.getLocation();
-      if (location == null) {
+    try {
+      var location = tokenReads.jobLogLocation(auth, owner, repo, jobId);
+      if (location.isEmpty()) {
         Log.debugf("Job log download for %d returned no redirect location", jobId);
         return new byte[0];
       }
-      return fetcher.fetchTail(location, LOG_TAIL_BYTES);
+      return fetcher.fetchTail(location.get(), LOG_TAIL_BYTES);
     } catch (RuntimeException e) {
       Log.debugf(e, "Could not read the log of job %d", jobId);
       return new byte[0];

@@ -622,10 +622,13 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
 - **A read made with a token from `GitHubAuthClient` keeps that token** (#1314). `GitHubTokenReads`
   builds hub4j with the caller's `Authorization` header, never an installation client from
   `GitHubClientProvider`, which reaches the whole installation. It uses `GitHubAppConnector`, and
-  its listings keep the page bounds the REST clients had. What hub4j cannot express stays on a
-  trimmed REST client whose Javadoc names the limitation: the artifact and job-log redirects
-  (`GitHubActionsClient`), the renamed repository's `301` (`GitHubInstallationClient`) and the
-  listings made with a user's token (`GitHubUserClient`).
+  its listings keep the page bounds the REST clients had.
+- **Where hub4j has no method, `GitHubAppConnector` covers it** and its Javadoc links the upstream
+  issue: the redirect of an artifact or job-log download is handed back, never followed
+  (hub4j/github-api#2351), and a user token's installation repository listing is sent to the user
+  endpoint (hub4j/github-api#2352). Drop each once its issue is resolved. The renamed repository's
+  `301` (`GitHubInstallationClient`) and a user's installation listing (`GitHubUserClient`) stay on
+  trimmed REST clients.
 
 ## Prompts
 

@@ -30,15 +30,21 @@ import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.net.URI;
 import java.net.http.HttpClient;
+import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Flow;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.jboss.resteasy.reactive.ClientWebApplicationException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.kohsuke.github.GitHub;
 import org.kohsuke.github.GitHubBuilder;
@@ -211,6 +217,21 @@ class GitHubAppConnectorTest {
     }
 
     assertEquals("", stub.received().get(0).body());
+  }
+
+  @ParameterizedTest
+  @CsvSource({"200, ''", "302, ''", "404, the body", "503, the body"})
+  void aDownloadKeepsOnlyTheBodyOfARefusal(int status, String kept) {
+    var answer = mock(HttpResponse.ResponseInfo.class);
+    when(answer.statusCode()).thenReturn(status);
+    var subscriber = GitHubAppConnector.REFUSAL_BODY_ONLY.apply(answer);
+
+    subscriber.onSubscribe(mock(Flow.Subscription.class));
+    subscriber.onNext(List.of(ByteBuffer.wrap("the body".getBytes(StandardCharsets.UTF_8))));
+    subscriber.onComplete();
+
+    var body = subscriber.getBody().toCompletableFuture().join();
+    assertEquals(kept, new String(body, StandardCharsets.UTF_8));
   }
 
   @Test

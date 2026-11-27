@@ -9176,9 +9176,9 @@ class ReviewOrchestratorTest {
                   new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
                       2L, "test", "completed", "failure", actions)));
       var logUri = java.net.URI.create("https://blob.example/log");
-      var actionsClient = mock(GitHubActionsClient.class);
-      when(actionsClient.downloadJobLogs(any(), any(), any(), any(), eq(2L)))
-          .thenReturn(Response.status(302).location(logUri).build());
+      var logReads = mock(dev.thiagogonzaga.thrillhousebot.github.GitHubTokenReads.class);
+      when(logReads.jobLogLocation(any(), any(), any(), eq(2L)))
+          .thenReturn(java.util.Optional.of(logUri));
       var fetcher = mock(ArtifactZipFetcher.class);
       when(fetcher.fetchTail(eq(logUri), anyInt()))
           .thenReturn(
@@ -9214,7 +9214,7 @@ class ReviewOrchestratorTest {
       when(aiReviewService.review(any(ReviewSession.class), any()))
           .thenReturn(new ReviewResponse(List.of(offByOne), List.of(), null));
       ciFailureContext =
-          new CiFailureContextResolver(checkRunClient, actionsClient, fetcher, true, false, 4000);
+          new CiFailureContextResolver(checkRunClient, logReads, fetcher, true, false, 4000);
       orchestrator = newOrchestrator();
 
       try (var mockedStatic = mockStatic(ReviewSession.class)) {

@@ -24,7 +24,7 @@ import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.dashboard.DashboardAccessChecker.AccessDecision;
 import dev.thiagogonzaga.thrillhousebot.github.AllowedAccounts;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient.Installation;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient.InstallationRepositoriesResponse;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubTokenReads;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubUserClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstallationChange;
 import io.quarkiverse.githubapp.GitHubClientProvider;
@@ -35,7 +35,6 @@ import java.io.InterruptedIOException;
 import java.net.SocketTimeoutException;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -69,6 +68,7 @@ class DashboardAccessCheckerTest {
   @Mock ThrillhouseConfig.DashboardConfig dashboardConfig;
   @Mock GitHubClientProvider clientProvider;
   @Mock GitHubUserClient userClient;
+  @Mock private GitHubTokenReads tokenReads;
   @Mock GitHub gitHub;
   @Mock GHMembership membership;
   @Mock GHOrganization organization;
@@ -92,7 +92,12 @@ class DashboardAccessCheckerTest {
     stubMembership("alice", 204);
     checker =
         new DashboardAccessChecker(
-            config, userClient, clientProvider, new AllowedAccounts(List.of()), now::get);
+            config,
+            userClient,
+            tokenReads,
+            clientProvider,
+            new AllowedAccounts(List.of()),
+            now::get);
   }
 
   @Test
@@ -130,7 +135,7 @@ class DashboardAccessCheckerTest {
   void theInjectedCheckerUsesTheWallClock() {
     var injected =
         new DashboardAccessChecker(
-            config, userClient, clientProvider, new AllowedAccounts(List.of()));
+            config, userClient, tokenReads, clientProvider, new AllowedAccounts(List.of()));
 
     assertEquals(AccessDecision.ALLOWED, injected.checkAccess("alice", TOKEN));
   }
@@ -151,15 +156,19 @@ class DashboardAccessCheckerTest {
     var scope = checker.repositoryScope("alice", TOKEN);
 
     assertEquals(List.of(20L), scope.sortedInstallations().stream().map(i -> i.id()).toList());
-    verify(userClient, never())
-        .listRepositories(anyString(), anyString(), eq(10L), anyInt(), anyInt());
+    verify(tokenReads, never()).userInstallationRepositories(anyString(), eq(10L));
   }
 
   @Test
   void theDashboardListsOnlyAllowedAccountsInstallations() {
     var limited =
         new DashboardAccessChecker(
-            config, userClient, clientProvider, new AllowedAccounts(List.of("ACME")), now::get);
+            config,
+            userClient,
+            tokenReads,
+            clientProvider,
+            new AllowedAccounts(List.of("ACME")),
+            now::get);
 
     var scope = limited.repositoryScope("alice", TOKEN);
 
@@ -189,8 +198,7 @@ class DashboardAccessCheckerTest {
         checker.repositoryScope("alice", TOKEN).sortedInstallations().stream()
             .map(i -> i.id())
             .toList());
-    verify(userClient, never())
-        .listRepositories(anyString(), anyString(), eq(10L), anyInt(), anyInt());
+    verify(tokenReads, never()).userInstallationRepositories(anyString(), eq(10L));
   }
 
   @Test
@@ -208,16 +216,15 @@ class DashboardAccessCheckerTest {
 
   @Test
   void aChangeLandingWhileGitHubIsAskedIsNotUndoneByThatAnswer() {
-    when(userClient.listRepositories(eq(AUTH), anyString(), eq(20L), eq(100), eq(1)))
+    when(tokenReads.userInstallationRepositories(AUTH, 20L))
         .thenAnswer(
             invocation -> {
               // The webhook arrives while this login's scope is being fetched.
               change(InstallationChange.Kind.GONE, 10L);
               change(InstallationChange.Kind.REPOSITORIES_REMOVED, 20L, 201L);
-              return new InstallationRepositoriesResponse(
-                  2, List.of(repo(200L, "alice", "site"), repo(201L, "alice", "blog")));
+              return List.of(repo(200L, "alice", "site"), repo(201L, "alice", "blog"));
             })
-        .thenReturn(new InstallationRepositoriesResponse(1, List.of(repo(200L, "alice", "site"))));
+        .thenReturn(List.of(repo(200L, "alice", "site")));
 
     var during = checker.repositoryScope("alice", TOKEN);
     assertFalse(during.allows(10L, 100L), "already fetched before the change, still left out");
@@ -288,7 +295,7 @@ class DashboardAccessCheckerTest {
   @ParameterizedTest
   @ValueSource(ints = {403, 404})
   void anInstallationGitHubRefusesToListIsSkippedAlone(int status) {
-    when(userClient.listRepositories(eq(AUTH), anyString(), eq(10L), eq(100), eq(1)))
+    when(tokenReads.userInstallationRepositories(AUTH, 10L))
         .thenThrow(new WebApplicationException(Response.status(status).build()));
 
     var scope = checker.repositoryScope("alice", TOKEN);
@@ -298,7 +305,7 @@ class DashboardAccessCheckerTest {
 
   @Test
   void aThrottled403ListingAnInstallationLeavesAccessUnresolved() {
-    when(userClient.listRepositories(eq(AUTH), anyString(), eq(10L), eq(100), eq(1)))
+    when(tokenReads.userInstallationRepositories(AUTH, 10L))
         .thenThrow(
             new WebApplicationException(
                 Response.status(403)
@@ -311,7 +318,7 @@ class DashboardAccessCheckerTest {
 
   @Test
   void aServerErrorListingAnInstallationLeavesAccessUnresolved() {
-    when(userClient.listRepositories(eq(AUTH), anyString(), eq(10L), eq(100), eq(1)))
+    when(tokenReads.userInstallationRepositories(AUTH, 10L))
         .thenThrow(new WebApplicationException(Response.status(502).build()));
 
     assertEquals(AccessDecision.UNAVAILABLE, checker.checkAccess("alice", TOKEN));
@@ -468,7 +475,7 @@ class DashboardAccessCheckerTest {
 
   @Test
   void aRejectedTokenWhileListingRepositoriesAlsoEndsTheSession() {
-    when(userClient.listRepositories(eq(AUTH), anyString(), eq(20L), eq(100), eq(1)))
+    when(tokenReads.userInstallationRepositories(AUTH, 20L))
         .thenThrow(new WebApplicationException(Response.status(401).build()));
 
     assertEquals(AccessDecision.TOKEN_REJECTED, checker.checkAccess("alice", TOKEN));
@@ -568,41 +575,18 @@ class DashboardAccessCheckerTest {
                     new Installation(30L, null, null),
                     new Installation(31L, new Installation.Account(null, "User"), null),
                     installation(20L, "alice", "User"))));
-    var owner = new InstallationRepositoriesResponse.Repository.Owner("alice");
-    when(userClient.listRepositories(eq(AUTH), anyString(), eq(20L), eq(100), eq(1)))
+    when(tokenReads.userInstallationRepositories(AUTH, 20L))
         .thenReturn(
-            new InstallationRepositoriesResponse(
-                5,
-                List.of(
-                    new InstallationRepositoriesResponse.Repository(0L, "no-id", owner),
-                    new InstallationRepositoriesResponse.Repository(201L, null, owner),
-                    new InstallationRepositoriesResponse.Repository(202L, "no-owner", null),
-                    new InstallationRepositoriesResponse.Repository(
-                        203L,
-                        "no-login",
-                        new InstallationRepositoriesResponse.Repository.Owner(null)),
-                    new InstallationRepositoriesResponse.Repository(200L, "site", owner),
-                    new InstallationRepositoriesResponse.Repository(200L, "site", owner))));
+            List.of(
+                new GitHubTokenReads.InstallationRepository(0L, "alice/no-id", null),
+                new GitHubTokenReads.InstallationRepository(201L, null, null),
+                repo(200L, "alice", "site"),
+                repo(200L, "alice", "site")));
 
     var scope = checker.repositoryScope("alice", TOKEN);
 
     assertEquals(List.of(20L), scope.sortedInstallations().stream().map(i -> i.id()).toList());
     assertEquals(Map.of(200L, "alice/site"), scope.installations().get(20L).repositories());
-  }
-
-  @Test
-  void pagesAreFollowedUntilAShortOne() {
-    var firstPage =
-        IntStream.rangeClosed(1, 100).mapToObj(i -> repo(1_000L + i, "alice", "repo" + i)).toList();
-    when(userClient.listRepositories(eq(AUTH), anyString(), eq(20L), eq(100), eq(1)))
-        .thenReturn(new InstallationRepositoriesResponse(101, firstPage));
-    when(userClient.listRepositories(eq(AUTH), anyString(), eq(20L), eq(100), eq(2)))
-        .thenReturn(
-            new InstallationRepositoriesResponse(101, List.of(repo(200L, "alice", "site"))));
-
-    assertEquals(
-        101,
-        checker.repositoryScope("alice", TOKEN).installations().get(20L).repositories().size());
   }
 
   @Test
@@ -618,9 +602,8 @@ class DashboardAccessCheckerTest {
   }
 
   @Test
-  void anEmptyPageEndsTheListingAndAnInstallationWithNothingReadableIsLeftOut() {
-    when(userClient.listRepositories(eq(AUTH), anyString(), eq(20L), eq(100), eq(1)))
-        .thenReturn(new InstallationRepositoriesResponse(0, null));
+  void anInstallationWithNothingReadableIsLeftOutBesideTheOthers() {
+    when(tokenReads.userInstallationRepositories(AUTH, 20L)).thenReturn(List.of());
 
     var scope = checker.repositoryScope("alice", TOKEN);
 
@@ -667,10 +650,8 @@ class DashboardAccessCheckerTest {
   }
 
   private void stubRepositories(
-      String auth, long installationId, InstallationRepositoriesResponse.Repository... repos) {
-    when(userClient.listRepositories(eq(auth), anyString(), eq(installationId), eq(100), eq(1)))
-        .thenReturn(
-            new InstallationRepositoriesResponse(repos.length, new ArrayList<>(List.of(repos))));
+      String auth, long installationId, GitHubTokenReads.InstallationRepository... repos) {
+    when(tokenReads.userInstallationRepositories(auth, installationId)).thenReturn(List.of(repos));
   }
 
   private void stubMembership(String login, int status) {
@@ -703,9 +684,7 @@ class DashboardAccessCheckerTest {
     return new Installation(id, new Installation.Account(account, type), null);
   }
 
-  private static InstallationRepositoriesResponse.Repository repo(
-      long id, String owner, String name) {
-    return new InstallationRepositoriesResponse.Repository(
-        id, name, new InstallationRepositoriesResponse.Repository.Owner(owner));
+  private static GitHubTokenReads.InstallationRepository repo(long id, String owner, String name) {
+    return new GitHubTokenReads.InstallationRepository(id, owner + "/" + name, null);
   }
 }

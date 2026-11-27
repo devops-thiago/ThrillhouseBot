@@ -17,7 +17,6 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.ArtifactZipFetcher;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubActionsClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubTokenReads;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
@@ -31,7 +30,6 @@ import java.util.NavigableSet;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.stream.Collectors;
-import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 /**
  * Patch coverage for the diff under review: the lines this pull request ADDS that the repository's
@@ -66,8 +64,6 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
  */
 @ApplicationScoped
 public class PatchCoverageResolver {
-
-  private static final String ACCEPT = "application/vnd.github+json";
 
   /**
    * Run conclusions whose coverage report may be trusted as measured fact. {@code success} is the
@@ -107,27 +103,19 @@ public class PatchCoverageResolver {
   }
 
   private final GitHubTokenReads tokenReads;
-  private final GitHubActionsClient actionsClient;
   private final ArtifactZipFetcher zipFetcher;
   private final boolean enabled;
 
   @Inject
   public PatchCoverageResolver(
-      GitHubTokenReads tokenReads,
-      @RestClient GitHubActionsClient actionsClient,
-      ArtifactZipFetcher zipFetcher,
-      ThrillhouseConfig config) {
-    this(tokenReads, actionsClient, zipFetcher, config.review().patchCoverage().enabled());
+      GitHubTokenReads tokenReads, ArtifactZipFetcher zipFetcher, ThrillhouseConfig config) {
+    this(tokenReads, zipFetcher, config.review().patchCoverage().enabled());
   }
 
   /** Visible for tests: the deployment kill switch is passed directly. */
   PatchCoverageResolver(
-      GitHubTokenReads tokenReads,
-      GitHubActionsClient actionsClient,
-      ArtifactZipFetcher zipFetcher,
-      boolean enabled) {
+      GitHubTokenReads tokenReads, ArtifactZipFetcher zipFetcher, boolean enabled) {
     this.tokenReads = tokenReads;
-    this.actionsClient = actionsClient;
     this.zipFetcher = zipFetcher;
     this.enabled = enabled;
   }
@@ -201,22 +189,22 @@ public class PatchCoverageResolver {
   /** The coverage report the named artifact holds, or an empty report when there is none. */
   private JacocoCoverageReport loadReport(
       String auth, String owner, String repo, String headSha, String artifactName) {
-    var artifactId = findArtifactId(auth, owner, repo, headSha, artifactName);
-    if (artifactId == null) {
+    var artifact = findArtifact(auth, owner, repo, headSha, artifactName);
+    if (artifact == null) {
       Log.debugf("No '%s' artifact on a completed run for %s", artifactName, headSha);
       return JacocoCoverageReport.EMPTY;
     }
-    var zipBytes = download(auth, owner, repo, artifactId);
+    var zipBytes = download(artifact);
     return JacocoCoverageReport.fromArtifactZip(zipBytes);
   }
 
   /**
-   * The id of the named, unexpired artifact on a completed workflow run for {@code headSha}, or
-   * {@code null} when no run has one. The {@code head_sha} filter is applied by GitHub and
-   * re-checked here, because attributing another commit's coverage to this diff would point the
-   * reviewer at line numbers that mean nothing.
+   * The named, unexpired artifact on a completed workflow run for {@code headSha}, or {@code null}
+   * when no run has one. The {@code head_sha} filter is applied by GitHub and re-checked here,
+   * because attributing another commit's coverage to this diff would point the reviewer at line
+   * numbers that mean nothing.
    */
-  private Long findArtifactId(
+  private GitHubTokenReads.Artifact findArtifact(
       String auth, String owner, String repo, String headSha, String artifactName) {
     // One page on purpose, and not the single-page truncation this project flags elsewhere.
     // GitHub applies head_sha as a query parameter, so the page holds only the runs for the one
@@ -242,9 +230,9 @@ public class PatchCoverageResolver {
             .limit(MAX_RUNS_PROBED)
             .toList();
     for (var run : candidates) {
-      var artifactId = artifactIdOnRun(run, artifactName);
-      if (artifactId != null) {
-        return artifactId;
+      var artifact = artifactOnRun(run, artifactName);
+      if (artifact != null) {
+        return artifact;
       }
     }
     return null;
@@ -255,15 +243,15 @@ public class PatchCoverageResolver {
     return conclusion != null && USABLE_CONCLUSIONS.contains(conclusion.toLowerCase(Locale.ROOT));
   }
 
-  /** The named, unexpired artifact's id on one run, or {@code null} when it has none. */
-  private static Long artifactIdOnRun(GitHubTokenReads.WorkflowRun run, String artifactName) {
+  /** The named, unexpired artifact on one run, or {@code null} when it has none. */
+  private static GitHubTokenReads.Artifact artifactOnRun(
+      GitHubTokenReads.WorkflowRun run, String artifactName) {
     // Single page again, for the same reason and with more headroom: this is scoped to ONE run
     // and asks for GitHub's maximum page size, so it truncates only for a run that uploaded more
     // than ARTIFACTS_PER_PAGE artifacts. The consequence is identical — the report is not found
     // and the feature contributes nothing.
     return run.artifacts().stream()
         .filter(artifact -> !artifact.expired() && artifactName.equalsIgnoreCase(artifact.name()))
-        .map(GitHubTokenReads.Artifact::id)
         .findFirst()
         .orElse(null);
   }
@@ -272,15 +260,13 @@ public class PatchCoverageResolver {
    * The artifact archive's bytes. GitHub answers the download endpoint with a redirect to a
    * pre-signed blob URL, which is fetched separately and without the installation token.
    */
-  private byte[] download(String auth, String owner, String repo, long artifactId) {
-    try (var response = actionsClient.downloadArtifact(auth, ACCEPT, owner, repo, artifactId)) {
-      var location = response == null ? null : response.getLocation();
-      if (location == null) {
-        Log.debugf("Artifact download for %d returned no redirect location", artifactId);
-        return new byte[0];
-      }
-      return zipFetcher.fetch(location);
+  private byte[] download(GitHubTokenReads.Artifact artifact) {
+    var location = artifact.downloadLocation();
+    if (location.isEmpty()) {
+      Log.debugf("Artifact download for %d returned no redirect location", artifact.id());
+      return new byte[0];
     }
+    return zipFetcher.fetch(location.get());
   }
 
   // ---------------------------------------------------------------- intersection
