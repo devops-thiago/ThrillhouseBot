@@ -30,7 +30,8 @@ import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
  * <p>These stay on a REST client because of hub4j limitations: it has no method for {@code GET
  * /user/installations/{installation_id}/repositories}, and it reaches {@code GET
  * /user/installations} only through {@code getMyself()}, which reads the user first and then each
- * account again for its type. This goes away once hub4j covers both.
+ * account again for its type. This goes away once hub4j covers both; the missing method is <a
+ * href="https://github.com/hub4j/github-api/issues/2352">hub4j/github-api#2352</a>.
  */
 @RegisterRestClient(configKey = "github-api")
 @RegisterProvider(GitHubErrorLogger.class)

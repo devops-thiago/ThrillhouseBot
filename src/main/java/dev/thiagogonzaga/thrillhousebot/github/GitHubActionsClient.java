@@ -32,8 +32,9 @@ import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
  * <p>These stay on a REST client because of a hub4j limitation: {@code GHArtifact.download} and
  * {@code GHWorkflowJob.downloadLogs} follow GitHub's redirect themselves and do not give out the
  * pre-signed URL, so the https-only, size-bounded fetch without the installation token that the
- * callers make would be lost. This goes away once hub4j gives out that URL. The listings are read
- * through {@link GitHubTokenReads}.
+ * callers make would be lost. This goes away once hub4j gives out that URL (<a
+ * href="https://github.com/hub4j/github-api/issues/2351">hub4j/github-api#2351</a>). The listings
+ * are read through {@link GitHubTokenReads}.
  */
 @RegisterRestClient(configKey = "github-api")
 @RegisterProvider(GitHubErrorLogger.class)
