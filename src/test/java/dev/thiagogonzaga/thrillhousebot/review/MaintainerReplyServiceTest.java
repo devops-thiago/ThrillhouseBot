@@ -44,6 +44,8 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
@@ -322,6 +324,24 @@ class MaintainerReplyServiceTest {
         MaintainerReplyService.clearDirectiveUnauthorizedAck(BotIdentity.from(null)), threadAck());
   }
 
+  /**
+   * An organization member is not a maintainer of every repository: the association passes the
+   * first check, and GitHub's permission answer (read) is what decides.
+   */
+  @Test
+  void aClearDirectiveFromAMemberWithoutConfirmedWriteAccessResolvesNothing() {
+    authorize();
+    botFindingThread();
+    when(authorizer.holdsWriteAccess("owner", "repo", 12345L, "octocat", "MEMBER"))
+        .thenReturn(false);
+
+    service.handle(threadReply("@thrillhousebot resolved", "MEMBER"));
+
+    verifyNoInteractions(reviewThreadService, replyAssistant);
+    assertEquals(
+        MaintainerReplyService.clearDirectiveUnauthorizedAck(BotIdentity.from(null)), threadAck());
+  }
+
   /** A directive naming another file is about another finding: lean to hold. */
   @Test
   void aClearDirectiveNamingAnotherFileResolvesNothingHere() {
@@ -448,8 +468,15 @@ class MaintainerReplyServiceTest {
         null);
   }
 
+  /**
+   * The commenter may address the bot, and GitHub confirms write access for every commenter whose
+   * association could hold it, so the association a task carries still decides its directive.
+   */
   private void authorize() {
     when(authorizer.isAuthorized(any(), any(), anyLong(), any(), any())).thenReturn(true);
+    lenient()
+        .when(authorizer.holdsWriteAccess(any(), any(), anyLong(), any(), any()))
+        .thenAnswer(inv -> VerifiedWriters.mayHoldWriteAccess(inv.getArgument(4)));
   }
 
   @Test
@@ -1374,6 +1401,27 @@ class MaintainerReplyServiceTest {
    * author_association}, but the clearing path requires a write-capable one. The ack must not
    * promise a closure that gate will refuse.
    */
+  @ParameterizedTest
+  @ValueSource(strings = {"resolved", "declined"})
+  void aDirectiveFromAMemberWithoutConfirmedWriteAccessIsToldItChangesNothing(String verb) {
+    authorize();
+    when(authorizer.holdsWriteAccess("owner", "repo", 12345L, "octocat", "MEMBER"))
+        .thenReturn(false);
+
+    service.handle(
+        mentionTask("@thrillhousebot " + verb + " `src/A.java:10` — SQL injection", "MEMBER"));
+
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .createComment(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), body.capture());
+    assertEquals(
+        "resolved".equals(verb)
+            ? MaintainerReplyService.clearDirectiveUnauthorizedAck(BotIdentity.from(null))
+            : MaintainerReplyService.declineDirectiveUnauthorizedAck(BotIdentity.from(null)),
+        body.getValue().body());
+    verifyNoInteractions(replyAssistant, prClient, findingStates);
+  }
+
   @Test
   void clearDirectiveFromACommenterWhoCannotClearSaysNothingWillBeCleared() {
     authorize();

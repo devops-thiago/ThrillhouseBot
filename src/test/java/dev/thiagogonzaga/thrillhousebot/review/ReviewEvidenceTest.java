@@ -131,28 +131,29 @@ class ReviewEvidenceTest {
   private static ReviewContextLoader.ReviewContext context(
       List<FileDiff> files, String patchCoverage) {
     return new ReviewContextLoader.ReviewContext(
-        files,
-        "diff",
-        "base",
-        0,
-        List.of(),
-        List.of(),
-        List.of(),
-        true,
-        false,
-        null,
-        List.of(),
-        "",
-        new InstructionsResolver.ResolvedInstructions("", ""),
-        PathScopedInstructions.NONE,
-        List.of(),
-        "stack",
-        "",
-        "",
-        patchCoverage,
-        files,
-        () -> new DiffLineResolver(Map.of()),
-        new ReviewContextLoader.PrTotals(1, 1, 1));
+            files,
+            "diff",
+            "base",
+            0,
+            List.of(),
+            List.of(),
+            List.of(),
+            true,
+            false,
+            null,
+            List.of(),
+            "",
+            new InstructionsResolver.ResolvedInstructions("", ""),
+            PathScopedInstructions.NONE,
+            List.of(),
+            "stack",
+            "",
+            "",
+            patchCoverage,
+            files,
+            () -> new DiffLineResolver(Map.of()),
+            new ReviewContextLoader.PrTotals(1, 1, 1))
+        .withVerifiedWriters(KnownWriters.ALL);
   }
 
   @Test

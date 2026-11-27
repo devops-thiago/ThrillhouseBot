@@ -285,19 +285,19 @@ class ReviewOrchestratorTest {
     when(findingVerificationService.verify(
             anyLong(), any(), any(), any(), any(), any(), any(), any()))
         .thenAnswer(invocation -> invocation.getArgument(1));
-    when(followUpAnalyzer.dropRepliedDuplicates(any(), any(), any(), any()))
+    when(followUpAnalyzer.dropRepliedDuplicates(any(), any(), any(), any(), any()))
         .thenAnswer(invocation -> invocation.getArgument(0));
     lenient().when(followUpAnalyzer.parsePreviousResponses(any())).thenReturn(List.of());
     lenient()
         .when(
             followUpAnalyzer.heldPreviousFindings(
-                any(), any(), any(), any(), any(), any(), any(), any()))
+                any(), any(), any(), any(), any(), any(), any(), any(), any()))
         .thenReturn(List.of());
     lenient()
-        .when(followUpAnalyzer.clearNamedInConversation(any(), any(), any(), any()))
+        .when(followUpAnalyzer.clearNamedInConversation(any(), any(), any(), any(), any()))
         .thenAnswer(invocation -> invocation.getArgument(1));
     lenient()
-        .when(followUpAnalyzer.clearNamedInConversation(any(), any(), any(), any(), any()))
+        .when(followUpAnalyzer.clearNamedInConversation(any(), any(), any(), any(), any(), any()))
         .thenAnswer(invocation -> invocation.getArgument(1));
     lenient()
         .when(
@@ -403,7 +403,8 @@ class ReviewOrchestratorTest {
         BOT_ID,
         new ActiveModelSettings(config, "m"),
         carryover,
-        findingStates);
+        findingStates,
+        KnownWriters.resolver());
   }
 
   /** The CI-completion path wired to the same GitHub mocks as the orchestrator (#825). */
@@ -3327,7 +3328,7 @@ class ReviewOrchestratorTest {
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
             .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
         when(followUpAnalyzer.buildPreviousFindingsContext(
-                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID), any(), any()))
+                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID), any(), any(), any()))
             .thenReturn("Previous finding context");
         when(sessionPersistence.findAllPriorAiResponseJsons(
                 new RepoScope(123L, TestScopes.REPOSITORY_ID), 42, 1L))
@@ -3373,10 +3374,11 @@ class ReviewOrchestratorTest {
                 eq(List.of(round1)),
                 eq(BOT_ID),
                 any(),
+                any(),
                 any());
         verify(followUpAnalyzer)
             .dropRepliedDuplicates(
-                any(), eq(List.of("{\"round\":2}", "{\"round\":1}")), any(), eq(BOT_ID));
+                any(), eq(List.of("{\"round\":2}", "{\"round\":1}")), any(), eq(BOT_ID), any());
         // The round did not approve the new head, so the bot's approval of the old one is
         // withdrawn.
         verify(reviewClient)
@@ -8027,12 +8029,12 @@ class ReviewOrchestratorTest {
                 new RepoScope(123L, TestScopes.REPOSITORY_ID), 42, 1L))
             .thenReturn(List.of(PRIOR_FINDING_JSON));
         when(followUpAnalyzer.buildPreviousFindingsContext(
-                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID), any(), any()))
+                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID), any(), any(), any()))
             .thenReturn("1. [MEDIUM] src/Main.java:10 — Dropped finding");
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
         when(followUpAnalyzer.heldPreviousFindings(
-                any(), any(), any(), any(), any(), eq(BOT_ID), any(), any()))
+                any(), any(), any(), any(), any(), eq(BOT_ID), any(), any(), any()))
             .thenReturn(
                 List.of(
                     new FollowUpAnalyzer.HeldPrevious(
@@ -8067,14 +8069,14 @@ class ReviewOrchestratorTest {
                 new RepoScope(123L, TestScopes.REPOSITORY_ID), 42, 1L))
             .thenReturn(List.of(PRIOR_FINDING_JSON));
         when(followUpAnalyzer.buildPreviousFindingsContext(
-                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID), any(), any()))
+                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID), any(), any(), any()))
             .thenReturn("previous context");
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
         var gone =
             new ReviewResponse.Finding("high", "src/Old.java", 3, "Gone finding", "d", "x", null);
         when(followUpAnalyzer.heldPreviousFindings(
-                any(), any(), any(), any(), any(), eq(BOT_ID), any(), any()))
+                any(), any(), any(), any(), any(), eq(BOT_ID), any(), any(), any()))
             .thenReturn(
                 List.of(
                     new FollowUpAnalyzer.HeldPrevious(
@@ -8107,7 +8109,7 @@ class ReviewOrchestratorTest {
                 new RepoScope(123L, TestScopes.REPOSITORY_ID), 42, 1L))
             .thenReturn(List.of(PRIOR_FINDING_JSON));
         when(followUpAnalyzer.buildPreviousFindingsContext(
-                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID), any(), any()))
+                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID), any(), any(), any()))
             .thenReturn("previous context");
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -8116,7 +8118,7 @@ class ReviewOrchestratorTest {
 
         verify(followUpAnalyzer)
             .buildPreviousFindingsContext(
-                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID), any(), any());
+                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID), any(), any(), any());
       }
     }
 
@@ -8132,7 +8134,7 @@ class ReviewOrchestratorTest {
                 new RepoScope(123L, TestScopes.REPOSITORY_ID), 42, 1L))
             .thenReturn(List.of(PRIOR_FINDING_JSON));
         when(followUpAnalyzer.buildPreviousFindingsContext(
-                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID), any(), any()))
+                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID), any(), any(), any()))
             .thenReturn("previous context");
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -8151,7 +8153,7 @@ class ReviewOrchestratorTest {
                 argThat(req -> req.body().contains("ThrillhouseBot PR Summary")));
         verify(followUpAnalyzer)
             .buildPreviousFindingsContext(
-                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID), any(), any());
+                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID), any(), any(), any());
       }
     }
 
@@ -8192,7 +8194,7 @@ class ReviewOrchestratorTest {
                 new RepoScope(123L, TestScopes.REPOSITORY_ID), 42, 1L))
             .thenReturn(List.of(PRIOR_FINDING_JSON));
         when(followUpAnalyzer.buildPreviousFindingsContext(
-                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID), any(), any()))
+                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID), any(), any(), any()))
             .thenReturn("1. [MEDIUM] src/Main.java:10 — Dropped finding");
         // The silent drop: this round reports neither the finding nor a status for it.
         when(aiReviewService.review(any(ReviewSession.class), any()))
@@ -8237,7 +8239,7 @@ class ReviewOrchestratorTest {
             .thenAnswer(inv -> inv.getArgument(1));
         when(followUpAnalyzer.addUnreportedVanished(any(), any(), any(), any()))
             .thenAnswer(inv -> inv.getArgument(1));
-        when(followUpAnalyzer.recheckDeclines(any(), any(), any(), any(), any(), any()))
+        when(followUpAnalyzer.recheckDeclines(any(), any(), any(), any(), any(), any(), any()))
             .thenReturn(
                 List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "reopened")));
         when(followUpAnalyzer.matchFindingThreads(
@@ -8247,7 +8249,7 @@ class ReviewOrchestratorTest {
                 new RepoScope(123L, TestScopes.REPOSITORY_ID), 42, 1L))
             .thenReturn(List.of(PRIOR_FINDING_JSON));
         when(followUpAnalyzer.buildPreviousFindingsContext(
-                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID), any(), any()))
+                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID), any(), any(), any()))
             .thenReturn("previous context");
         when(reviewClient.listPullRequestComments(
                 anyString(), anyString(), anyString(), anyString(), anyInt()))
@@ -8280,7 +8282,7 @@ class ReviewOrchestratorTest {
       when(followUpAnalyzer.parsePreviousResponses(any()))
           .thenAnswer(invocation -> realAnalyzer.parsePreviousResponses(invocation.getArgument(0)));
       when(followUpAnalyzer.heldPreviousFindings(
-              any(), any(), any(), any(), any(), eq(BOT_ID), any(), any()))
+              any(), any(), any(), any(), any(), eq(BOT_ID), any(), any(), any()))
           .thenAnswer(
               invocation ->
                   realAnalyzer.heldPreviousFindings(
@@ -8291,7 +8293,8 @@ class ReviewOrchestratorTest {
                       invocation.getArgument(4),
                       invocation.getArgument(5),
                       invocation.getArgument(6),
-                      invocation.getArgument(7)));
+                      invocation.getArgument(7),
+                      invocation.getArgument(8)));
     }
 
     private static final String PRIOR_FINDING_JSON =
@@ -10175,7 +10178,7 @@ class ReviewOrchestratorTest {
       when(followUpAnalyzer.parsePreviousResponses(any()))
           .thenAnswer(inv -> realAnalyzer.parsePreviousResponses(inv.getArgument(0)));
       when(followUpAnalyzer.buildPreviousFindingsContext(
-              anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID), any(), any()))
+              anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID), any(), any(), any()))
           .thenAnswer(
               inv ->
                   realAnalyzer.buildPreviousFindingsContext(
@@ -10186,7 +10189,8 @@ class ReviewOrchestratorTest {
                       inv.getArgument(4),
                       inv.getArgument(5),
                       inv.getArgument(6),
-                      inv.getArgument(7)));
+                      inv.getArgument(7),
+                      inv.getArgument(8)));
       // Run 1 finds one thing; the replacement finds nothing of its own — the #806 shape, where
       // the only run that posts is the quiet one.
       when(aiReviewService.review(any(ReviewSession.class), any()))
@@ -10257,7 +10261,7 @@ class ReviewOrchestratorTest {
                       inv.getArgument(3),
                       inv.getArgument(4),
                       inv.<Integer>getArgument(5)));
-      when(followUpAnalyzer.recheckDeclines(any(), any(), any(), any(), any(), any()))
+      when(followUpAnalyzer.recheckDeclines(any(), any(), any(), any(), any(), any(), any()))
           .thenAnswer(inv -> inv.getArgument(1));
       when(followUpAnalyzer.unresolvedFindings(
               ArgumentMatchers.<List<ReviewResponse.Finding>>any(), any()))

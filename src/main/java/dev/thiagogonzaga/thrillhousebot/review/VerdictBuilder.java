@@ -321,9 +321,16 @@ public class VerdictBuilder {
     // paths must not pay for a patch re-parse (#135).
     // #1319: a status on an older round's finding the prompt numbered after the effective round's
     // is not the effective round's; its "resolved" goes to the backstop by the finding's key.
+    // A "justified" stands only with a maintainer behind it: the model reads every thread reply,
+    // and one from an author without confirmed write access cannot close a finding.
     var rawStatuses =
-        FollowUpAnalyzer.effectiveRoundStatuses(
-            ctx, aiResponse.previousFindingsStatus(), botIdentity);
+        FollowUpAnalyzer.withoutUnconfirmedDeclines(
+            ctx.previousFindingsList(),
+            FollowUpAnalyzer.effectiveRoundStatuses(
+                ctx, aiResponse.previousFindingsStatus(), botIdentity),
+            ctx.inlineComments(),
+            botIdentity,
+            ctx.verifiedWriters());
     var earlierResolutions =
         FollowUpAnalyzer.earlierRoundResolutions(
             ctx, aiResponse.previousFindingsStatus(), botIdentity);
@@ -369,6 +376,7 @@ public class VerdictBuilder {
             ctx.inlineComments(),
             ctx.conversationComments(),
             botIdentity,
+            ctx.verifiedWriters(),
             reviewedCode);
     // A finding that never posted inline has no thread to reply on, so the only maintainer action
     // that can close it is an "@thrillhousebot resolved" comment naming it on the PR conversation
@@ -380,7 +388,8 @@ public class VerdictBuilder {
             effectiveStatuses,
             ctx.conversationComments(),
             ctx.inlineComments(),
-            botIdentity);
+            botIdentity,
+            ctx.verifiedWriters());
     // "Still present" counts these statuses and the summary lists one finding per id, so an id
     // reported unresolved twice, or one naming no finding, must not be counted either (#934).
     effectiveStatuses =
@@ -413,6 +422,7 @@ public class VerdictBuilder {
                     ctx.conversationComments(),
                     ctx.lineResolver(),
                     botIdentity,
+                    ctx.verifiedWriters(),
                     currentRenameTargets,
                     reviewedCode)
                 .stream()

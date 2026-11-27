@@ -74,6 +74,27 @@ class ManualReviewAuthorizerTest {
   }
 
   @Test
+  void holdingWriteAccessIsDecidedByThePermissionAnswerAndNeverByTheAllowlist() throws Exception {
+    when(reviewConfig.manualTriggerAllowedLogins()).thenReturn(Optional.of(List.of("sorter")));
+    doReturn(GHPermissionType.WRITE).when(repository).getPermission("keeper");
+    doReturn(GHPermissionType.READ).when(repository).getPermission("sorter");
+
+    assertTrue(authorizer.holdsWriteAccess("o", "r", 1L, "keeper", "MEMBER"));
+    assertFalse(
+        authorizer.holdsWriteAccess("o", "r", 1L, "sorter", "MEMBER"),
+        "an allowlisted member with read access may request a review, not close a finding");
+    assertTrue(authorizer.isAuthorized("o", "r", 1L, "sorter", "MEMBER"));
+  }
+
+  @Test
+  void holdingWriteAccessIsRefusedWithoutACallWhenTheAssociationCannotHoldIt() {
+    assertFalse(authorizer.holdsWriteAccess("o", "r", 1L, "drive-by", "CONTRIBUTOR"));
+    assertFalse(authorizer.holdsWriteAccess("o", "r", 1L, null, "OWNER"));
+    assertFalse(authorizer.holdsWriteAccess("o", "r", 1L, " ", "OWNER"));
+    verifyNoInteractions(clientProvider);
+  }
+
+  @Test
   void shouldRejectBlankOrNullLogin() {
     assertFalse(authorizer.isAuthorized("o", "r", 1L, null, "OWNER"));
     assertFalse(authorizer.isAuthorized("o", "r", 1L, "   ", "OWNER"));

@@ -288,6 +288,7 @@ class RetriedFollowUpRoundTest {
             threads,
             List.of(roundOne),
             BOT,
+            KnownWriters.ALL,
             Set.of(),
             FollowUpAnalyzer.openEarlierRoundFindings(
                 ctx.priorAiResponses(), ctx.lineResolver(), Map.of(), threads, BOT));
@@ -448,7 +449,8 @@ class RetriedFollowUpRoundTest {
         List.of(),
         SupersededFindingsCarryover.Carried.NONE,
         "",
-        true);
+        true,
+        KnownWriters.ALL);
   }
 
   private static List<String> titles(List<?> findings) {

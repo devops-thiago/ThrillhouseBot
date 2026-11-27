@@ -574,8 +574,9 @@ public interface GitHubReviewClient {
    *
    * <p>{@code authorAssociation} is GitHub's per-comment statement of the author's relationship to
    * the repository ({@code OWNER}/{@code MEMBER}/{@code COLLABORATOR}/{@code CONTRIBUTOR}/{@code
-   * NONE}/…). The follow-up analyzer uses it to tell a write-capable maintainer's reply — which may
-   * clear an approve hold or overrule a finding — from a fork-PR author's, which may not.
+   * NONE}/…). The follow-up analyzer uses it as the first check that tells a maintainer's reply,
+   * which may clear an approve hold or overrule a finding, from a fork-PR author's, which may not.
+   * It grants nothing by itself: the author's write access must also be confirmed with GitHub.
    *
    * <p>{@code line} and {@code originalLine} are the comment's line on the current and on the
    * original diff ({@code null} when GitHub gives none, as for a file-level comment or an outdated

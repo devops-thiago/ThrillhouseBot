@@ -117,9 +117,10 @@ public class FollowUpAnalyzer {
   public String buildPreviousFindingsContext(
       String previousAiResponseJson,
       List<GitHubReviewClient.ReviewResponse> priorReviews,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
     return buildPreviousFindingsContext(
-        previousAiResponseJson, priorReviews, List.of(), botIdentity);
+        previousAiResponseJson, priorReviews, List.of(), botIdentity, writers);
   }
 
   /**
@@ -130,9 +131,10 @@ public class FollowUpAnalyzer {
       String previousAiResponseJson,
       List<GitHubReviewClient.ReviewResponse> priorReviews,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
     return buildPreviousFindingsContext(
-        previousAiResponseJson, priorReviews, inlineComments, List.of(), botIdentity);
+        previousAiResponseJson, priorReviews, inlineComments, List.of(), botIdentity, writers);
   }
 
   /**
@@ -146,7 +148,8 @@ public class FollowUpAnalyzer {
       List<GitHubReviewClient.ReviewResponse> priorReviews,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       List<String> olderAiResponseJsons,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
     var previous = parseResponse(previousAiResponseJson);
     return buildPreviousFindingsContext(
         previous.findings(),
@@ -154,7 +157,8 @@ public class FollowUpAnalyzer {
         priorReviews,
         inlineComments,
         parsePreviousResponses(olderAiResponseJsons),
-        botIdentity);
+        botIdentity,
+        writers);
   }
 
   /**
@@ -174,31 +178,8 @@ public class FollowUpAnalyzer {
       List<GitHubReviewClient.ReviewResponse> priorReviews,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       List<ReviewResponse> olderAiResponses,
-      BotIdentity botIdentity) {
-    return buildPreviousFindingsContext(
-        previousFindings,
-        previousResponsePersisted,
-        priorReviews,
-        inlineComments,
-        olderAiResponses,
-        botIdentity,
-        Set.of());
-  }
-
-  /**
-   * Variant that also skips prior findings a newer round already closed ({@code settledIds}, {@link
-   * #settledPreviousIds}) so the model is not re-shown a finding that has been settled and asked to
-   * re-account for it (#470). The settled entries keep their id slots — only their content is
-   * omitted — so the surviving ids do not shift.
-   */
-  public String buildPreviousFindingsContext(
-      List<ReviewResponse.Finding> previousFindings,
-      boolean previousResponsePersisted,
-      List<GitHubReviewClient.ReviewResponse> priorReviews,
-      List<GitHubReviewClient.PullRequestComment> inlineComments,
-      List<ReviewResponse> olderAiResponses,
       BotIdentity botIdentity,
-      Set<Integer> settledIds) {
+      VerifiedWriters writers) {
     return buildPreviousFindingsContext(
         previousFindings,
         previousResponsePersisted,
@@ -206,16 +187,21 @@ public class FollowUpAnalyzer {
         inlineComments,
         olderAiResponses,
         botIdentity,
-        settledIds,
+        writers,
+        Set.of(),
         List.of());
   }
 
   /**
-   * Variant that also lists the findings earlier rounds left open ({@link
-   * #openEarlierRoundFindings}), unnumbered and outside previous_findings_status like the answered
-   * ones, so a follow-up round after one that raised something new is still told what is already
-   * posted (#939). Without it those findings reach the model as never reported, and it raises them
-   * again.
+   * Variant that skips prior findings a newer round already closed ({@code settledIds}, {@link
+   * #settledPreviousIds}) so the model is not re-shown a finding that has been settled and asked to
+   * re-account for it (#470). The settled entries keep their id slots — only their content is
+   * omitted — so the surviving ids do not shift.
+   *
+   * <p>It also lists the findings earlier rounds left open ({@link #openEarlierRoundFindings}),
+   * unnumbered and outside previous_findings_status like the answered ones, so a follow-up round
+   * after one that raised something new is still told what is already posted (#939). Without it
+   * those findings reach the model as never reported, and it raises them again.
    */
   @SuppressWarnings("java:S107")
   public String buildPreviousFindingsContext(
@@ -225,16 +211,19 @@ public class FollowUpAnalyzer {
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       List<ReviewResponse> olderAiResponses,
       BotIdentity botIdentity,
+      VerifiedWriters writers,
       Set<Integer> settledIds,
       List<ReviewResponse.Finding> openEarlier) {
     var structured =
-        formatStructuredFindings(previousFindings, inlineComments, botIdentity, settledIds);
-    var answered = formatAnsweredEarlier(olderAiResponses, inlineComments, botIdentity);
-    var stillOpen = formatOpenEarlier(openEarlier, previousFindings, inlineComments, botIdentity);
+        formatStructuredFindings(
+            previousFindings, inlineComments, botIdentity, writers, settledIds);
+    var answered = formatAnsweredEarlier(olderAiResponses, inlineComments, botIdentity, writers);
+    var stillOpen =
+        formatOpenEarlier(openEarlier, previousFindings, inlineComments, botIdentity, writers);
     if (!structured.isEmpty() || previousResponsePersisted) {
       return structured + stillOpen + answered;
     }
-    var fallback = buildPreviousFindingsContext(priorReviews, botIdentity);
+    var fallback = buildPreviousFindingsContext(priorReviews, botIdentity, writers);
     return fallback + stillOpen + answered;
   }
 
@@ -247,12 +236,13 @@ public class FollowUpAnalyzer {
       List<ReviewResponse.Finding> openEarlier,
       List<ReviewResponse.Finding> previousFindings,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
     var sb = new StringBuilder();
     var seen = new HashSet<String>();
     for (var finding : openEarlier) {
       if (!seen.add(finding.file() + "#" + finding.title())
-          || answeredRootComment(finding, inlineComments, botIdentity) != null
+          || answeredRootComment(finding, inlineComments, botIdentity, writers) != null
           || previousFindings.stream().anyMatch(numbered -> isSameFinding(finding, numbered))) {
         continue;
       }
@@ -374,7 +364,8 @@ public class FollowUpAnalyzer {
   private String formatAnsweredEarlier(
       List<ReviewResponse> olderAiResponses,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
     if (olderAiResponses == null || olderAiResponses.isEmpty()) {
       return "";
     }
@@ -382,7 +373,7 @@ public class FollowUpAnalyzer {
     var seen = new HashSet<String>();
     for (var response : olderAiResponses) {
       for (var finding : response.findings()) {
-        appendAnsweredEntry(sb, seen, finding, inlineComments, botIdentity);
+        appendAnsweredEntry(sb, seen, finding, inlineComments, botIdentity, writers);
       }
     }
     return sb.toString();
@@ -398,14 +389,15 @@ public class FollowUpAnalyzer {
       Set<String> seen,
       ReviewResponse.Finding finding,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
     if (finding.file() == null || finding.title() == null) {
       return;
     }
     if (!seen.add(finding.file() + "#" + finding.title())) {
       return;
     }
-    Long rootId = answeredRootComment(finding, inlineComments, botIdentity);
+    Long rootId = answeredRootComment(finding, inlineComments, botIdentity, writers);
     if (rootId == null) {
       return;
     }
@@ -420,7 +412,7 @@ public class FollowUpAnalyzer {
         .append(" — ")
         .append(finding.title())
         .append("\n");
-    appendReplies(sb, rootId, inlineComments);
+    appendReplies(sb, rootId, inlineComments, botIdentity, writers);
   }
 
   /**
@@ -433,6 +425,7 @@ public class FollowUpAnalyzer {
       List<ReviewResponse.Finding> previous,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       BotIdentity botIdentity,
+      VerifiedWriters writers,
       Set<Integer> settledIds) {
     if (previous == null || previous.isEmpty()) {
       return "";
@@ -448,7 +441,7 @@ public class FollowUpAnalyzer {
         continue;
       }
       appendNumberedEntry(sb, id, finding);
-      appendThreadReplies(sb, finding, id, inlineComments, botIdentity);
+      appendThreadReplies(sb, finding, id, inlineComments, botIdentity, writers);
       id++;
     }
     return sb.toString();
@@ -479,16 +472,29 @@ public class FollowUpAnalyzer {
       ReviewResponse.Finding finding,
       int findingId,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
     Long rootId = rootCommentId(finding, findingId, inlineComments, botIdentity);
     if (rootId == null) {
       return;
     }
-    appendReplies(sb, rootId, inlineComments);
+    appendReplies(sb, rootId, inlineComments, botIdentity, writers);
   }
 
+  /**
+   * Marks a thread reply whose author is neither the bot nor a confirmed write-access holder. The
+   * model still reads the reply, since it can point at real code, and the prompt tells it such a
+   * reply declines nothing. The label is guidance only: the rule itself is enforced on the model's
+   * answer ({@link #withoutUnconfirmedDeclines}).
+   */
+  static final String NO_WRITE_ACCESS_LABEL = " (no write access, context only)";
+
   private static void appendReplies(
-      StringBuilder sb, Long rootId, List<GitHubReviewClient.PullRequestComment> inlineComments) {
+      StringBuilder sb,
+      Long rootId,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
     List<GitHubReviewClient.PullRequestComment> replies =
         inlineComments.stream().filter(c -> rootId.equals(c.inReplyToId())).toList();
     if (replies.isEmpty()) {
@@ -497,7 +503,16 @@ public class FollowUpAnalyzer {
     sb.append("   Thread replies:\n");
     for (var reply : replies) {
       String author = reply.user() != null ? reply.user().login() : "unknown";
-      sb.append("   - @").append(author).append(": ").append(reply.body()).append("\n");
+      boolean trusted =
+          reply.user() != null
+              && (botIdentity.matches(author)
+                  || writers.isWriter(author, reply.authorAssociation()));
+      sb.append("   - @")
+          .append(author)
+          .append(trusted ? "" : NO_WRITE_ACCESS_LABEL)
+          .append(": ")
+          .append(reply.body())
+          .append("\n");
     }
   }
 
@@ -506,10 +521,11 @@ public class FollowUpAnalyzer {
    * thread resolution ({@link #matchFindingThreads}), and the decline re-check ({@link
    * #declineContradiction}). Marker indices are per-round 1-based positions, so index {@code N}
    * recurs every round; the same three-step content match {@link
-   * #answeredRootComment(ReviewResponse.Finding, int, List, BotIdentity)} uses for the
-   * safety-critical clearing decision applies here so a summary-only finding (no inline thread of
-   * its own that round, because {@link Finding#postsInline} routed it to the summary) does not bind
-   * to an <em>earlier, unrelated</em> round's same-index thread (F2 — the sibling defect of F5):
+   * #answeredRootComment(ReviewResponse.Finding, int, List, BotIdentity, VerifiedWriters)} uses for
+   * the safety-critical clearing decision applies here so a summary-only finding (no inline thread
+   * of its own that round, because {@link Finding#postsInline} routed it to the summary) does not
+   * bind to an <em>earlier, unrelated</em> round's same-index thread (F2 — the sibling defect of
+   * F5):
    *
    * <ol>
    *   <li>the finding's own {@code finding=N} thread ({@link #markerRootComment}: its key, or for a
@@ -653,9 +669,10 @@ public class FollowUpAnalyzer {
   private static Long answeredRootComment(
       ReviewResponse.Finding finding,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
     for (Long rootId : rootCommentsByTitle(finding, inlineComments, botIdentity)) {
-      if (hasHumanReply(rootId, inlineComments, botIdentity)) {
+      if (hasHumanReply(rootId, inlineComments, botIdentity, writers)) {
         return rootId;
       }
     }
@@ -667,10 +684,11 @@ public class FollowUpAnalyzer {
    * backstop's newest-prior-round case. The finding's own {@code thrillhousebot:finding=N} marked
    * thread is authoritative: when one exists, only a reply on <em>it</em> clears the hold. The
    * marker is title-independent, so a {@code null}-title finding's thread is seen — the title-only
-   * {@link #answeredRootComment(ReviewResponse.Finding, List, BotIdentity)} consults {@link
-   * #rootCommentsByTitle}, which returns {@code List.of()} for a null title and can never find the
-   * reply, leaving the backstop to hold the finding every round with no human escape. It also keeps
-   * a reply on a same-title sibling's thread (a different index) from clearing this finding.
+   * {@link #answeredRootComment(ReviewResponse.Finding, List, BotIdentity, VerifiedWriters)}
+   * consults {@link #rootCommentsByTitle}, which returns {@code List.of()} for a null title and can
+   * never find the reply, leaving the backstop to hold the finding every round with no human
+   * escape. It also keeps a reply on a same-title sibling's thread (a different index) from
+   * clearing this finding.
    *
    * <p>Because clearing the hold is the dangerous direction (over-clearing re-introduces the silent
    * approve-over-open), the marked thread must be the finding's own ({@link #markerRootComment}): a
@@ -690,15 +708,16 @@ public class FollowUpAnalyzer {
       ReviewResponse.Finding finding,
       int findingId,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
     Long own = markerRootComment(finding, findingId, inlineComments, botIdentity);
     if (own != null) {
-      return hasHumanReply(own, inlineComments, botIdentity) ? own : null;
+      return hasHumanReply(own, inlineComments, botIdentity, writers) ? own : null;
     }
     if (positionMarkedOnFile(finding, findingId, inlineComments, botIdentity)) {
       return null;
     }
-    return answeredRootComment(finding, inlineComments, botIdentity);
+    return answeredRootComment(finding, inlineComments, botIdentity, writers);
   }
 
   /** All bot root comments matching the finding's file and title, oldest first. */
@@ -746,7 +765,8 @@ public class FollowUpAnalyzer {
       ReviewResponse response,
       List<String> priorAiResponseJsons,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
     if (response.findings().isEmpty() || inlineComments.isEmpty()) {
       return response;
     }
@@ -760,7 +780,8 @@ public class FollowUpAnalyzer {
     var dropped = false;
     for (ReviewResponse.Finding finding : response.findings()) {
       ReviewResponse.Finding duplicateOf =
-          findRepliedDuplicate(finding, priorRounds, inlineComments, botIdentity, resolvedNow);
+          findRepliedDuplicate(
+              finding, priorRounds, inlineComments, botIdentity, writers, resolvedNow);
       if (duplicateOf == null) {
         kept.add(finding);
         continue;
@@ -802,6 +823,7 @@ public class FollowUpAnalyzer {
       List<List<ReviewResponse.Finding>> priorRounds,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       BotIdentity botIdentity,
+      VerifiedWriters writers,
       Set<String> resolvedNow) {
     for (List<ReviewResponse.Finding> previous : priorRounds) {
       for (var prior : previous) {
@@ -810,7 +832,7 @@ public class FollowUpAnalyzer {
         }
         // Marker indices are only meaningful within their own round; across rounds the same index
         // names unrelated findings, so the thread is located by file and title instead.
-        if (answeredRootComment(prior, inlineComments, botIdentity) != null) {
+        if (answeredRootComment(prior, inlineComments, botIdentity, writers) != null) {
           return prior;
         }
       }
@@ -918,13 +940,15 @@ public class FollowUpAnalyzer {
       List<ReviewResponse> priorRounds,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       List<GitHubCommentClient.IssueComment> conversationComments,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
     if (response.findings().isEmpty() || priorRounds.isEmpty()) {
       return response;
     }
     var dispositioned =
         distinct(
-            dispositionedFindings(priorRounds, inlineComments, conversationComments, botIdentity));
+            dispositionedFindings(
+                priorRounds, inlineComments, conversationComments, botIdentity, writers));
     if (dispositioned.isEmpty()) {
       return response;
     }
@@ -964,13 +988,15 @@ public class FollowUpAnalyzer {
       List<ReviewResponse> priorRounds,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       List<GitHubCommentClient.IssueComment> conversationComments,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
     var dispositioned = new ArrayList<ReviewResponse.Finding>();
-    var directives = maintainerDeclines(conversationComments, botIdentity);
+    var directives = maintainerDeclines(conversationComments, botIdentity, writers);
     for (var round : priorRounds) {
       for (var prior : round.findings()) {
-        if (answeredRootComment(prior, inlineComments, botIdentity) != null
-            || dispositionedInConversation(prior, conversationComments, directives, botIdentity)) {
+        if (answeredRootComment(prior, inlineComments, botIdentity, writers) != null
+            || dispositionedInConversation(
+                prior, conversationComments, directives, botIdentity, writers)) {
           dispositioned.add(prior);
         }
       }
@@ -1054,50 +1080,29 @@ public class FollowUpAnalyzer {
 
   /**
    * A maintainer reply that may clear an approve hold, drop a re-raised finding, or overrule a
-   * decline — a non-bot reply whose author holds (or may hold) write access to the repository.
+   * decline: a non-bot reply whose author holds write access to the repository.
    *
-   * <p>A reply's {@code author_association} is GitHub's per-comment statement of the author's
-   * relationship to the repo; only {@code OWNER}/{@code MEMBER}/{@code COLLABORATOR} can carry
-   * write access, so a fork-PR author's reply ({@code CONTRIBUTOR}/{@code NONE}/…) is not a
-   * maintainer decision and must not clear the backstop, delete a finding, or drive an override —
-   * it renders as context in the prompt only. This mirrors the cheap association prefilter {@code
-   * ManualReviewAuthorizer}/{@code FindingFeedbackCaptureService} apply before any write. The
-   * authoritative collaborator-permission call those services follow up with is not repeated here:
-   * these predicates run deep in the verdict path with no installation token in hand, and deferring
-   * a bot hold to an invited collaborator who engaged on the thread is the safe direction.
+   * <p>Write access is what GitHub's collaborator-permission answer says, resolved once per review
+   * into {@code writers} ({@link VerifiedWriters}). A reply's {@code author_association} is only
+   * the first check: {@code OWNER}/{@code MEMBER}/{@code COLLABORATOR} can carry write access, and
+   * a {@code MEMBER} or {@code COLLABORATOR} can also hold read or triage access only, so the
+   * association alone never makes a reply a maintainer decision. A fork-PR author's reply ({@code
+   * CONTRIBUTOR}/{@code NONE}/…), or one from an author whose access was not confirmed, must not
+   * clear the backstop, delete a finding, or drive an override; it renders as context in the prompt
+   * only.
    */
   private static boolean hasHumanReply(
       Long rootId,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
     return inlineComments.stream()
         .anyMatch(
             c ->
                 rootId.equals(c.inReplyToId())
                     && c.user() != null
                     && !botIdentity.matches(c.user().login())
-                    && mayHoldWriteAccess(c.authorAssociation()));
-  }
-
-  /**
-   * GitHub {@code author_association} values a write-access holder can present. Any other value
-   * provably lacks write access — association precedence guarantees a collaborator/member is never
-   * reported as one of those — so a reply carrying it is not a maintainer decision.
-   */
-  private static final Set<String> WRITE_CAPABLE_ASSOCIATIONS =
-      Set.of("OWNER", "MEMBER", "COLLABORATOR");
-
-  /**
-   * Package-private rather than private so {@link MaintainerReplyService} can acknowledge a clear
-   * or decline directive against the very gate that will decide it. The acknowledgment is written
-   * before any review runs, and the two used to disagree: the mention path admits a login on the
-   * manual-trigger allowlist whatever its association, while {@link #clearedInConversation}
-   * requires a write-capable one, so an allowlist-only commenter was promised a closure that never
-   * came.
-   */
-  static boolean mayHoldWriteAccess(String authorAssociation) {
-    return authorAssociation != null
-        && WRITE_CAPABLE_ASSOCIATIONS.contains(authorAssociation.strip().toUpperCase(Locale.ROOT));
+                    && writers.isWriter(c.user().login(), c.authorAssociation()));
   }
 
   /**
@@ -1532,9 +1537,9 @@ public class FollowUpAnalyzer {
    * <ul>
    *   <li>the comment is a human's, not the bot's — the bot's own summary lists every finding
    *       verbatim, so reading it back would clear the whole round;
-   *   <li>its author may hold write access ({@link #mayHoldWriteAccess}) — the same association
-   *       prefilter the review-thread hatch applies, so a drive-by commenter on a public repo
-   *       cannot clear a hold;
+   *   <li>its author holds write access ({@link VerifiedWriters#isWriter}) — the same prefilter the
+   *       review-thread hatch applies, so a drive-by commenter on a public repo cannot clear a
+   *       hold;
    *   <li>it <em>uses</em> the {@link #clearDirective} rather than quoting it ({@link
    *       #isClearDirective}: outside blockquotes, fences and inline code) — an ordinary comment
    *       that merely discusses a finding is engagement, not a decision, and a comment that shows
@@ -1553,7 +1558,8 @@ public class FollowUpAnalyzer {
   private static boolean clearedInConversation(
       ReviewResponse.Finding finding,
       List<GitHubCommentClient.IssueComment> conversationComments,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
     if (conversationComments == null || conversationComments.isEmpty() || finding.file() == null) {
       return false;
     }
@@ -1563,7 +1569,7 @@ public class FollowUpAnalyzer {
     }
     String locator = finding.file() + ":" + finding.line();
     for (var comment : conversationComments) {
-      if (!isMaintainerConversationComment(comment, botIdentity)
+      if (!isMaintainerConversationComment(comment, botIdentity, writers)
           || !isClearDirective(comment.body(), botIdentity)) {
         continue;
       }
@@ -1585,20 +1591,23 @@ public class FollowUpAnalyzer {
 
   /**
    * Every use of the decline directive by a maintainer on the PR conversation, in comment order —
-   * the non-bot, write-capable authorship gate of {@link #isMaintainerConversationComment}, the
-   * same one {@link #clearedInConversation} applies, because naming a finding wrongly costs the
-   * same whichever decision follows (#709). Parsed once per pass and handed to every per-finding
-   * match, since the parse depends on the comment and the bot identity alone; parsing inside the
-   * per-finding loop repeated it once per finding held or reported.
+   * the non-bot, confirmed-write-access authorship gate of {@link
+   * #isMaintainerConversationComment}, the same one {@link #clearedInConversation} applies, because
+   * naming a finding wrongly costs the same whichever decision follows (#709). Parsed once per pass
+   * and handed to every per-finding match, since the parse depends on the comment and the bot
+   * identity alone; parsing inside the per-finding loop repeated it once per finding held or
+   * reported.
    */
   private static List<ConversationDecline> maintainerDeclines(
-      List<GitHubCommentClient.IssueComment> conversationComments, BotIdentity botIdentity) {
+      List<GitHubCommentClient.IssueComment> conversationComments,
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
     if (conversationComments == null || conversationComments.isEmpty()) {
       return List.of();
     }
     var declines = new ArrayList<ConversationDecline>();
     for (var comment : conversationComments) {
-      if (isMaintainerConversationComment(comment, botIdentity)) {
+      if (isMaintainerConversationComment(comment, botIdentity, writers)) {
         declines.addAll(conversationDeclines(comment.body(), botIdentity));
       }
     }
@@ -1647,8 +1656,9 @@ public class FollowUpAnalyzer {
       ReviewResponse.Finding finding,
       List<GitHubCommentClient.IssueComment> conversationComments,
       List<ConversationDecline> directives,
-      BotIdentity botIdentity) {
-    return clearedInConversation(finding, conversationComments, botIdentity)
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
+    return clearedInConversation(finding, conversationComments, botIdentity, writers)
         || !conversationDeclineReasons(finding, directives).isEmpty();
   }
 
@@ -1928,16 +1938,18 @@ public class FollowUpAnalyzer {
 
   /**
    * Whether a maintainer cleared this finding with a clear directive replied on its own thread
-   * (#1066): a write-capable, non-bot reply that uses the directive ({@link #isClearDirective}) on
-   * the thread located by the finding's marker and own key or content ({@link #markerRootComment}),
-   * naming no other finding ({@link #threadDirectiveNamesItsFinding}). A thread found by title
-   * alone is not enough: clearing is the dangerous direction.
+   * (#1066): a non-bot reply from an author with confirmed write access that uses the directive
+   * ({@link #isClearDirective}) on the thread located by the finding's marker and own key or
+   * content ({@link #markerRootComment}), naming no other finding ({@link
+   * #threadDirectiveNamesItsFinding}). A thread found by title alone is not enough: clearing is the
+   * dangerous direction.
    */
   private static boolean clearedOnOwnThread(
       ReviewResponse.Finding finding,
       int findingId,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
     var root = markerRootComment(finding, findingId, inlineComments, botIdentity);
     if (root == null) {
       return false;
@@ -1946,7 +1958,7 @@ public class FollowUpAnalyzer {
       if (root.equals(c.inReplyToId())
           && c.user() != null
           && !botIdentity.matches(c.user().login())
-          && mayHoldWriteAccess(c.authorAssociation())
+          && writers.isWriter(c.user().login(), c.authorAssociation())
           && isClearDirective(c.body(), botIdentity)
           && threadDirectiveNamesItsFinding(
               c.body(), finding.file(), ownThreadLines(finding, root, inlineComments))) {
@@ -1993,14 +2005,14 @@ public class FollowUpAnalyzer {
     return List.of(finding.line());
   }
 
-  /** A non-bot conversation comment with a body and a write-capable author association. */
+  /** A non-bot conversation comment with a body whose author holds confirmed write access. */
   private static boolean isMaintainerConversationComment(
-      GitHubCommentClient.IssueComment comment, BotIdentity botIdentity) {
+      GitHubCommentClient.IssueComment comment, BotIdentity botIdentity, VerifiedWriters writers) {
     return comment != null
         && comment.body() != null
         && comment.user() != null
         && !botIdentity.matches(comment.user().login())
-        && mayHoldWriteAccess(comment.authorAssociation());
+        && writers.isWriter(comment.user().login(), comment.authorAssociation());
   }
 
   /**
@@ -2032,9 +2044,10 @@ public class FollowUpAnalyzer {
       List<ReviewResponse.Finding> previous,
       List<ReviewResponse.PreviousFindingStatus> statuses,
       List<GitHubCommentClient.IssueComment> conversationComments,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
     return clearNamedInConversation(
-        previous, statuses, conversationComments, List.of(), botIdentity);
+        previous, statuses, conversationComments, List.of(), botIdentity, writers);
   }
 
   /**
@@ -2048,7 +2061,8 @@ public class FollowUpAnalyzer {
       List<ReviewResponse.PreviousFindingStatus> statuses,
       List<GitHubCommentClient.IssueComment> conversationComments,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
     if (statuses == null || statuses.isEmpty()) {
       return statuses == null ? List.of() : statuses;
     }
@@ -2062,7 +2076,12 @@ public class FollowUpAnalyzer {
       var note =
           STATUS_UNRESOLVED.equalsIgnoreCase(status.status()) && id >= 1 && id <= previous.size()
               ? clearedNote(
-                  previous.get(id - 1), id, conversationComments, inlineComments, botIdentity)
+                  previous.get(id - 1),
+                  id,
+                  conversationComments,
+                  inlineComments,
+                  botIdentity,
+                  writers)
               : null;
       changed |= note != null;
       rewritten.add(
@@ -2084,11 +2103,12 @@ public class FollowUpAnalyzer {
       int findingId,
       List<GitHubCommentClient.IssueComment> conversationComments,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      BotIdentity botIdentity) {
-    if (clearedInConversation(finding, conversationComments, botIdentity)) {
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
+    if (clearedInConversation(finding, conversationComments, botIdentity, writers)) {
       return conversationClearedNote(botIdentity);
     }
-    return clearedOnOwnThread(finding, findingId, inlineComments, botIdentity)
+    return clearedOnOwnThread(finding, findingId, inlineComments, botIdentity, writers)
         ? threadClearedNote(botIdentity)
         : null;
   }
@@ -2421,8 +2441,18 @@ public class FollowUpAnalyzer {
    * finding is then the maintainer's second answer, which records it justified unless its own
    * reason is contradicted too.
    *
+   * <p>Before either pass, a {@code justified} must have a maintainer behind it ({@link
+   * #withoutUnconfirmedDeclines}): the model reads every reply on a thread, and anyone who can
+   * comment on the pull request can write one that reads like a decline. A {@code justified} on a
+   * finding whose thread holds no reply from an author with confirmed write access ({@link
+   * VerifiedWriters}) goes back to {@code unresolved}, and the conversation pass then records it
+   * {@code justified} only when a maintainer's decline directive names it. This runs whether or not
+   * the re-check is enabled and whether or not there is reviewed code: it asks who declined, not
+   * whether the reason holds.
+   *
    * @param conversationComments the PR conversation, read for decline directives naming findings
    *     the model still reports unresolved
+   * @param writers the comment authors confirmed to hold write access to the repository
    * @param reviewedCode supplies the diff text the review call saw; resolved lazily because most
    *     rounds have no declined finding at all
    */
@@ -2432,15 +2462,84 @@ public class FollowUpAnalyzer {
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       List<GitHubCommentClient.IssueComment> conversationComments,
       BotIdentity botIdentity,
+      VerifiedWriters writers,
       Supplier<String> reviewedCode) {
     if (statuses == null || statuses.isEmpty()) {
       return statuses == null ? List.of() : statuses;
     }
-    var explained = explainUnsettledReplies(previous, statuses, inlineComments, botIdentity);
+    var explained =
+        explainUnsettledReplies(previous, statuses, inlineComments, botIdentity, writers);
+    var confirmed =
+        withoutUnconfirmedDeclines(previous, explained, inlineComments, botIdentity, writers);
     var rechecked =
-        recheckThreadDeclines(previous, explained, inlineComments, botIdentity, reviewedCode);
+        recheckThreadDeclines(
+            previous, confirmed, inlineComments, botIdentity, writers, reviewedCode);
     return declineNamedInConversation(
-        previous, rechecked, conversationComments, botIdentity, reviewedCode);
+        previous, rechecked, conversationComments, botIdentity, writers, reviewedCode);
+  }
+
+  /**
+   * {@code statuses} with every {@code justified} that no maintainer stands behind put back to
+   * {@code unresolved}. A decline is a maintainer's decision, so the model's reading of a thread is
+   * accepted as one only when that thread carries a reply, with a body, from a non-bot author with
+   * confirmed write access ({@link #humanReplies}). A reply from anyone else is context the model
+   * may weigh and nothing more: it cannot close a finding, however the model read it.
+   *
+   * <p>Only a status naming a finding of the previous round is touched; an id outside it names
+   * nothing and closes nothing. A finding declined with a directive on the PR conversation is
+   * restored by {@link #declineNamedInConversation}, which runs on this pass's result.
+   *
+   * <p>The verdict path runs this first, before the supersede pass, so a finding put back to {@code
+   * unresolved} whose code has left the diff is superseded like any other; {@link #recheckDeclines}
+   * runs it again, which changes nothing the second time and keeps every caller of the re-check
+   * under the rule.
+   */
+  public static List<ReviewResponse.PreviousFindingStatus> withoutUnconfirmedDeclines(
+      List<ReviewResponse.Finding> previous,
+      List<ReviewResponse.PreviousFindingStatus> statuses,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
+    if (previous == null || !hasDecline(statuses)) {
+      return statuses;
+    }
+    var comments =
+        inlineComments == null ? List.<GitHubReviewClient.PullRequestComment>of() : inlineComments;
+    var rewritten = new ArrayList<ReviewResponse.PreviousFindingStatus>(statuses.size());
+    for (var status : statuses) {
+      var id = status.id();
+      if (!STATUS_JUSTIFIED.equalsIgnoreCase(status.status())
+          || id < 1
+          || id > previous.size()
+          || declinedByMaintainerOnThread(
+              previous.get(id - 1), id, comments, botIdentity, writers)) {
+        rewritten.add(status);
+        continue;
+      }
+      var finding = previous.get(id - 1);
+      Log.infof(
+          "Keeping previous finding #%d '%s' (%s) open: it was reported justified, but no reply on"
+              + " its thread comes from an author with confirmed write access",
+          id,
+          LogSafe.oneLine(finding.title()),
+          LogSafe.oneLine(finding.file() + ":" + finding.line()));
+      rewritten.add(
+          new ReviewResponse.PreviousFindingStatus(
+              id,
+              STATUS_UNRESOLVED,
+              RebuttalContradiction.unconfirmedDeclineNote(finding, botIdentity)));
+    }
+    return rewritten;
+  }
+
+  private static boolean declinedByMaintainerOnThread(
+      ReviewResponse.Finding finding,
+      int id,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
+    Long rootId = rootCommentId(finding, id, inlineComments, botIdentity);
+    return rootId != null && !humanReplies(rootId, inlineComments, botIdentity, writers).isEmpty();
   }
 
   /**
@@ -2460,12 +2559,13 @@ public class FollowUpAnalyzer {
       List<ReviewResponse.Finding> previous,
       List<ReviewResponse.PreviousFindingStatus> statuses,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
     if (!declineRecheckEnabled || previous == null || inlineComments == null) {
       return statuses;
     }
     return statuses.stream()
-        .map(status -> explainedStatus(status, previous, inlineComments, botIdentity))
+        .map(status -> explainedStatus(status, previous, inlineComments, botIdentity, writers))
         .toList();
   }
 
@@ -2473,7 +2573,8 @@ public class FollowUpAnalyzer {
       ReviewResponse.PreviousFindingStatus status,
       List<ReviewResponse.Finding> previous,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
     var id = status.id();
     var note = status.note();
     if (!STATUS_UNRESOLVED.equalsIgnoreCase(status.status())
@@ -2486,7 +2587,9 @@ public class FollowUpAnalyzer {
     }
     Long rootId = rootCommentId(previous.get(id - 1), id, inlineComments, botIdentity);
     var replies =
-        rootId == null ? List.<String>of() : humanReplies(rootId, inlineComments, botIdentity);
+        rootId == null
+            ? List.<String>of()
+            : humanReplies(rootId, inlineComments, botIdentity, writers);
     if (replies.isEmpty()) {
       return status;
     }
@@ -2555,6 +2658,7 @@ public class FollowUpAnalyzer {
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       List<GitHubCommentClient.IssueComment> conversationComments,
       BotIdentity botIdentity,
+      VerifiedWriters writers,
       Supplier<String> reviewedCode) {
     if (!declineRecheckEnabled
         || previous == null
@@ -2579,7 +2683,8 @@ public class FollowUpAnalyzer {
       if (id >= 1 && id <= previous.size()) {
         var finding = previous.get(id - 1);
         var sources =
-            declineSources(finding, id, comments, repliesByRoot, conversationComments, botIdentity);
+            declineSources(
+                finding, id, comments, repliesByRoot, conversationComments, botIdentity, writers);
         if (!sources.isEmpty()
             && sources.stream().allMatch(source -> isRememberable(source.reason()))) {
           surviving.add(survivingDecline(finding, sources));
@@ -2594,8 +2699,8 @@ public class FollowUpAnalyzer {
    * rule {@link #survivingDeclines} applies to the effective previous round's: the re-check is
    * enabled and had reviewed code, the backstop recorded the decline {@code justified} after
    * re-checking it ({@link #heldPreviousFindings(List, List, List, List, DiffLineResolver,
-   * BotIdentity, Map, Supplier)}), and every write-capable reply on the thread is a non-blank
-   * reason resting on no premise the code could contradict.
+   * BotIdentity, VerifiedWriters, Map, Supplier)}), and every write-capable reply on the thread is
+   * a non-blank reason resting on no premise the code could contradict.
    *
    * <p>Such a status names no finding by id ({@link #EARLIER_ROUND_ID}), so the decline is read off
    * the thread the backstop located by the finding's marker and own content ({@link
@@ -2608,6 +2713,7 @@ public class FollowUpAnalyzer {
       List<ReviewResult.PreviousFindingStatus> statuses,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       BotIdentity botIdentity,
+      VerifiedWriters writers,
       Supplier<String> reviewedCode) {
     var declined =
         statuses.stream()
@@ -2628,7 +2734,8 @@ public class FollowUpAnalyzer {
     var surviving = new ArrayList<SurvivingDecline>();
     for (var status : declined) {
       var sources =
-          threadDeclineSources(status.earlierRound().threadRootId(), repliesByRoot, botIdentity);
+          threadDeclineSources(
+              status.earlierRound().threadRootId(), repliesByRoot, botIdentity, writers);
       if (!sources.isEmpty()
           && sources.stream().allMatch(source -> isRememberable(source.reason()))) {
         surviving.add(survivingDecline(status.earlierRound().finding(), sources));
@@ -2655,9 +2762,9 @@ public class FollowUpAnalyzer {
   }
 
   /**
-   * The maintainer comments that declined {@code finding}: its thread's write-capable human replies
-   * when it has any, else the conversation directives naming it. Empty when neither surface holds a
-   * decline — a {@code justified} the model reported with no maintainer text behind it.
+   * The maintainer comments that declined {@code finding}: its thread's confirmed-writer human
+   * replies when it has any, else the conversation directives naming it. Empty when neither surface
+   * holds a decline — a {@code justified} the model reported with no maintainer text behind it.
    */
   private static List<DeclineSource> declineSources(
       ReviewResponse.Finding finding,
@@ -2665,25 +2772,27 @@ public class FollowUpAnalyzer {
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       Map<Long, List<GitHubReviewClient.PullRequestComment>> repliesByRoot,
       List<GitHubCommentClient.IssueComment> conversationComments,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
     Long rootId = rootCommentId(finding, id, inlineComments, botIdentity);
     if (rootId != null) {
-      var replies = threadDeclineSources(rootId, repliesByRoot, botIdentity);
+      var replies = threadDeclineSources(rootId, repliesByRoot, botIdentity, writers);
       if (!replies.isEmpty()) {
         return replies;
       }
     }
-    return conversationDeclineSources(finding, conversationComments, botIdentity);
+    return conversationDeclineSources(finding, conversationComments, botIdentity, writers);
   }
 
-  /** The write-capable human replies with a body on the thread rooted at {@code rootId}. */
+  /** The confirmed writers' replies with a body on the thread rooted at {@code rootId}. */
   private static List<DeclineSource> threadDeclineSources(
       Long rootId,
       Map<Long, List<GitHubReviewClient.PullRequestComment>> repliesByRoot,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
     return repliesByRoot.getOrDefault(rootId, List.of()).stream()
         .filter(c -> c.user() != null && !botIdentity.matches(c.user().login()))
-        .filter(c -> mayHoldWriteAccess(c.authorAssociation()))
+        .filter(c -> writers.isWriter(c.user().login(), c.authorAssociation()))
         .filter(c -> c.body() != null && !c.body().isBlank())
         .map(c -> new DeclineSource(c.id(), true, c.user().login(), c.body()))
         .toList();
@@ -2692,7 +2801,8 @@ public class FollowUpAnalyzer {
   private static List<DeclineSource> conversationDeclineSources(
       ReviewResponse.Finding finding,
       List<GitHubCommentClient.IssueComment> conversationComments,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
     String anchor = ownContentAnchor(finding);
     if (conversationComments == null || finding.file() == null || anchor == null) {
       return List.of();
@@ -2700,7 +2810,7 @@ public class FollowUpAnalyzer {
     String locator = finding.file() + ":" + finding.line();
     var sources = new ArrayList<DeclineSource>();
     for (var comment : conversationComments) {
-      if (!isMaintainerConversationComment(comment, botIdentity)) {
+      if (!isMaintainerConversationComment(comment, botIdentity, writers)) {
         continue;
       }
       for (var decline : conversationDeclines(comment.body(), botIdentity)) {
@@ -2719,6 +2829,7 @@ public class FollowUpAnalyzer {
       List<ReviewResponse.PreviousFindingStatus> statuses,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       BotIdentity botIdentity,
+      VerifiedWriters writers,
       Supplier<String> reviewedCode) {
     if (!declineRecheckEnabled || !hasDecline(statuses)) {
       return statuses;
@@ -2731,7 +2842,8 @@ public class FollowUpAnalyzer {
     }
     var rewritten = new ArrayList<ReviewResponse.PreviousFindingStatus>(statuses.size());
     for (var status : statuses) {
-      var contradiction = declineContradiction(status, previous, inlineComments, botIdentity, code);
+      var contradiction =
+          declineContradiction(status, previous, inlineComments, botIdentity, writers, code);
       if (contradiction == null) {
         rewritten.add(status);
         continue;
@@ -2767,8 +2879,9 @@ public class FollowUpAnalyzer {
       List<ReviewResponse.PreviousFindingStatus> statuses,
       List<GitHubCommentClient.IssueComment> conversationComments,
       BotIdentity botIdentity,
+      VerifiedWriters writers,
       Supplier<String> reviewedCode) {
-    var directives = maintainerDeclines(conversationComments, botIdentity);
+    var directives = maintainerDeclines(conversationComments, botIdentity, writers);
     if (previous == null || directives.isEmpty()) {
       return statuses;
     }
@@ -2846,6 +2959,7 @@ public class FollowUpAnalyzer {
       List<ReviewResponse.Finding> previous,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       BotIdentity botIdentity,
+      VerifiedWriters writers,
       String reviewedCode) {
     if (!STATUS_JUSTIFIED.equalsIgnoreCase(status.status())) {
       return null;
@@ -2859,7 +2973,7 @@ public class FollowUpAnalyzer {
     if (rootId == null) {
       return null;
     }
-    var humanReplies = humanReplies(rootId, inlineComments, botIdentity);
+    var humanReplies = humanReplies(rootId, inlineComments, botIdentity, writers);
     if (humanReplies.size() != 1) {
       return null;
     }
@@ -2868,17 +2982,18 @@ public class FollowUpAnalyzer {
 
   /**
    * Bodies of the maintainer replies on a thread, oldest first; bot replies are not rebuttals, and
-   * neither is a reply from an author without write access ({@link #mayHoldWriteAccess}) — a
+   * neither is a reply from an author without write access ({@link VerifiedWriters#isWriter}) — a
    * fork-PR author cannot supply the rebuttal the decline re-check reads.
    */
   private static List<String> humanReplies(
       Long rootId,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
     return inlineComments.stream()
         .filter(c -> rootId.equals(c.inReplyToId()))
         .filter(c -> c.user() != null && !botIdentity.matches(c.user().login()))
-        .filter(c -> mayHoldWriteAccess(c.authorAssociation()))
+        .filter(c -> writers.isWriter(c.user().login(), c.authorAssociation()))
         .map(GitHubReviewClient.PullRequestComment::body)
         .filter(body -> body != null && !body.isBlank())
         .toList();
@@ -2928,10 +3043,10 @@ public class FollowUpAnalyzer {
    * lists them as still present at their severity, so a held CRITICAL requests changes. A
    * maintainer reply on the thread settles the hold (the human is engaged; defer to them, matching
    * {@link #dropRepliedDuplicates}) unless it is a lone decline that does not hold up ({@link
-   * #heldPreviousFindings(List, List, List, List, DiffLineResolver, BotIdentity, Map, Supplier)}),
-   * as does the model marking the finding resolved/justified, as does an {@code @thrillhousebot
-   * resolved} comment naming the finding on the PR conversation — the hatch for a finding that has
-   * no thread to reply on ({@link #clearedInConversation}).
+   * #heldPreviousFindings(List, List, List, List, DiffLineResolver, BotIdentity, VerifiedWriters,
+   * Map, Supplier)}), as does the model marking the finding resolved/justified, as does an
+   * {@code @thrillhousebot resolved} comment naming the finding on the PR conversation — the hatch
+   * for a finding that has no thread to reply on ({@link #clearedInConversation}).
    *
    * @param priorAiResponseJsons every completed prior round's persisted AI response, newest first
    *     (as {@link
@@ -2945,13 +3060,15 @@ public class FollowUpAnalyzer {
       List<ReviewResponse.PreviousFindingStatus> currentStatuses,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       DiffLineResolver lineResolver,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
     return unreportedUnresolvedStatusesFromParsed(
         parsePreviousResponses(priorAiResponseJsons),
         currentStatuses,
         inlineComments,
         lineResolver,
-        botIdentity);
+        botIdentity,
+        writers);
   }
 
   /**
@@ -2964,9 +3081,16 @@ public class FollowUpAnalyzer {
       List<ReviewResponse.PreviousFindingStatus> currentStatuses,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       DiffLineResolver lineResolver,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
     return unreportedUnresolvedStatusesFromParsed(
-        priorAiResponses, currentStatuses, inlineComments, lineResolver, botIdentity, Map.of());
+        priorAiResponses,
+        currentStatuses,
+        inlineComments,
+        lineResolver,
+        botIdentity,
+        writers,
+        Map.of());
   }
 
   /**
@@ -2983,23 +3107,27 @@ public class FollowUpAnalyzer {
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       DiffLineResolver lineResolver,
       BotIdentity botIdentity,
+      VerifiedWriters writers,
       Map<String, String> renameTargets) {
-    return unreportedUnresolvedStatusesFromParsed(
-        priorAiResponses,
-        currentStatuses,
-        inlineComments,
-        List.of(),
-        lineResolver,
-        botIdentity,
-        renameTargets);
+    return unresolvedHolds(
+        heldPreviousFindings(
+            priorAiResponses,
+            currentStatuses,
+            inlineComments,
+            List.of(),
+            lineResolver,
+            botIdentity,
+            writers,
+            renameTargets,
+            null));
   }
 
   /**
-   * Conversation-aware variant used by the review verdict path. A finding that never posted inline
-   * ({@link Finding#postsInline}) has no thread for the reply hatch to reach, so its only
-   * maintainer-driven escape is an {@code @thrillhousebot resolved} comment on the PR conversation
-   * ({@link #clearedInConversation}); without it the backstop holds such a finding every round with
-   * no action able to clear it (#548).
+   * Conversation-aware variant. A finding that never posted inline ({@link Finding#postsInline})
+   * has no thread for the reply hatch to reach, so its only maintainer-driven escape is an {@code
+   * @thrillhousebot resolved} comment on the PR conversation ({@link #clearedInConversation});
+   * without it the backstop holds such a finding every round with no action able to clear it
+   * (#548). Rename-blind, like the overload without the conversation.
    */
   public List<ReviewResult.PreviousFindingStatus> unreportedUnresolvedStatusesFromParsed(
       List<ReviewResponse> priorAiResponses,
@@ -3008,16 +3136,23 @@ public class FollowUpAnalyzer {
       List<GitHubCommentClient.IssueComment> conversationComments,
       DiffLineResolver lineResolver,
       BotIdentity botIdentity,
-      Map<String, String> renameTargets) {
-    return heldPreviousFindings(
+      VerifiedWriters writers) {
+    return unresolvedHolds(
+        heldPreviousFindings(
             priorAiResponses,
             currentStatuses,
             inlineComments,
             conversationComments,
             lineResolver,
             botIdentity,
-            renameTargets)
-        .stream()
+            writers,
+            Map.of(),
+            null));
+  }
+
+  /** The {@code unresolved} statuses among the backstop's entries: the findings it holds open. */
+  private static List<ReviewResult.PreviousFindingStatus> unresolvedHolds(List<HeldPrevious> held) {
+    return held.stream()
         .map(HeldPrevious::status)
         .filter(status -> STATUS_UNRESOLVED.equals(status.status()))
         .toList();
@@ -3086,32 +3221,6 @@ public class FollowUpAnalyzer {
       "Flagged in an earlier round and still present; not addressed in this revision.";
 
   /**
-   * The same backstop computation as {@link #unreportedUnresolvedStatusesFromParsed}, keeping the
-   * held finding beside each status so the verdict path can render what it holds, not only count it
-   * (#917). With no reviewed code a decline on an earlier round's thread cannot be re-checked, so
-   * it stands ({@link #heldPreviousFindings(List, List, List, List, DiffLineResolver, BotIdentity,
-   * Map, Supplier)}).
-   */
-  public List<HeldPrevious> heldPreviousFindings(
-      List<ReviewResponse> priorAiResponses,
-      List<ReviewResponse.PreviousFindingStatus> currentStatuses,
-      List<GitHubReviewClient.PullRequestComment> inlineComments,
-      List<GitHubCommentClient.IssueComment> conversationComments,
-      DiffLineResolver lineResolver,
-      BotIdentity botIdentity,
-      Map<String, String> renameTargets) {
-    return heldPreviousFindings(
-        priorAiResponses,
-        currentStatuses,
-        inlineComments,
-        conversationComments,
-        lineResolver,
-        botIdentity,
-        renameTargets,
-        null);
-  }
-
-  /**
    * The backstop over every earlier round, as the verdict path runs it: each still-present prior
    * finding no round accounted for, as an {@code unresolved} hold, and each one a maintainer
    * declined on its review thread, as the decline's outcome (#947).
@@ -3134,8 +3243,13 @@ public class FollowUpAnalyzer {
    * marker and own content, so the thread is resolved and the decline offered to the learnings
    * capture through that thread rather than through an id (#958).
    *
+   * <p>This is the same computation as {@link #unreportedUnresolvedStatusesFromParsed}, keeping the
+   * held finding beside each status so the verdict path can render what it holds, not only count it
+   * (#917).
+   *
    * @param reviewedCode the diff text the review call saw, or {@code null} when there is none to
-   *     re-check against; read at most once per decline
+   *     re-check against, in which case a decline on an earlier round's thread stands; read at most
+   *     once per decline
    */
   @SuppressWarnings("java:S107")
   public List<HeldPrevious> heldPreviousFindings(
@@ -3145,6 +3259,7 @@ public class FollowUpAnalyzer {
       List<GitHubCommentClient.IssueComment> conversationComments,
       DiffLineResolver lineResolver,
       BotIdentity botIdentity,
+      VerifiedWriters writers,
       Map<String, String> renameTargets,
       Supplier<String> reviewedCode) {
     if (priorAiResponses == null || priorAiResponses.isEmpty() || lineResolver == null) {
@@ -3168,6 +3283,7 @@ public class FollowUpAnalyzer {
             conversationComments,
             lineResolver,
             botIdentity,
+            writers,
             renameTargets,
             reviewedCode,
             supersededThisRound,
@@ -3247,6 +3363,7 @@ public class FollowUpAnalyzer {
       List<GitHubCommentClient.IssueComment> conversationComments,
       DiffLineResolver lineResolver,
       BotIdentity botIdentity,
+      VerifiedWriters writers,
       Map<String, String> renameTargets,
       Supplier<String> reviewedCode,
       Set<String> supersededThisRound,
@@ -3930,7 +4047,7 @@ public class FollowUpAnalyzer {
    */
   private List<HeldPrevious> heldFromClusters(List<List<OpenFinding>> clusters, BackstopInputs in) {
     var held = new ArrayList<HeldPrevious>();
-    var directives = maintainerDeclines(in.conversationComments(), in.botIdentity());
+    var directives = maintainerDeclines(in.conversationComments(), in.botIdentity(), in.writers());
     var code = in.reviewedCode() == null ? null : ReviewContextLoader.memoize(in.reviewedCode());
     for (var cluster : clusters) {
       logMerged(cluster);
@@ -3964,7 +4081,7 @@ public class FollowUpAnalyzer {
    *       member's suggested fix is now in the diff ({@link #suggestedFixLanded}, #1066), else an
    *       {@code unresolved} hold;
    *   <li>else the outcome of that reply ({@link #heldPreviousFindings(List, List, List, List,
-   *       DiffLineResolver, BotIdentity, Map, Supplier)}).
+   *       DiffLineResolver, BotIdentity, VerifiedWriters, Map, Supplier)}).
    * </ol>
    *
    * <p>The conversation directives are the only hatches a finding with no thread has (#548, #709).
@@ -4117,7 +4234,8 @@ public class FollowUpAnalyzer {
                   SuggestionFormatter.findingKey(finding.file(), finding.line(), finding.title()));
       var root =
           answered == null
-              ? answeredRootComment(finding, member.id(), in.inlineComments(), in.botIdentity())
+              ? answeredRootComment(
+                  finding, member.id(), in.inlineComments(), in.botIdentity(), in.writers())
               : null;
       if (root != null) {
         answered = member;
@@ -4244,7 +4362,8 @@ public class FollowUpAnalyzer {
             member.id(),
             in.conversationComments(),
             in.inlineComments(),
-            in.botIdentity());
+            in.botIdentity(),
+            in.writers());
     return note != null ? note : clearedNote;
   }
 
@@ -4350,7 +4469,7 @@ public class FollowUpAnalyzer {
     if (!declineRecheckEnabled || code == null) {
       return null;
     }
-    var replies = humanReplies(rootId, in.inlineComments(), in.botIdentity());
+    var replies = humanReplies(rootId, in.inlineComments(), in.botIdentity(), in.writers());
     if (replies.size() != 1) {
       return null;
     }
@@ -4416,13 +4535,18 @@ public class FollowUpAnalyzer {
 
   /**
    * The findings the prompt lists by number this round ({@link PriorListing}), as {@link
-   * #priorListing(List, Supplier, List, BotIdentity)} lists them for {@code ctx}.
+   * #priorListing(List, Supplier, List, BotIdentity, VerifiedWriters)} lists them for {@code ctx}.
    */
   static PriorListing priorListing(
       ReviewContextLoader.ReviewContext ctx,
       Supplier<DiffLineResolver> lineResolver,
       BotIdentity botIdentity) {
-    return priorListing(ctx.priorAiResponses(), lineResolver, ctx.inlineComments(), botIdentity);
+    return priorListing(
+        ctx.priorAiResponses(),
+        lineResolver,
+        ctx.inlineComments(),
+        botIdentity,
+        ctx.verifiedWriters());
   }
 
   /**
@@ -4445,7 +4569,8 @@ public class FollowUpAnalyzer {
       List<ReviewResponse> priorAiResponses,
       Supplier<DiffLineResolver> lineResolver,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
     var effective = effectivePreviousFindings(priorAiResponses);
     var findings = new ArrayList<>(effective);
     var rounds =
@@ -4461,7 +4586,7 @@ public class FollowUpAnalyzer {
       for (var entry : replay.open().entrySet()) {
         var open = entry.getValue();
         if (effectiveKeys.contains(entry.getKey())
-            || answeredRootComment(open.finding(), open.id(), inlineComments, botIdentity)
+            || answeredRootComment(open.finding(), open.id(), inlineComments, botIdentity, writers)
                 != null) {
           continue;
         }
@@ -4788,7 +4913,9 @@ public class FollowUpAnalyzer {
    * offered to the model as a prior finding ({@link #isSelfAuthoredStatusBody}).
    */
   public String buildPreviousFindingsContext(
-      List<GitHubReviewClient.ReviewResponse> priorReviews, BotIdentity botIdentity) {
+      List<GitHubReviewClient.ReviewResponse> priorReviews,
+      BotIdentity botIdentity,
+      VerifiedWriters writers) {
     if (priorReviews == null || priorReviews.isEmpty()) return "";
 
     var lastBotReview =

@@ -561,6 +561,7 @@ public class ReviewOrchestrator {
                         result.previousStatuses(),
                         inlineComments,
                         ctx.conversationComments(),
+                        ctx.verifiedWriters(),
                         () -> VerdictBuilder.reviewedCode(ctx, plan))));
       }
       runPostResultStep(

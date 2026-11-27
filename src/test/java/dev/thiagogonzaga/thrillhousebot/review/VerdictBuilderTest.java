@@ -90,14 +90,14 @@ class VerdictBuilderTest {
               return statuses == null ? List.of() : statuses;
             });
     lenient()
-        .when(followUpAnalyzer.recheckDeclines(any(), any(), any(), any(), any(), any()))
+        .when(followUpAnalyzer.recheckDeclines(any(), any(), any(), any(), any(), any(), any()))
         .thenAnswer(
             inv -> {
               List<?> statuses = inv.getArgument(1);
               return statuses == null ? List.of() : statuses;
             });
     lenient()
-        .when(followUpAnalyzer.clearNamedInConversation(any(), any(), any(), any()))
+        .when(followUpAnalyzer.clearNamedInConversation(any(), any(), any(), any(), any()))
         .thenAnswer(
             inv -> {
               List<?> statuses = inv.getArgument(1);
@@ -118,28 +118,29 @@ class VerdictBuilderTest {
   private static ReviewContextLoader.ReviewContext contextWithLineCapOmissions(
       int lineCapOmitted, List<FileDiff> reviewableFiles) {
     return new ReviewContextLoader.ReviewContext(
-        List.of(),
-        "diff",
-        "",
-        lineCapOmitted,
-        List.of(),
-        List.of(),
-        List.of(),
-        true,
-        false,
-        null,
-        List.of(),
-        "",
-        new InstructionsResolver.ResolvedInstructions("", ""),
-        PathScopedInstructions.NONE,
-        List.of(),
-        "",
-        "",
-        "",
-        "",
-        reviewableFiles,
-        () -> new DiffLineResolver(Map.of()),
-        null);
+            List.of(),
+            "diff",
+            "",
+            lineCapOmitted,
+            List.of(),
+            List.of(),
+            List.of(),
+            true,
+            false,
+            null,
+            List.of(),
+            "",
+            new InstructionsResolver.ResolvedInstructions("", ""),
+            PathScopedInstructions.NONE,
+            List.of(),
+            "",
+            "",
+            "",
+            "",
+            reviewableFiles,
+            () -> new DiffLineResolver(Map.of()),
+            null)
+        .withVerifiedWriters(KnownWriters.ALL);
   }
 
   private static final ReviewResponse CLEAN_RESPONSE =
@@ -614,7 +615,8 @@ class VerdictBuilderTest {
         List.of(),
         SupersededFindingsCarryover.Carried.NONE,
         "",
-        headUnchanged);
+        headUnchanged,
+        KnownWriters.ALL);
   }
 
   /**
@@ -663,7 +665,8 @@ class VerdictBuilderTest {
         List.of(),
         SupersededFindingsCarryover.Carried.NONE,
         "",
-        headUnchanged);
+        headUnchanged,
+        KnownWriters.ALL);
   }
 
   @Test
@@ -1237,28 +1240,29 @@ class VerdictBuilderTest {
   /** A follow-up context whose current diff contains only {@code file}. */
   private static ReviewContextLoader.ReviewContext followUpContext(String file) {
     return new ReviewContextLoader.ReviewContext(
-        List.of(),
-        "diff",
-        "",
-        0,
-        List.of(),
-        List.of(PRIOR_JSON),
-        List.of(PRIOR_RESPONSE),
-        false,
-        true,
-        PRIOR_JSON,
-        List.of(),
-        "",
-        new InstructionsResolver.ResolvedInstructions("", ""),
-        PathScopedInstructions.NONE,
-        List.of(),
-        "",
-        "",
-        "",
-        "",
-        List.of(new FileDiff(file, "modified", 1, 0, 1, "")),
-        () -> new DiffLineResolver(Map.of(file, "@@ -10,1 +10,1 @@\n-old\n+new")),
-        null);
+            List.of(),
+            "diff",
+            "",
+            0,
+            List.of(),
+            List.of(PRIOR_JSON),
+            List.of(PRIOR_RESPONSE),
+            false,
+            true,
+            PRIOR_JSON,
+            List.of(),
+            "",
+            new InstructionsResolver.ResolvedInstructions("", ""),
+            PathScopedInstructions.NONE,
+            List.of(),
+            "",
+            "",
+            "",
+            "",
+            List.of(new FileDiff(file, "modified", 1, 0, 1, "")),
+            () -> new DiffLineResolver(Map.of(file, "@@ -10,1 +10,1 @@\n-old\n+new")),
+            null)
+        .withVerifiedWriters(KnownWriters.ALL);
   }
 
   private static final ReviewResponse UNRESOLVED_PRIOR_RESPONSE =
@@ -1301,30 +1305,31 @@ class VerdictBuilderTest {
             List.of(), List.of(), List.of(), true, null, null, null, null);
     var ctx =
         new ReviewContextLoader.ReviewContext(
-            List.of(),
-            "diff",
-            "",
-            0,
-            List.of(),
-            List.of(PRIOR_JSON),
-            List.of(PRIOR_RESPONSE),
-            false,
-            true,
-            PRIOR_JSON,
-            List.of(),
-            "",
-            new InstructionsResolver.ResolvedInstructions("", ""),
-            PathScopedInstructions.NONE,
-            List.of(),
-            "",
-            "",
-            "",
-            "",
-            List.of(new FileDiff("src/Gone.java", "modified", 1, 0, 1, "")),
-            () ->
-                new DiffLineResolver(
-                    Map.of("src/Gone.java", "@@ -10,1 +10,1 @@\n-old\n+quote(label)")),
-            null);
+                List.of(),
+                "diff",
+                "",
+                0,
+                List.of(),
+                List.of(PRIOR_JSON),
+                List.of(PRIOR_RESPONSE),
+                false,
+                true,
+                PRIOR_JSON,
+                List.of(),
+                "",
+                new InstructionsResolver.ResolvedInstructions("", ""),
+                PathScopedInstructions.NONE,
+                List.of(),
+                "",
+                "",
+                "",
+                "",
+                List.of(new FileDiff("src/Gone.java", "modified", 1, 0, 1, "")),
+                () ->
+                    new DiffLineResolver(
+                        Map.of("src/Gone.java", "@@ -10,1 +10,1 @@\n-old\n+quote(label)")),
+                null)
+            .withVerifiedWriters(KnownWriters.ALL);
 
     var result = realBuilder.build(ctx, UNRESOLVED_PRIOR_RESPONSE, CI_CLEAR, plan);
 
@@ -1408,30 +1413,32 @@ class VerdictBuilderTest {
    */
   private static ReviewContextLoader.ReviewContext declinedRaceContext(String diff) {
     return new ReviewContextLoader.ReviewContext(
-        List.of(),
-        diff,
-        "",
-        0,
-        List.of(),
-        List.of("{}"),
-        List.of(RACE_PRIOR_RESPONSE),
-        false,
-        true,
-        "{}",
-        DECLINE_THREAD,
-        "",
-        new InstructionsResolver.ResolvedInstructions("", ""),
-        PathScopedInstructions.NONE,
-        List.of(),
-        "",
-        "",
-        "",
-        "",
-        List.of(new FileDiff(RACE_FILE, "modified", 1, 0, 1, "")),
-        () ->
-            new DiffLineResolver(
-                Map.of(RACE_FILE, "@@ -60,1 +60,1 @@\n-old\n+if (repository.find(pr) == null) {")),
-        null);
+            List.of(),
+            diff,
+            "",
+            0,
+            List.of(),
+            List.of("{}"),
+            List.of(RACE_PRIOR_RESPONSE),
+            false,
+            true,
+            "{}",
+            DECLINE_THREAD,
+            "",
+            new InstructionsResolver.ResolvedInstructions("", ""),
+            PathScopedInstructions.NONE,
+            List.of(),
+            "",
+            "",
+            "",
+            "",
+            List.of(new FileDiff(RACE_FILE, "modified", 1, 0, 1, "")),
+            () ->
+                new DiffLineResolver(
+                    Map.of(
+                        RACE_FILE, "@@ -60,1 +60,1 @@\n-old\n+if (repository.find(pr) == null) {")),
+            null)
+        .withVerifiedWriters(KnownWriters.ALL);
   }
 
   @Test
@@ -1752,31 +1759,32 @@ class VerdictBuilderTest {
     var touched = new boolean[] {false};
     var ctx =
         new ReviewContextLoader.ReviewContext(
-            List.of(),
-            "diff",
-            "",
-            0,
-            List.of(),
-            List.of(),
-            List.of(),
-            true,
-            false,
-            null,
-            List.of(),
-            "",
-            new InstructionsResolver.ResolvedInstructions("", ""),
-            PathScopedInstructions.NONE,
-            List.of(),
-            "",
-            "",
-            "",
-            "",
-            List.of(new FileDiff("a.java", "modified", 1, 0, 1, "")),
-            () -> {
-              touched[0] = true;
-              return new DiffLineResolver(Map.of());
-            },
-            null);
+                List.of(),
+                "diff",
+                "",
+                0,
+                List.of(),
+                List.of(),
+                List.of(),
+                true,
+                false,
+                null,
+                List.of(),
+                "",
+                new InstructionsResolver.ResolvedInstructions("", ""),
+                PathScopedInstructions.NONE,
+                List.of(),
+                "",
+                "",
+                "",
+                "",
+                List.of(new FileDiff("a.java", "modified", 1, 0, 1, "")),
+                () -> {
+                  touched[0] = true;
+                  return new DiffLineResolver(Map.of());
+                },
+                null)
+            .withVerifiedWriters(KnownWriters.ALL);
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
             List.of(), List.of(), List.of(), false, null, null, null, null);
@@ -1895,28 +1903,29 @@ class VerdictBuilderTest {
     var source = new FileDiff("go/main.go", "modified", 3, 1, 4, "@@ -1 +1 @@\n-a\n+b");
     var ctx =
         new ReviewContextLoader.ReviewContext(
-            List.of(lock, source),
-            "diff",
-            "",
-            0,
-            List.of(),
-            List.of(),
-            List.of(),
-            true,
-            false,
-            null,
-            List.of(),
-            "",
-            new InstructionsResolver.ResolvedInstructions("", ""),
-            PathScopedInstructions.NONE,
-            List.of(),
-            "",
-            "",
-            "",
-            "",
-            List.of(source),
-            () -> new DiffLineResolver(Map.of()),
-            null);
+                List.of(lock, source),
+                "diff",
+                "",
+                0,
+                List.of(),
+                List.of(),
+                List.of(),
+                true,
+                false,
+                null,
+                List.of(),
+                "",
+                new InstructionsResolver.ResolvedInstructions("", ""),
+                PathScopedInstructions.NONE,
+                List.of(),
+                "",
+                "",
+                "",
+                "",
+                List.of(source),
+                () -> new DiffLineResolver(Map.of()),
+                null)
+            .withVerifiedWriters(KnownWriters.ALL);
     var realSummaryBuilder =
         new VerdictBuilder(
             new PrSummaryGenerator(false),
@@ -1941,28 +1950,29 @@ class VerdictBuilderTest {
     var pureRename = new FileDiff("new/Pure.java", "renamed", 0, 0, 0, null, "old/Pure.java");
     var ctx =
         new ReviewContextLoader.ReviewContext(
-            List.of(pureRename),
-            "diff",
-            "",
-            0,
-            List.of(),
-            List.of(),
-            List.of(),
-            true,
-            false,
-            null,
-            List.of(),
-            "",
-            new InstructionsResolver.ResolvedInstructions("", ""),
-            PathScopedInstructions.NONE,
-            List.of(),
-            "",
-            "",
-            "",
-            "",
-            List.of(),
-            () -> new DiffLineResolver(Map.of()),
-            null);
+                List.of(pureRename),
+                "diff",
+                "",
+                0,
+                List.of(),
+                List.of(),
+                List.of(),
+                true,
+                false,
+                null,
+                List.of(),
+                "",
+                new InstructionsResolver.ResolvedInstructions("", ""),
+                PathScopedInstructions.NONE,
+                List.of(),
+                "",
+                "",
+                "",
+                "",
+                List.of(),
+                () -> new DiffLineResolver(Map.of()),
+                null)
+            .withVerifiedWriters(KnownWriters.ALL);
     var realSummaryBuilder =
         new VerdictBuilder(
             new PrSummaryGenerator(false),
@@ -2266,32 +2276,33 @@ class VerdictBuilderTest {
       String coverageArtifactRefusal) {
     var changed = new FileDiff("src/Main.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+x");
     return new ReviewContextLoader.ReviewContext(
-        List.of(changed),
-        "diff",
-        "",
-        0,
-        List.of(),
-        List.of(),
-        List.of(),
-        true,
-        false,
-        null,
-        List.of(),
-        "",
-        new InstructionsResolver.ResolvedInstructions("", ""),
-        PathScopedInstructions.NONE,
-        List.of(),
-        "",
-        "",
-        "",
-        "",
-        List.of(changed),
-        () -> new DiffLineResolver(Map.of()),
-        null,
-        List.of(),
-        unmatched,
-        carried,
-        coverageArtifactRefusal);
+            List.of(changed),
+            "diff",
+            "",
+            0,
+            List.of(),
+            List.of(),
+            List.of(),
+            true,
+            false,
+            null,
+            List.of(),
+            "",
+            new InstructionsResolver.ResolvedInstructions("", ""),
+            PathScopedInstructions.NONE,
+            List.of(),
+            "",
+            "",
+            "",
+            "",
+            List.of(changed),
+            () -> new DiffLineResolver(Map.of()),
+            null,
+            List.of(),
+            unmatched,
+            carried,
+            coverageArtifactRefusal)
+        .withVerifiedWriters(KnownWriters.ALL);
   }
 
   @Test
@@ -2363,30 +2374,31 @@ class VerdictBuilderTest {
             List.of(new ReviewResponse.PreviousFindingStatus(1, carriedStatus, "n")),
             null);
     return new ReviewContextLoader.ReviewContext(
-        List.of(),
-        "diff",
-        "",
-        0,
-        List.of(),
-        List.of("{\"findings\":[]}", CARRIED_ROUND_JSON),
-        List.of(zeroFindingRound, CARRIED_ROUND),
-        false,
-        true,
-        CARRIED_ROUND_JSON,
-        List.of(),
-        "",
-        new InstructionsResolver.ResolvedInstructions("", ""),
-        PathScopedInstructions.NONE,
-        List.of(),
-        "",
-        "",
-        "",
-        "",
-        List.of(new FileDiff(CARRIED_FILE, "modified", 1, 0, 1, "")),
-        () ->
-            new DiffLineResolver(
-                Map.of(CARRIED_FILE, "@@ -166,1 +166,1 @@\n-old\n+" + CARRIED_ANCHOR)),
-        null);
+            List.of(),
+            "diff",
+            "",
+            0,
+            List.of(),
+            List.of("{\"findings\":[]}", CARRIED_ROUND_JSON),
+            List.of(zeroFindingRound, CARRIED_ROUND),
+            false,
+            true,
+            CARRIED_ROUND_JSON,
+            List.of(),
+            "",
+            new InstructionsResolver.ResolvedInstructions("", ""),
+            PathScopedInstructions.NONE,
+            List.of(),
+            "",
+            "",
+            "",
+            "",
+            List.of(new FileDiff(CARRIED_FILE, "modified", 1, 0, 1, "")),
+            () ->
+                new DiffLineResolver(
+                    Map.of(CARRIED_FILE, "@@ -166,1 +166,1 @@\n-old\n+" + CARRIED_ANCHOR)),
+            null)
+        .withVerifiedWriters(KnownWriters.ALL);
   }
 
   /**

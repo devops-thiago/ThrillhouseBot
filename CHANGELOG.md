@@ -166,6 +166,20 @@ cannot resolve its review threads.
   stale pull request approvals when new commits are pushed" wherever the bot's approval counts;
   it is also the only protection for a push the bot does not review (a skipped, failed or
   superseded run). Affects every release up to 0.9.3.
+- **Only someone with write access can get a finding closed or declined.** A reply on a finding's
+  thread was shown to the model whoever wrote it, and a finding the model then reported as
+  declined (`justified`) no longer held the approval, so a reply from the pull request's author
+  could close a finding and let the bot approve. Separately, the `resolved` and `declined`
+  directives and maintainer replies were accepted on the comment's `author_association` alone, so
+  an organization member or invited collaborator with read or triage access could close or decline
+  a finding. Each follow-up review now asks GitHub for the collaborator permission of the people
+  who replied or wrote a directive, once per person, and only write, maintain or admin counts. A
+  finding reported as declined stays open unless such a reply is on its thread or such a person's
+  `declined` directive names it, and the review body says "Decline not accepted, finding kept
+  open" with how to keep the decline. Other replies reach the model marked "no write access,
+  context only". When the permission cannot be read, nobody is confirmed for that review and
+  findings stay open until the next one. The bot's reply to a directive uses the same check. No new
+  GitHub App permission is needed.
 - **Text from a pull request can no longer make a review spend minutes in pattern matching.**
   Several patterns read to the end of their input from every place a match could start, so the
   time grew with the square of the input's length: a description made of line breaks (about 8

@@ -75,7 +75,7 @@ class FindingPipelineSecurityScanTest {
     var budgetPlanner = mock(DiffBudgetPlanner.class);
     when(quoteValidator.validate(any(), any())).thenAnswer(inv -> inv.getArgument(0));
     when(frameworkFilter.filter(any(), any())).thenAnswer(inv -> inv.getArgument(0));
-    when(followUpAnalyzer.dropRepliedDuplicates(any(), any(), any(), any()))
+    when(followUpAnalyzer.dropRepliedDuplicates(any(), any(), any(), any(), any()))
         .thenAnswer(inv -> inv.getArgument(0));
     lenient().when(budgetPlanner.perCallInputBudget()).thenReturn(Integer.MAX_VALUE);
     lenient()
@@ -138,28 +138,29 @@ class FindingPipelineSecurityScanTest {
 
   private static ReviewContextLoader.ReviewContext context(List<FileDiff> reviewable) {
     return new ReviewContextLoader.ReviewContext(
-        reviewable,
-        "",
-        "",
-        0,
-        List.of(),
-        List.of(),
-        List.of(),
-        true,
-        false,
-        null,
-        List.of(),
-        "",
-        new InstructionsResolver.ResolvedInstructions("", ""),
-        PathScopedInstructions.NONE,
-        List.of(),
-        "",
-        "",
-        "",
-        "",
-        reviewable,
-        () -> new DiffLineResolver(Map.of()),
-        null);
+            reviewable,
+            "",
+            "",
+            0,
+            List.of(),
+            List.of(),
+            List.of(),
+            true,
+            false,
+            null,
+            List.of(),
+            "",
+            new InstructionsResolver.ResolvedInstructions("", ""),
+            PathScopedInstructions.NONE,
+            List.of(),
+            "",
+            "",
+            "",
+            "",
+            reviewable,
+            () -> new DiffLineResolver(Map.of()),
+            null)
+        .withVerifiedWriters(KnownWriters.ALL);
   }
 
   private static DiffBudgetPlanner.DiffBatch batch(FileDiff file) {

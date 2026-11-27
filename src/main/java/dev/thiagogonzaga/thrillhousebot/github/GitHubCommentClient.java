@@ -223,8 +223,9 @@ public interface GitHubCommentClient {
    * <p>{@code authorAssociation} is GitHub's per-comment statement of the author's relationship to
    * the repository ({@code OWNER}/{@code MEMBER}/{@code COLLABORATOR}/{@code CONTRIBUTOR}/{@code
    * NONE}/…), carried for the same reason {@link GitHubReviewClient.PullRequestComment} carries it:
-   * the follow-up analyzer only lets a write-capable maintainer's conversation comment clear an
-   * approve hold, never a drive-by commenter's.
+   * it is the first check on who may clear an approve hold from the conversation. It grants nothing
+   * by itself: the follow-up analyzer also requires GitHub's confirmation that the author holds
+   * write access, so neither a drive-by commenter's comment nor a read-only member's counts.
    */
   record IssueComment(
       long id,

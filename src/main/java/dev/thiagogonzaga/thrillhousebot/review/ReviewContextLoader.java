@@ -72,6 +72,7 @@ public class ReviewContextLoader {
   private final ActiveModelSettings activeModel;
   private final SupersededFindingsCarryover carryover;
   private final FindingStates findingStates;
+  private final VerifiedWritersResolver verifiedWritersResolver;
 
   @Inject
   public ReviewContextLoader(
@@ -91,7 +92,8 @@ public class ReviewContextLoader {
       BotIdentity botIdentity,
       ActiveModelSettings activeModel,
       SupersededFindingsCarryover carryover,
-      FindingStates findingStates) {
+      FindingStates findingStates,
+      VerifiedWritersResolver verifiedWritersResolver) {
     this.prClient = prClient;
     this.reviewClient = reviewClient;
     this.commentClient = commentClient;
@@ -109,6 +111,7 @@ public class ReviewContextLoader {
     this.findingStates = findingStates;
     this.activeModel = activeModel;
     this.carryover = carryover;
+    this.verifiedWritersResolver = verifiedWritersResolver;
   }
 
   /**
@@ -125,6 +128,9 @@ public class ReviewContextLoader {
    * @param previousRoundHeadUnchanged true only when this review's head commit is provably the one
    *     the round it reports on reviewed ({@link #previousRoundHeadSha}); false when the head moved
    *     or that cannot be established. Nothing can be superseded on an unchanged head (#932).
+   * @param verifiedWriters the authors of {@code inlineComments} and {@code conversationComments}
+   *     GitHub confirmed hold write access; only their replies and directives can close, clear or
+   *     decline a finding
    */
   public record ReviewContext(
       List<GitHubPullRequestClient.FileDiff> files,
@@ -153,7 +159,8 @@ public class ReviewContextLoader {
       List<String> unmatchedIgnoreGlobs,
       SupersededFindingsCarryover.Carried carried,
       String coverageArtifactRefusal,
-      boolean previousRoundHeadUnchanged) {
+      boolean previousRoundHeadUnchanged,
+      VerifiedWriters verifiedWriters) {
     public ReviewContext {
       files = List.copyOf(files);
       priorReviews = List.copyOf(priorReviews);
@@ -166,10 +173,45 @@ public class ReviewContextLoader {
       unmatchedIgnoreGlobs = List.copyOf(unmatchedIgnoreGlobs);
     }
 
+    /** This context with {@code writers} as the comment authors confirmed to hold write access. */
+    public ReviewContext withVerifiedWriters(VerifiedWriters writers) {
+      return new ReviewContext(
+          files,
+          diff,
+          baseComparison,
+          omittedFiles,
+          priorReviews,
+          priorAiResponseJsons,
+          priorAiResponses,
+          isFirstVisibleReview,
+          hasContext,
+          previousAiResponseJson,
+          inlineComments,
+          previousFindings,
+          instructions,
+          pathInstructions,
+          repoLabels,
+          projectStack,
+          linkedIssuesContext,
+          configKeyContext,
+          patchCoverage,
+          reviewableFiles,
+          lineResolverSupplier,
+          prTotals,
+          conversationComments,
+          unmatchedIgnoreGlobs,
+          carried,
+          coverageArtifactRefusal,
+          previousRoundHeadUnchanged,
+          writers);
+    }
+
     /**
      * Back-compat constructor for callers that do not know the previous round's head. Defaults it
      * to "not provably unchanged", which leaves the supersede pass exactly as it was — the guard
-     * only ever holds a finding open, so it must not fire on a head nobody compared (#932).
+     * only ever holds a finding open, so it must not fire on a head nobody compared (#932). It also
+     * carries no verified writer, so no reply or directive in its comments closes or declines
+     * anything until {@link #withVerifiedWriters} names who was confirmed.
      */
     @SuppressWarnings("java:S107")
     public ReviewContext(
@@ -226,7 +268,8 @@ public class ReviewContextLoader {
           unmatchedIgnoreGlobs,
           carried,
           coverageArtifactRefusal,
-          false);
+          false,
+          VerifiedWriters.none());
     }
 
     /**
@@ -607,6 +650,14 @@ public class ReviewContextLoader {
         hasContext
             ? fetchConversationComments(auth, req.owner(), req.repo(), req.prNumber())
             : List.of();
+    // Who among the comment authors really holds write access, asked once here where the
+    // installation is known: every clear, decline and reply check below and in the verdict reads
+    // this set, and an author GitHub did not confirm is not a maintainer.
+    var verifiedWriters =
+        hasContext
+            ? verifiedWritersResolver.resolve(
+                req.installationId(), req.owner(), req.repo(), inlineComments, conversationComments)
+            : VerifiedWriters.none();
     List<ReviewResponse.Finding> previousFindingsSource =
         FollowUpAnalyzer.effectivePreviousFindings(priorAiResponses);
     // The review-body fallback is for sessions carrying no readable AI response at all. Once any
@@ -625,7 +676,7 @@ public class ReviewContextLoader {
       // the unnumbered list keeps the rest.
       var listing =
           FollowUpAnalyzer.priorListing(
-              priorAiResponses, lineResolverSupplier, inlineComments, botIdentity);
+              priorAiResponses, lineResolverSupplier, inlineComments, botIdentity, verifiedWriters);
       var listed =
           Collections.newSetFromMap(new IdentityHashMap<ReviewResponse.Finding, Boolean>());
       listed.addAll(listing.findings());
@@ -650,6 +701,7 @@ public class ReviewContextLoader {
                     inlineComments,
                     olderAiResponses,
                     botIdentity,
+                    verifiedWriters,
                     settledPreviousIds,
                     openEarlier)
                 + earlierListed
@@ -700,7 +752,8 @@ public class ReviewContextLoader {
         headUnchanged(
             previousRoundHeadSha(
                 priorCommitShas, priorAiResponseJsons.size(), previousRoundIndex, carried),
-            req.commitSha()));
+            req.commitSha()),
+        verifiedWriters);
   }
 
   /**
