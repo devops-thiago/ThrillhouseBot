@@ -526,9 +526,11 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   `FollowUpAnalyzer.justifiedPriorFindings` hands every persisted `justified` scan finding to
   `SecurityScan.merge`, which does not raise a detection with the same file, title, anchor and, for
   a secret, the same `<!-- thrillhousebot:scan-content=… -->` fingerprint (8 hex digits of an
-  HMAC-SHA-256 over the rule and the stripped line, keyed from the webhook secret by
-  `SecurityScan.fingerprintKey`, #985; a decline under the unkeyed 0.7.0 marker still matches
-  through `Detection.legacyFingerprint`). Each decline covers one detection
+  HMAC-SHA-256 over the rule and the stripped line, keyed from the App private key by
+  `SecurityScan.fingerprintKey`, #985; a decline under the unkeyed 0.7.0 marker, or under the
+  marker keyed from the webhook secret that 0.7.1 to 0.9.3 posted, still matches through
+  `Detection.earlierFingerprints`). The marker is public and a pull request's author chooses its
+  input, so never key it from a secret an operator chooses. Each decline covers one detection
   (`DeclinedScanFindingAcrossRoundsTest`).
 - **Summary carry-over preserves every distinct path.** `PriorOverviewCarryover` uses
   `PathIndex.contains` for coverage membership, preserving `FilePaths.same` directory-suffix
