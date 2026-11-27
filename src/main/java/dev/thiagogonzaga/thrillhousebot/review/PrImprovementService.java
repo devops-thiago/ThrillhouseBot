@@ -94,7 +94,7 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
 
   @Inject
   public PrImprovementService(
-      @RestClient GitHubPullRequestClient prClient,
+      GitHubPullRequestClient prClient,
       @RestClient GitHubReviewClient reviewClient,
       @RestClient GitHubCommentClient commentClient,
       ReviewDiffFormatter diffFormatter,

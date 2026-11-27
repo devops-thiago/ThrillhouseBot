@@ -44,7 +44,7 @@ public class RunningReviewCoverage {
   @Inject
   public RunningReviewCoverage(
       GitHubAuthClient authClient,
-      @RestClient GitHubPullRequestClient prClient,
+      GitHubPullRequestClient prClient,
       @RestClient GitHubCommentClient commentClient) {
     this.authClient = authClient;
     this.prClient = prClient;

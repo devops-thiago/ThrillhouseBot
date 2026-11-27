@@ -90,7 +90,7 @@ same diff.
 | `webhook/` | The webhook entry (`WebhookEvents`, driven by the Quarkiverse GitHub App extension's route on `POST /api/webhook`; it owns the HMAC check), triggers and filters (`TriggerDetector`, `ReviewTriggerFilter`), dedupe, pause state, the comment commands (`CommentCommandService`), the `/help` limit for commenters without write access (`HelpReplyLimiter`) |
 | `review/` | Everything between "a review was requested" and "the result is on GitHub": orchestration, context loading, prompt assembly, budgeting, the post-model finding chain, verdict, publishing, CI gating, follow-ups, the on-request commands |
 | `review/ai/` | The LangChain4j layer: AI service interfaces and their prompt constants (`*Prompts`), streaming and retries (`AiReviewService`), parsing and salvage, the verifier, the token ledger, the call gate |
-| `github/` | REST and GraphQL clients (plus hub4j through the Quarkiverse `GitHubClientProvider` for permission, membership, issue and file reads, and with a caller's installation token through `GitHubTokenReads` for workflow run, artifact and installation repository listings), app auth (`GitHubAppApi`, through the extension's application client), write pacing and retry (`GitHubWritePacer`, `GitHubWriteRetry`), instructions and repo-settings resolution |
+| `github/` | REST and GraphQL clients (plus hub4j through the Quarkiverse `GitHubClientProvider` for permission, membership, issue and file reads, and with a caller's installation token through `GitHubTokenReads` for workflow run, artifact, installation repository and label listings, and through `GitHubPullRequestReads` for pull request details, files, comparisons, contents and trees), app auth (`GitHubAppApi`, through the extension's application client), write pacing and retry (`GitHubWritePacer`, `GitHubWriteRetry`), instructions and repo-settings resolution |
 | `dashboard/` | OAuth sessions, the WebSocket broadcaster, `ReviewSession` persistence, finding-feedback aggregates |
 | `notification/` | The opt-in outgoing review-outcome webhook |
 | `observability/` | The Prometheus endpoint, review-outcome metrics, and the OpenTelemetry resource's `service.instance.id` (`ServiceInstanceResource`: `HOSTNAME`, else a random id per start; `OTEL_RESOURCE_ATTRIBUTES`, comma-separated `key=value` pairs, overrides it) |
@@ -635,6 +635,11 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   endpoint (hub4j/github-api#2352). Drop each once its issue is resolved. The renamed repository's
   `301` (`GitHubInstallationClient`) and a user's installation listing (`GitHubUserClient`) stay on
   trimmed REST clients.
+- **A pull request read is one `GitHubPullRequestClient` call** (#1314). The interface keeps the
+  records, the rejected-credential retry and the repository-relative path check;
+  `GitHubPullRequestReads` makes the single attempt through hub4j. Take the repository from
+  `GitHubTokenReads.repository`, which reads it once per credential: calling
+  `getRepository` directly doubles the requests of a loop over files.
 
 ## Prompts
 

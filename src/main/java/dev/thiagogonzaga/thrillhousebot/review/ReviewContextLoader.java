@@ -76,7 +76,7 @@ public class ReviewContextLoader {
 
   @Inject
   public ReviewContextLoader(
-      @RestClient GitHubPullRequestClient prClient,
+      GitHubPullRequestClient prClient,
       @RestClient GitHubReviewClient reviewClient,
       @RestClient GitHubCommentClient commentClient,
       InstructionsResolver instructionsResolver,

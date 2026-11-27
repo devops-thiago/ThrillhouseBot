@@ -38,7 +38,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 /**
  * Builds the {@code /generate-tests} suggestion: unit tests for the code the PR changed, posted as
@@ -132,7 +131,7 @@ public class UnitTestGenerator extends AbstractPrSuggestionGenerator {
 
   @Inject
   public UnitTestGenerator(
-      @RestClient GitHubPullRequestClient prClient,
+      GitHubPullRequestClient prClient,
       ReviewDiffFormatter diffFormatter,
       InstructionsResolver instructionsResolver,
       RepoSettingsResolver repoSettingsResolver,
