@@ -743,17 +743,22 @@ class TestAssertionsTest {
                 file(
                     "c/tests/digits.c",
                     """
-                    @@ -0,0 +1,6 @@
+                    @@ -0,0 +1,9 @@
                     +static void 2fa_test_login(void) {
                     +    CHECK("digits_before_the_name", ok);
                     +}
                     +int 9 test_after_a_number(void) {
                     +    CHECK("a_number_alone_is_no_name", ok);
                     +}
+                    +int 7(void) test_after_a_parenthesis(void) {
+                    +    CHECK("a_number_before_a_parenthesis_is_no_name", ok);
+                    +}
                     """)));
 
     assertEquals(List.of("fa_test_login"), tests.functionsLabelling("digits_before_the_name"));
     assertEquals(
         List.of("test_after_a_number"), tests.functionsLabelling("a_number_alone_is_no_name"));
+    // The name is read after the first parenthesis, so what stands before it is no plain type.
+    assertEquals(List.of(), tests.functionsLabelling("a_number_before_a_parenthesis_is_no_name"));
   }
 }

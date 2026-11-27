@@ -266,14 +266,6 @@ public class ReviewDimensionRouter {
           "iterat");
 
   /**
-   * A call: a whole name, then its argument list opening. {@link #callsListFunction} keeps the ones
-   * whose name holds {@code list}, the usual shape of a collection fetch. The name is read once,
-   * from its first character: a pattern starting at {@code list} itself read to the end of the name
-   * from every {@code list} in it, which is quadratic in the length of a name made of them.
-   */
-  private static final Pattern CALL = Pattern.compile("(?<!\\w)(\\w++)\\s*+\\(");
-
-  /**
    * Substrings (matched against the lower-cased patch) that suggest a stub or a fake, across the
    * test frameworks the bot reviews — the material dimension 8 needs. A mock outside a test path
    * still brings the dimension in.
@@ -402,11 +394,17 @@ public class ReviewDimensionRouter {
     return out;
   }
 
-  /** Whether the lower-cased patch calls something whose name holds {@code list}. */
+  /**
+   * Whether the lower-cased patch calls something whose name holds {@code list}, the usual shape of
+   * a collection fetch: a whole name, any whitespace, then its argument list opening. Each name is
+   * read once, back from its parenthesis. A pattern starting at {@code list} itself read to the end
+   * of the name from every {@code list} in it, which is quadratic in the length of a name made of
+   * them.
+   */
   private static boolean callsListFunction(String lower) {
-    var call = CALL.matcher(lower);
-    while (call.find()) {
-      if (call.group(1).contains("list")) {
+    for (int paren = lower.indexOf('('); paren >= 0; paren = lower.indexOf('(', paren + 1)) {
+      int end = CallSites.nameEnd(lower, paren);
+      if (lower.substring(CallSites.nameStart(lower, end), end).contains("list")) {
         return true;
       }
     }

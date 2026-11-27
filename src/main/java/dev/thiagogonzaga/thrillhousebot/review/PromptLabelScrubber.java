@@ -318,12 +318,14 @@ public final class PromptLabelScrubber {
    *
    * <p>The blanks before the note are read from the first one that may open it: the head of their
    * run, or the second blank of a run that follows "as", whose first blank may not. Read from every
-   * blank of a run, the pattern took time quadratic in the run's length.
+   * blank of a run, the pattern took time quadratic in the run's length. The blanks are a run with
+   * at most one line break in it and are never given back: the note opens with a letter, which is
+   * also how the lookahead tells that at least one blank is there.
    */
   private static final Pattern PROVIDED_WITH_REVIEW =
       Pattern.compile(
-          "(,)?(?<!\\bas)(?:(?<![ \\t])|(?<=\\bas[ \\t]))"
-              + "(?:[ \\t]+|[ \\t]*\n[ \\t]*)(?:as )?(?:provided|supplied|given)"
+          "(,)?(?<!\\bas)(?<![ \\t](?<!\\bas.))"
+              + "(?!\\w)[ \\t]*+\n?+[ \\t]*+(?:as )?(?:provided|supplied|given)"
               + " (?:with|to|for) this review\\b(,)?",
           Pattern.CASE_INSENSITIVE);
 

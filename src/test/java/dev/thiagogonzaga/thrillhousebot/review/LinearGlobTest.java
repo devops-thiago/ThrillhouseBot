@@ -203,7 +203,8 @@ class LinearGlobTest {
 
   @Test
   void twoStarsDoNotCrossALineBreakInAName() {
-    for (var lineBreak : List.of("\n", "\r", "\u0085", " ", " ")) {
+    for (var lineBreak :
+        List.of("\n", "\r", "\u0085", Character.toString(0x2028), Character.toString(0x2029))) {
       assertFalse(LinearGlob.compile("**").matches("a" + lineBreak + "b"));
       assertTrue(LinearGlob.compile("*").matches("a" + lineBreak + "b"));
     }

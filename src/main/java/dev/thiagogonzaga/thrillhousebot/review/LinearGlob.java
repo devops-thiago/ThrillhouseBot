@@ -49,6 +49,12 @@ final class LinearGlob {
   /** What {@link #peek} returns past the end of the pattern. */
   private static final char END = 0;
 
+  /** The line breaks beyond {@code \n} and {@code \r}, as code points. */
+  private static final int NEXT_LINE = 0x0085;
+
+  private static final int LINE_SEPARATOR = 0x2028;
+  private static final int PARAGRAPH_SEPARATOR = 0x2029;
+
   private enum Kind {
     /** One given character. */
     LITERAL,
@@ -190,9 +196,9 @@ final class LinearGlob {
   private static boolean isLineTerminator(int character) {
     return character == '\n'
         || character == '\r'
-        || character == '\u0085'
-        || character == ' '
-        || character == ' ';
+        || character == NEXT_LINE
+        || character == LINE_SEPARATOR
+        || character == PARAGRAPH_SEPARATOR;
   }
 
   /** Reads a glob into its steps, by the JDK's rules for a Unix file system. */
