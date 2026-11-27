@@ -16,9 +16,6 @@
 package dev.thiagogonzaga.thrillhousebot.dashboard;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -27,7 +24,8 @@ import static org.mockito.Mockito.when;
 
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient.InstallationRepositoriesResponse;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubTokenReads;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubTokenReads.InstallationRepository;
 import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.review.FindingFeedback;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewLearning;
@@ -38,6 +36,7 @@ import jakarta.inject.Inject;
 import jakarta.persistence.EntityManager;
 import jakarta.ws.rs.core.Response;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -60,20 +59,19 @@ class ScopeBackfillTest extends ReviewSessionTestSupport {
   @Inject EntityManager em;
 
   private final GitHubAuthClient authClient = mock(GitHubAuthClient.class);
+  private final GitHubTokenReads tokenReads = mock(GitHubTokenReads.class);
   private final GitHubInstallationClient installationClient = mock(GitHubInstallationClient.class);
   private ScopeBackfill backfill;
 
   @BeforeEach
   void setUp() {
-    backfill = new ScopeBackfill(store, authClient, installationClient);
+    backfill = new ScopeBackfill(store, authClient, tokenReads, installationClient);
     when(authClient.getAuthHeader(10L)).thenReturn("Bearer acme");
     when(authClient.getAuthHeader(20L)).thenReturn("Bearer other");
     when(authClient.listInstallationIds()).thenReturn(List.of(10L, 20L));
-    when(installationClient.listInstallationRepositories(
-            eq("Bearer acme"), anyString(), eq(100), eq(1)))
+    when(tokenReads.installationRepositories("Bearer acme"))
         .thenReturn(repositories(new Repo(100L, "acme", "app")));
-    when(installationClient.listInstallationRepositories(
-            eq("Bearer other"), anyString(), eq(100), eq(1)))
+    when(tokenReads.installationRepositories("Bearer other"))
         .thenReturn(repositories(new Repo(200L, "other", "lib")));
   }
 
@@ -116,8 +114,7 @@ class ScopeBackfillTest extends ReviewSessionTestSupport {
     legacyPause("acme/app", 7);
     legacyFeedback("acme/app");
     legacyLearning(10L, "acme/app");
-    when(installationClient.listInstallationRepositories(
-            eq("Bearer acme"), anyString(), eq(100), eq(1)))
+    when(tokenReads.installationRepositories("Bearer acme"))
         .thenReturn(repositories(new Repo(100L, "acme", "app", Instant.now().plusSeconds(60))));
 
     assertEquals(new ScopeBackfill.Result(1, 0, 1), backfill.backfill());
@@ -134,8 +131,7 @@ class ScopeBackfillTest extends ReviewSessionTestSupport {
   void aRepositoryWithoutACreationDateFillsNoReviewRows() throws Exception {
     var session = legacySession("acme/app");
     legacyFeedback("acme/app");
-    when(installationClient.listInstallationRepositories(
-            eq("Bearer acme"), anyString(), eq(100), eq(1)))
+    when(tokenReads.installationRepositories("Bearer acme"))
         .thenReturn(repositories(new Repo(100L, "acme", "app", null)));
 
     assertEquals(new ScopeBackfill.Result(1, 0, 0), backfill.backfill());
@@ -200,8 +196,7 @@ class ScopeBackfillTest extends ReviewSessionTestSupport {
   void anInstallationWhoseRepositoriesCannotBeListedMatchesNothing() throws Exception {
     legacySession("acme/app");
     legacySession("other/lib");
-    when(installationClient.listInstallationRepositories(
-            eq("Bearer acme"), anyString(), eq(100), eq(1)))
+    when(tokenReads.installationRepositories("Bearer acme"))
         .thenThrow(new IllegalStateException("token revoked"));
 
     assertEquals(new ScopeBackfill.Result(1, 1, 1), backfill.backfill());
@@ -241,24 +236,17 @@ class ScopeBackfillTest extends ReviewSessionTestSupport {
   @Test
   void incompleteRepositoryEntriesAreSkipped() throws Exception {
     legacySession("acme/app");
-    var acme = new InstallationRepositoriesResponse.Repository.Owner("acme");
-    when(installationClient.listInstallationRepositories(
-            eq("Bearer acme"), anyString(), eq(100), eq(1)))
+    when(tokenReads.installationRepositories("Bearer acme"))
         .thenReturn(
-            new InstallationRepositoriesResponse(
-                5,
-                List.of(
-                    new InstallationRepositoriesResponse.Repository(1L, null, acme),
-                    new InstallationRepositoriesResponse.Repository(2L, "app", null),
-                    new InstallationRepositoriesResponse.Repository(
-                        3L, "app", new InstallationRepositoriesResponse.Repository.Owner(null)),
-                    new InstallationRepositoriesResponse.Repository(100L, "app", acme, CREATED),
-                    // Listed without an id: skipped, so it neither replaces the entry above nor
-                    // aborts the run with a scope that cannot exist.
-                    new InstallationRepositoriesResponse.Repository(0L, "app", acme))));
-    when(installationClient.listInstallationRepositories(
-            eq("Bearer other"), anyString(), eq(100), eq(1)))
-        .thenReturn(new InstallationRepositoriesResponse(0, List.of()));
+            List.of(
+                new InstallationRepository(1L, null, CREATED),
+                new InstallationRepository(2L, "app", CREATED),
+                new InstallationRepository(3L, "/app", CREATED),
+                new InstallationRepository(100L, "acme/app", CREATED),
+                // Listed without an id: skipped, so it neither replaces the entry above nor
+                // aborts the run with a scope that cannot exist.
+                new InstallationRepository(0L, "acme/app", CREATED)));
+    when(tokenReads.installationRepositories("Bearer other")).thenReturn(List.of());
 
     assertEquals(new ScopeBackfill.Result(1, 0, 1), backfill.backfill());
   }
@@ -289,53 +277,10 @@ class ScopeBackfillTest extends ReviewSessionTestSupport {
   }
 
   @Test
-  void repositoriesArePagedUntilAShortPage() throws Exception {
-    legacySession("acme/app");
-    var fullPage =
-        java.util.stream.LongStream.rangeClosed(1, 100)
-            .mapToObj(
-                id ->
-                    new InstallationRepositoriesResponse.Repository(
-                        1000L + id,
-                        "filler" + id,
-                        new InstallationRepositoriesResponse.Repository.Owner("acme")))
-            .toList();
-    when(installationClient.listInstallationRepositories(
-            eq("Bearer acme"), anyString(), eq(100), eq(1)))
-        .thenReturn(new InstallationRepositoriesResponse(101, fullPage));
-    when(installationClient.listInstallationRepositories(
-            eq("Bearer acme"), anyString(), eq(100), eq(2)))
-        .thenReturn(new InstallationRepositoriesResponse(101, null));
-
-    assertEquals(new ScopeBackfill.Result(0, 1, 0), backfill.backfill());
-    verify(installationClient)
-        .listInstallationRepositories(eq("Bearer acme"), anyString(), eq(100), eq(2));
-  }
-
-  @Test
-  void aRepositoryListingThatNeverEndsMatchesNothing() throws Exception {
-    legacySession("acme/app");
-    var fullPage =
-        java.util.Collections.nCopies(
-            100,
-            new InstallationRepositoriesResponse.Repository(
-                100L,
-                "app",
-                new InstallationRepositoriesResponse.Repository.Owner("acme"),
-                CREATED));
-    when(installationClient.listInstallationRepositories(
-            eq("Bearer acme"), anyString(), eq(100), anyInt()))
-        .thenReturn(new InstallationRepositoriesResponse(100_000, fullPage));
-
-    assertEquals(new ScopeBackfill.Result(0, 1, 0), backfill.backfill());
-    assertEquals(1, ReviewSession.count("installationId is null"));
-  }
-
-  @Test
   void nothingToFillMakesNoGitHubCall() {
     assertEquals(new ScopeBackfill.Result(0, 0, 0), backfill.backfill());
     assertDoesNotThrow(() -> backfill.onStart(mock(StartupEvent.class)));
-    verifyNoInteractions(authClient, installationClient);
+    verifyNoInteractions(authClient, tokenReads, installationClient);
   }
 
   @Test
@@ -356,18 +301,10 @@ class ScopeBackfillTest extends ReviewSessionTestSupport {
     }
   }
 
-  private static InstallationRepositoriesResponse repositories(Repo... repos) {
-    return new InstallationRepositoriesResponse(
-        repos.length,
-        java.util.Arrays.stream(repos)
-            .map(
-                r ->
-                    new InstallationRepositoriesResponse.Repository(
-                        r.id(),
-                        r.name(),
-                        new InstallationRepositoriesResponse.Repository.Owner(r.owner()),
-                        r.createdAt()))
-            .toList());
+  private static List<InstallationRepository> repositories(Repo... repos) {
+    return Arrays.stream(repos)
+        .map(r -> new InstallationRepository(r.id(), r.owner() + "/" + r.name(), r.createdAt()))
+        .toList();
   }
 
   private ReviewSession legacySession(String repository) throws Exception {
