@@ -27,6 +27,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
@@ -264,6 +265,40 @@ class BatchedInlineReviewTest {
     var body = submit.getValue().body();
     assertTrue(body.contains(RebuttalContradiction.NOTE_LEAD_IN), body);
     assertTrue(body.contains("Previous findings resolved"), body);
+  }
+
+  @Test
+  void eachThreadCarriesItsBasisUnderTheDescription() {
+    var inDiff = finding(2, "Inline");
+    var outsideDiff = finding(999, "On the file");
+
+    publisher.postReview(
+        new ReviewPublisher.PostReviewRequest(
+            "Bearer tok",
+            "owner",
+            "repo",
+            7,
+            "sha",
+            result(ReviewState.REQUEST_CHANGES, inDiff, outsideDiff),
+            new DiffLineResolver(Map.of(FILE, PATCH)),
+            false,
+            List.of(),
+            "",
+            List.of(),
+            f -> "**Basis**\n- " + f.title()));
+
+    var formatted = ArgumentCaptor.forClass(Finding.class);
+    verify(suggestionFormatter, atLeast(2))
+        .formatReviewComment(formatted.capture(), anyBoolean(), anyInt());
+    for (var title : List.of("Inline", "On the file")) {
+      assertTrue(
+          formatted.getAllValues().stream()
+              .anyMatch(
+                  f ->
+                      f.title().equals(title)
+                          && f.description().endsWith("\n\n**Basis**\n- " + title)),
+          title);
+    }
   }
 
   @Test

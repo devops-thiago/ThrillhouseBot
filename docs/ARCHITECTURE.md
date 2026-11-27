@@ -541,7 +541,11 @@ and submits it once with the verdict. When the submit is refused, or fails witho
 the review is still pending, the pending review is deleted and a separate review lists every finding
 it held. A maintainer-reply thread write waits, for at most two minutes, until the pending review is
 submitted or deleted. With `REVIEW_AGENT_PROMPT_ENABLED`, each inline finding comment ends with a collapsed
-"Agent prompt" block built from the finding already posted, with no model call.
+"Agent prompt" block built from the finding already posted, with no model call. With
+`REVIEW_SHOW_EVIDENCE`, `FindingBasis` prints under the description the covering path-scoped rules,
+the cited failing check, the verifier's outcome (recorded per finding through
+`FindingEvidence.outcomes`) and the demoting review learning; names, paths, ids and fixed phrases
+only.
 
 ## Context sections
 
