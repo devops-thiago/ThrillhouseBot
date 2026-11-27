@@ -101,8 +101,12 @@ final class AgentNextSteps {
     sb.append(SECTION_HEADING).append("\n\n");
     appendHead(sb, commitSha, priorHeadSha);
     appendOpenWork(sb, findings.size(), manifestLine, findings);
-    appendCi(sb, round);
-    appendSuggestedCommands(sb, round, findings, botIdentity);
+    if (round.heldOnCiOnly()) {
+      sb.append(CiSummarySections.wrap(CiSummarySections.AGENT_CI, heldCiText(round)));
+    } else {
+      appendCi(sb, round);
+      appendSuggestedCommands(sb, round, findings, botIdentity);
+    }
     appendInteractionCheatsheet(sb, botIdentity);
     return sb.toString().stripTrailing();
   }
@@ -170,6 +174,27 @@ final class AgentNextSteps {
     return manifestLine != null && !manifestLine.isBlank() && manifestLine.contains("{\"key\"");
   }
 
+  /**
+   * The CI line and commands of a verdict with no open finding, which is what a CI hold is: the
+   * part {@link CiSummarySections} rewrites when the hold is released or kept.
+   */
+  static String heldCiText(ReviewResult result) {
+    var sb = new StringBuilder();
+    appendCi(sb, result);
+    if (!ciGreen(result)) {
+      appendFixCi(sb);
+    }
+    return sb.toString();
+  }
+
+  private static boolean ciGreen(ReviewResult result) {
+    return result.offendingCiChecks().isEmpty() && !result.ciUnreadable();
+  }
+
+  private static void appendFixCi(StringBuilder sb) {
+    sb.append("**Suggested commands:**\n- Fix failing CI, then `/review`.\n\n");
+  }
+
   private static void appendCi(StringBuilder sb, ReviewResult result) {
     sb.append("**CI:** ");
     if (result.offendingCiChecks().isEmpty()) {
@@ -191,15 +216,14 @@ final class AgentNextSteps {
 
   private static void appendSuggestedCommands(
       StringBuilder sb, ReviewResult result, List<Finding> findings, BotIdentity botIdentity) {
-    boolean ciGreen = result.offendingCiChecks().isEmpty() && !result.ciUnreadable();
-    if (findings.isEmpty() && ciGreen) {
+    if (!ciGreen(result)) {
+      appendFixCi(sb);
+      return;
+    }
+    if (findings.isEmpty()) {
       return;
     }
     sb.append("**Suggested commands:**\n");
-    if (!ciGreen) {
-      sb.append("- Fix failing CI, then `/review`.\n\n");
-      return;
-    }
     var mention = botIdentity.primaryMention();
     sb.append("- After addressing findings: `/review` or @").append(mention).append(" review\n");
     int hints = 0;

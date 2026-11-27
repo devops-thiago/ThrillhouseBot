@@ -232,11 +232,6 @@
             <artifactId>quarkus-flyway-postgresql</artifactId>
         </dependency>
 
-        <!-- GitHub App auth -->
-        <dependency>
-            <groupId>com.nimbusds</groupId>
-            <artifactId>nimbus-jose-jwt</artifactId>
-        </dependency>
         <!--
             GitHub event handling (Quarkiverse GitHub App): owns the webhook entry — HMAC
             signature check over the raw body, delivery parsing and event dispatch to the

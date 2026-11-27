@@ -46,7 +46,7 @@ guide, configuration reference, architecture, comparison, and the hosted
 - Follow-up reviews track whether earlier findings were fixed, declined or are still open, and re-check a maintainer's decline against the code
 - One summary comment per pull request, edited in place every round, with a risk breakdown, a changed-files walkthrough and every finding still open
 - Comment commands (`/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`, `/resolve`, `/pause`, `/resume`, `/help`, and with learnings on `/learnings`, `/remember`, `/forget`) and conversational replies to `@thrillhousebot`
-- Auto-review triggers: skip drafts, gate on labels or authors, filter by base branch, and optionally space out reviews of one PR (`AUTO_REVIEW_MIN_INTERVAL`)
+- Auto-review triggers: skip drafts, gate on labels or authors, filter by base branch, space out reviews of one PR (`AUTO_REVIEW_MIN_INTERVAL`) and limit how many run per repository
 - Maintainer 👍/👎 reactions and "not useful" replies are recorded as [finding feedback](https://devops-thiago.github.io/ThrillhouseBot/feedback/)
 - Optional review context, each off by default: the issues a PR links and their acceptance criteria, failing CI checks and test names, patch coverage from your own coverage report, and review learnings (maintainer declines and `/remember` conventions from earlier reviews of the same repository)
 - Optional deterministic scan of added lines for leaked credentials and risky Terraform, Kubernetes, CloudFormation and Dockerfile settings, with no model call and every matched secret redacted
@@ -81,7 +81,7 @@ Enterprise plan; see the
 [Inference Providers pricing](https://huggingface.co/docs/inference-providers/pricing).
 NVIDIA has a free tier, useful for trying the bot. `AI_API_KEY` is a key from
 build.nvidia.com, and the free tier is limited to about 40 requests per minute,
-so set `AI_MAX_CONCURRENT_CALLS` low (for example `2`). Check each provider's
+so set `AI_MAX_CONCURRENT_CALLS` (default `16`) low, for example `2`. Check each provider's
 current terms; both change them.
 
 Ollama's cloud endpoint (`https://ollama.com/v1`) limits how many requests one
@@ -100,8 +100,9 @@ to use another provider.
 
 <!-- docs:commands:start -->
 Comment one of these on a pull request. Each also has a mention form, such as
-`@Thrillhousebot review`. The bot reacts with 👀 to acknowledge a command and
-does the work in the background. A plain `@thrillhousebot` mention with no
+`@Thrillhousebot review`. The bot reacts with 👀 to acknowledge a command from
+someone allowed to use it and does the work in the background. A command from
+anyone else gets no reaction and no reply. A plain `@thrillhousebot` mention with no
 command word gets a written answer instead.
 
 | Command | What it does | Access |
@@ -128,7 +129,9 @@ repository, or a login listed in
 `THRILLHOUSEBOT_REVIEW_MANUAL_TRIGGER_ALLOWED_LOGINS`, because the commands spend
 the operator's AI budget. The `resolved` and `declined` directives always need
 write access, judged by the comment's GitHub `author_association` (`OWNER`,
-`MEMBER` or `COLLABORATOR`); the allowlist does not extend to them.
+`MEMBER` or `COLLABORATOR`); the allowlist does not extend to them. `/help` is
+open to anyone, but for a commenter without write access the bot answers it
+once per pull request per hour and ignores the repeats.
 
 **Directives.** `@thrillhousebot resolved` and `@thrillhousebot declined` are
 not slash commands. They have no `/` form and are applied by the next review,
@@ -410,6 +413,44 @@ path is in the string are kept. A finding verification call that returns no
 response body is made once more before the findings are kept unverified. These
 calls are not counted by `REVIEW_MAX_AI_CALLS`; they record their usage against
 `REVIEW_MAX_TOKENS_PER_REVIEW` and are skipped at that ceiling.
+
+The spend ceiling ships at `1000000` tokens, about one and a half times what a
+full review uses at the default budget (six calls of up to 48,000 input and
+8,192 output tokens, plus a verifier call per batch, is roughly 620,000 before
+retries). If you raise `REVIEW_MAX_INPUT_TOKENS` or `REVIEW_MAX_AI_CALLS`, raise
+`REVIEW_MAX_TOKENS_PER_REVIEW` with them; the bot logs a warning at startup when
+the planned input alone is above the ceiling. `0` turns the ceiling off.
+
+### Limits on automatic reviews
+
+Anyone who can open a pull request on a repository starts automatic reviews, so
+the bot bounds them without any setting:
+
+| Limit | Setting | Default | `0` means |
+|---|---|---|---|
+| Time between automatic reviews of one PR | `AUTO_REVIEW_MIN_INTERVAL` | `1m` | review every event |
+| Automatic reviews of one repository running at once | `AUTO_REVIEW_MAX_CONCURRENT_PER_REPO` | `4` | no limit |
+| Automatic reviews of one repository waiting for a slot | `AUTO_REVIEW_MAX_QUEUED_PER_REPO` | `50` | no limit |
+| Tokens one review may spend | `REVIEW_MAX_TOKENS_PER_REVIEW` | `1000000` | no ceiling |
+| Model calls in flight, whole process | `AI_MAX_CONCURRENT_CALLS` | `16` | no limit |
+
+- **Interval.** For this long after an automatic review of a PR is posted, a
+  push, a reopen or a repeated ready-for-review of that PR is skipped
+  (`reason=RATE_LIMITED`). A skipped event is not reviewed later: the next push
+  after the window, or a `/review`, reviews the PR. That is why the default is
+  short. A longer window saves more model spend and leaves more pushes without
+  a review or a check run on the new head. Marking a draft ready is reviewed
+  inside the window once per head commit, so converting a PR to draft and back
+  does not start another review of the same commit.
+- **Per repository.** When four automatic reviews of a repository are running,
+  the next ones wait for a slot, one per pull request, so a burst (a dependency
+  bot opening a dozen pull requests) is reviewed a few at a time and nothing is
+  lost. Only past fifty waiting reviews is a new one skipped
+  (`reason=REPOSITORY_QUEUE_FULL`).
+- **Manual commands.** `/review` and `/summary` need write access, so they
+  ignore the interval, take no slot and never wait.
+
+These limits are kept in memory in the one bot process and reset on restart.
 
 ### Dimension routing
 
@@ -1719,11 +1760,20 @@ and counts skips per reason in the dashboard summary
    `IGNORED_BASE_BRANCH`): check `WEBHOOK_BASE_BRANCHES` and
    `WEBHOOK_IGNORED_BASE_BRANCHES`.
 6. **Rate window** (`reason=RATE_LIMITED`): an automatic review already ran
-   within `AUTO_REVIEW_MIN_INTERVAL`.
+   within `AUTO_REVIEW_MIN_INTERVAL` (default `1m`). The event is not reviewed
+   later; push again or comment `/review`. A second ready-for-review of the same
+   commit inside the window is skipped the same way.
 7. **Redelivery** (`reason=DUPLICATE_DELIVERY`): GitHub redelivered a webhook
    the bot already handled. This is normal.
 8. **Executor saturated** (`reason=DISPATCH_REJECTED`): the review executor
    refused the task (overload or shutdown); redeliver the webhook from GitHub.
+9. **Repository queue full** (`reason=REPOSITORY_QUEUE_FULL`): as many automatic
+   reviews of the repository were already waiting as
+   `AUTO_REVIEW_MAX_QUEUED_PER_REPO` allows. Push again later or comment
+   `/review`. See [Limits on automatic reviews](#limits-on-automatic-reviews).
+
+A review that seems slow to start may be waiting for one of the repository's
+`AUTO_REVIEW_MAX_CONCURRENT_PER_REPO` slots.
 
 A `/review` from a user with write access bypasses the draft, label,
 base-branch and rate-window gates, but not `/pause`, and it does not review a
@@ -1758,7 +1808,7 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
   patch are left out of the review input; the summary lists a short rollup
   (`N pure renames omitted…`). A rename with edits is reviewed.
 - **Single process.** OAuth sessions, the WebSocket replay buffer, the per-PR
-  auto-review window, the findings a superseded review hands to its replacement,
+  auto-review window, the per-repository review slots, the findings a superseded review hands to its replacement,
   verdicts held on pending CI and the claims the verifier rejected on a head are
   kept in memory: lost on restart and not shared between replicas. Review
   history and cost totals are stored in PostgreSQL. Multiple replicas are not
