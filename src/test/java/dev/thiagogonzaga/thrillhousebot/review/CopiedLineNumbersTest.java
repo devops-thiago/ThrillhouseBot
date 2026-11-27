@@ -86,6 +86,19 @@ class CopiedLineNumbersTest {
   }
 
   @Test
+  void newCodeWithoutAMarkerLosesItsNumberWhenTheOldCodeKeptEveryMarker() {
+    // #1364: the old quote kept its markers, the new code dropped them. Each new-code line is read
+    // on its own: "11 long c;" has no marker, "10  int a2;" kept the context one, and 9 is outside
+    // the copied span.
+    var result =
+        copied.strip(
+            finding("src/A.java", 11, "10  int a;\n11 +int c;", "11 long c;\n10  int a2;\n9 w;"));
+
+    assertEquals("int a;\nint c;", result.suggestionOld());
+    assertEquals("long c;\nint a2;\n9 w;", result.suggestionNew());
+  }
+
+  @Test
   void anUnmarkedCopyWhoseCodeDiffersOrWhoseLineIsMissingIsLeftAsWritten() {
     for (var quote :
         new String[] {
