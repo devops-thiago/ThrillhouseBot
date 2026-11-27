@@ -115,4 +115,37 @@ class PatchIndexTest {
     assertFalse(PatchIndex.parse((String) null).lastHunkReachesEndOfFile());
     assertEquals(List.of(), PatchIndex.parse(" ").lines());
   }
+
+  /**
+   * A start line of ten digits or more fits no {@code int}; one near the top of the range would
+   * wrap to a negative number as lines are counted. Such a header is not a hunk header: its lines
+   * belong to no hunk, as under any header that cannot be read.
+   */
+  @Test
+  void aHeaderWhoseStartLineIsTooLongToCountFromOpensNoHunk() {
+    for (var header :
+        List.of("@@ -1 +99999999999 @@", "@@ -99999999999,2 +1 @@", "@@ -1,2 +2147483647,3 @@")) {
+      var patch = PatchIndex.parse(header + "\n+a\n+b\n");
+
+      assertEquals(List.of(), patch.lines(), header);
+      assertEquals(-1, patch.lastHunk(), header);
+      assertFalse(patch.lastHunkReachesEndOfFile(), header);
+    }
+
+    var builder = new PatchIndex.Builder();
+    builder.accept("@@ -1 +99999999999 @@");
+    builder.accept("+kept();");
+    assertEquals(List.of("kept();"), builder.looseLines().stream().map(Line::text).toList());
+  }
+
+  @Test
+  void aNineDigitStartLineIsStillCountedFrom() {
+    var patch = PatchIndex.parse("@@ -999999998,2 +999999999,2 @@\n a\n+b\n");
+
+    assertEquals(
+        List.of(
+            new Line(0, Kind.CONTEXT, 999999998, 999999999, "a", 1),
+            new Line(0, Kind.ADDED, 999999999, 1000000000, "b", 2)),
+        patch.lines());
+  }
 }

@@ -75,6 +75,14 @@ import java.util.regex.Pattern;
  */
 public final class PromptLabelScrubber {
 
+  /**
+   * Put in front of a pattern that opens with a run of blanks: the run is matched from its first
+   * blank only. Such a pattern otherwise starts at every blank of a run and reads the rest of the
+   * run each time, which is quadratic in the length of a run the model wrote, and no match is lost:
+   * one starting inside a run goes on exactly as the one starting at its head.
+   */
+  private static final String RUN_START = "(?<![ \\t])";
+
   /** The example locator the bot's instructions used, and its placeholder-shaped matcher. */
   private static final String EXAMPLE_PATH = "path/to/File.java";
 
@@ -200,7 +208,7 @@ public final class PromptLabelScrubber {
    * ids are only a citing lead is decided by {@link #CITING_LEADS}.
    */
   private static final Pattern LEARNING_ID_PARENTHETICAL =
-      Pattern.compile("[ \\t]*\\(([^()\\n]{0,6}?)" + LEARNING_ID_GROUP + "\\)");
+      Pattern.compile(RUN_START + "[ \\t]*\\(([^()\\n]{0,6}?)" + LEARNING_ID_GROUP + "\\)");
 
   /** What may stand before the ids of a parenthetical that goes whole: "(see [L12])". */
   private static final Set<String> CITING_LEADS =
@@ -273,7 +281,8 @@ public final class PromptLabelScrubber {
    */
   private static final Pattern WITHHELD_NOTE =
       Pattern.compile(
-          "[ \\t]*\\((?:excluded|omitted|withheld)(?: from (?:AI )?review(?: scope)?)? by the"
+          RUN_START
+              + "[ \\t]*\\((?:excluded|omitted|withheld)(?: from (?:AI )?review(?: scope)?)? by the"
               + " ignore list\\)",
           Pattern.CASE_INSENSITIVE);
 
@@ -290,7 +299,8 @@ public final class PromptLabelScrubber {
   /** "(as provided with this review)": the same note as a parenthetical, which goes whole. */
   private static final Pattern PROVIDED_WITH_REVIEW_PARENTHETICAL =
       Pattern.compile(
-          "[ \\t]*\\((?:as )?(?:provided|supplied|given) (?:with|to|for) this review\\)",
+          RUN_START
+              + "[ \\t]*\\((?:as )?(?:provided|supplied|given) (?:with|to|for) this review\\)",
           Pattern.CASE_INSENSITIVE);
 
   /**
@@ -305,10 +315,15 @@ public final class PromptLabelScrubber {
   /**
    * "from issue #117 as provided with this review": a note on the model's input (#975). Never right
    * after "as", which belongs to the note (#986).
+   *
+   * <p>The blanks before the note are read from the first one that may open it: the head of their
+   * run, or the second blank of a run that follows "as", whose first blank may not. Read from every
+   * blank of a run, the pattern took time quadratic in the run's length.
    */
   private static final Pattern PROVIDED_WITH_REVIEW =
       Pattern.compile(
-          "(,)?(?<!\\bas)(?:[ \\t]+|[ \\t]*\n[ \\t]*)(?:as )?(?:provided|supplied|given)"
+          "(,)?(?<!\\bas)(?:(?<![ \\t])|(?<=\\bas[ \\t]))"
+              + "(?:[ \\t]+|[ \\t]*\n[ \\t]*)(?:as )?(?:provided|supplied|given)"
               + " (?:with|to|for) this review\\b(,)?",
           Pattern.CASE_INSENSITIVE);
 
@@ -337,7 +352,7 @@ public final class PromptLabelScrubber {
    * rule reads "wait, then …", an instruction to wait, as a correction.
    */
   private static final Pattern DASH_SELF_CORRECTION =
-      Pattern.compile("[ \\t]+([—–-])[ \\t]+[Ww]ait,[ \\t]++(?!then\\b)");
+      Pattern.compile(RUN_START + "[ \\t]+([—–-])[ \\t]+[Ww]ait,[ \\t]++(?!then\\b)");
 
   /**
    * "BedReporter... rather, grep across the added files confirms …": a sentence the model broke off
@@ -348,7 +363,8 @@ public final class PromptLabelScrubber {
    */
   private static final Pattern RESTARTED_SENTENCE =
       Pattern.compile(
-          "([ \\t]*)[^\\s.!?…](?:[^\\s.!?…]|\\.(?=\\w)){0,59}"
+          RUN_START
+              + "([ \\t]*)[^\\s.!?…](?:[^\\s.!?…]|\\.(?=\\w)){0,59}"
               + "(?:\\.\\.\\.|…)[ \\t]+(\\p{L}{4,8}),[ \\t]+(\\p{L})");
 
   /**
@@ -396,7 +412,7 @@ public final class PromptLabelScrubber {
    */
   private static final Pattern AMONG_THE_VERIFIED =
       Pattern.compile(
-          "\\s+among\\s+the\\s+(?:(\\w{1,9})\\s+)?(?:verified|confirmed)\\s+(?:findings?\\s+)?"
+          "(?<!\\s)\\s+among\\s+the\\s+(?:(\\w{1,9})\\s+)?(?:verified|confirmed)\\s+(?:findings?\\s+)?"
               + "(?:above|below)\\b",
           Pattern.CASE_INSENSITIVE);
 
@@ -407,7 +423,8 @@ public final class PromptLabelScrubber {
    */
   private static final Pattern AMONG_THE_VERIFIED_OPENING =
       Pattern.compile(
-          "([ \\t]*+)among the (?:(\\w{1,9}) )?(?:verified|confirmed) (?:findings? )?"
+          RUN_START
+              + "([ \\t]*+)among the (?:(\\w{1,9}) )?(?:verified|confirmed) (?:findings? )?"
               + "(?:above|below)\\b,?[ \\t]*(\\p{L})?",
           Pattern.CASE_INSENSITIVE);
 

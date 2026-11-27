@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTimeout;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
@@ -1338,5 +1339,21 @@ class PathMentionsTest {
             .screen(new ReviewResponse(List.of(raised), List.of(), null));
 
     assertEquals(kept ? suggestion : null, screened.findings().getFirst().suggestionNew());
+  }
+
+  /**
+   * A code span holding a run of 400,000 blanks and no line break. Looking for a wrapped line used
+   * to start at every blank and read the rest of the run: 32,000 took 2 seconds.
+   */
+  @Test
+  void aLongRunOfBlanksInACodeSpanIsReadOnce() {
+    var mentions = mentions(ZIG_IMAGE, "", Set.of());
+    var description = "`RUN" + " ".repeat(400_000) + "install` is not in the file.";
+
+    assertSame(
+        description,
+        assertTimeoutPreemptively(
+            Duration.ofSeconds(10),
+            () -> mentions.withQuotedPathsCorrected(description, "zig/Dockerfile")));
   }
 }

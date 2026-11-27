@@ -265,8 +265,13 @@ public class ReviewDimensionRouter {
           "scan",
           "iterat");
 
-  /** A call to something named list…, the usual shape of a collection fetch. */
-  private static final Pattern LIST_CALL = Pattern.compile("list\\w*\\s*\\(");
+  /**
+   * A call: a whole name, then its argument list opening. {@link #callsListFunction} keeps the ones
+   * whose name holds {@code list}, the usual shape of a collection fetch. The name is read once,
+   * from its first character: a pattern starting at {@code list} itself read to the end of the name
+   * from every {@code list} in it, which is quadratic in the length of a name made of them.
+   */
+  private static final Pattern CALL = Pattern.compile("(?<!\\w)(\\w++)\\s*+\\(");
 
   /**
    * Substrings (matched against the lower-cased patch) that suggest a stub or a fake, across the
@@ -388,13 +393,24 @@ public class ReviewDimensionRouter {
       return out;
     }
     var lower = patch.toLowerCase(Locale.ROOT);
-    if (PAGINATION_SIGNALS.stream().anyMatch(lower::contains) || LIST_CALL.matcher(lower).find()) {
+    if (PAGINATION_SIGNALS.stream().anyMatch(lower::contains) || callsListFunction(lower)) {
       out.putIfAbsent(ReviewDimension.PAGINATION, "API, query or list code in the patch");
     }
     if (MOCK_SIGNALS.stream().anyMatch(lower::contains)) {
       out.putIfAbsent(ReviewDimension.MOCK_FIDELITY, "mock or stub in the patch");
     }
     return out;
+  }
+
+  /** Whether the lower-cased patch calls something whose name holds {@code list}. */
+  private static boolean callsListFunction(String lower) {
+    var call = CALL.matcher(lower);
+    while (call.find()) {
+      if (call.group(1).contains("list")) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** What kind of file {@code path} names, from its name and extension. */

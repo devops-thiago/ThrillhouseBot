@@ -20,10 +20,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import java.nio.file.FileSystems;
-import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
-import java.nio.file.PathMatcher;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -51,7 +48,7 @@ public class ReviewDiffFormatter {
    */
   private static final Logger LOG = Logger.getLogger(ReviewDiffFormatter.class);
 
-  record GlobMatcher(PathMatcher primary, PathMatcher suffix) {}
+  record GlobMatcher(LinearGlob primary, LinearGlob suffix) {}
 
   /**
    * A compiled set of ignore globs — the single glob-matching implementation in the codebase. The
@@ -74,6 +71,13 @@ public class ReviewDiffFormatter {
   record IgnoreGlobs(List<GlobMatcher> matchers) {
 
     static final IgnoreGlobs NONE = new IgnoreGlobs(List.of());
+
+    /**
+     * The longest declared pattern compiled. Real globs are far shorter, and with the path's length
+     * this bounds what one match costs; the forms a declaration expands to ({@link
+     * #gitignoreForms}) stay inside {@link LinearGlob#MAX_PATTERN_CHARS}.
+     */
+    static final int MAX_DECLARED_GLOB_CHARS = 500;
 
     IgnoreGlobs {
       matchers = List.copyOf(matchers);
@@ -119,6 +123,12 @@ public class ReviewDiffFormatter {
         return List.of();
       }
       var pattern = raw.trim();
+      if (pattern.length() > MAX_DECLARED_GLOB_CHARS) {
+        LOG.warnf(
+            "Ignoring ignore glob of %d characters: a pattern may have %d at most",
+            pattern.length(), MAX_DECLARED_GLOB_CHARS);
+        return List.of();
+      }
       if (pattern.startsWith("!")) {
         // gitignore's re-include, which this model cannot honor: the effective set is global ∪
         // per-repo and nothing may put back a file the union excludes. Compiling it would build a
@@ -136,7 +146,7 @@ public class ReviewDiffFormatter {
       }
       try {
         return forms.stream().map(IgnoreGlobs::compileForm).toList();
-      } catch (InvalidPathException | PatternSyntaxException e) {
+      } catch (PatternSyntaxException e) {
         LOG.warnf(e, "Ignoring invalid ignored-files glob pattern: %s", pattern);
         return List.of();
       }
@@ -148,13 +158,14 @@ public class ReviewDiffFormatter {
      * remainder is compiled separately and matched against the file name and every sub-path by
      * {@link #matchesSuffix}. Every "at any depth" form {@link #gitignoreForms} produces carries
      * that prefix, so this is what makes an unanchored pattern reach the repository root too.
+     *
+     * <p>The glob is compiled by {@link LinearGlob}, which reads the JDK's glob syntax with the
+     * JDK's meaning and matches without backtracking: a repository declares these patterns and a
+     * pull request names the paths, and neither may set how long a match takes.
      */
     private static GlobMatcher compileForm(String form) {
-      var primary = FileSystems.getDefault().getPathMatcher("glob:" + form);
-      PathMatcher suffix =
-          form.startsWith("**/")
-              ? FileSystems.getDefault().getPathMatcher("glob:" + form.substring(3))
-              : null;
+      var primary = LinearGlob.compile(form);
+      var suffix = form.startsWith("**/") ? LinearGlob.compile(form.substring(3)) : null;
       return new GlobMatcher(primary, suffix);
     }
 
@@ -224,7 +235,8 @@ public class ReviewDiffFormatter {
       if (filename == null || filename.isBlank() || matchers.isEmpty()) {
         return false;
       }
-      Path path = Path.of(filename.replace('\\', '/'));
+      // Through Path, as before, for its normal form: no doubled or trailing separator.
+      String path = Path.of(filename.replace('\\', '/')).toString();
       for (GlobMatcher matcher : matchers) {
         if (matcher.primary().matches(path) || matchesSuffix(matcher.suffix(), path)) {
           return true;
@@ -234,20 +246,8 @@ public class ReviewDiffFormatter {
     }
 
     /** Matches `**`-prefixed patterns against the file name and every sub-path of the file. */
-    private static boolean matchesSuffix(PathMatcher suffix, Path path) {
-      if (suffix == null) {
-        return false;
-      }
-      var fileName = path.getFileName();
-      if (fileName != null && suffix.matches(fileName)) {
-        return true;
-      }
-      for (var i = 0; i < path.getNameCount(); i++) {
-        if (suffix.matches(path.subpath(i, path.getNameCount()))) {
-          return true;
-        }
-      }
-      return false;
+    private static boolean matchesSuffix(LinearGlob suffix, String path) {
+      return suffix != null && suffix.matchesFromASegment(path);
     }
   }
 

@@ -108,7 +108,7 @@ public final class DescriptionGapLabels {
   private static final Pattern LABEL_NUMBER = Pattern.compile("G(\\d{1,3})");
 
   /** A parenthetical: group 1 the space before "(", group 2 its content, as in "(see G1)". */
-  private static final Pattern PARENTHETICAL = Pattern.compile("(\\s*)\\(([^()\\n]*)\\)");
+  private static final Pattern PARENTHETICAL = Pattern.compile("(?<!\\s)(\\s*)\\(([^()\\n]*)\\)");
 
   /** A label cited inside a parenthetical, with the pointer word before it: "see G1", "G1". */
   private static final Pattern CITED_LABEL =
@@ -121,7 +121,8 @@ public final class DescriptionGapLabels {
   private static final Pattern LEADING_SEPARATORS = Pattern.compile("^[\\s,;:—–-]+");
 
   /** The same at its end. */
-  private static final Pattern TRAILING_SEPARATORS = Pattern.compile("[\\s,;:—–-]+$");
+  private static final Pattern TRAILING_SEPARATORS =
+      Pattern.compile("(?<![\\s,;:—–-])[\\s,;:—–-]+$");
 
   /** Labels that close their clause: "G2." in ", as in G2.", "G1;" in "same as G1;". */
   private static final Pattern CLAUSE_END_LABELS =
@@ -133,7 +134,7 @@ public final class DescriptionGapLabels {
    * at the label, so the sentence stands without it.
    */
   private static final Pattern POINTER_BEFORE =
-      Pattern.compile("(?:,\\s*+|\\s++)(?:" + POINTERS + ")\\s++$");
+      Pattern.compile("(?:,\\s*+|(?<!\\s)\\s++)(?:" + POINTERS + ")\\s++$");
 
   /**
    * A gap led by a label and a short status clause about it, then a colon or a spaced dash: "G2
@@ -225,7 +226,7 @@ public final class DescriptionGapLabels {
 
   private static final Pattern SPACES = Pattern.compile("[ \\t]{2,}");
 
-  private static final Pattern SPACE_BEFORE_PUNCTUATION = Pattern.compile("\\s+([,.;:)])");
+  private static final Pattern SPACE_BEFORE_PUNCTUATION = Pattern.compile("(?<!\\s)\\s+([,.;:)])");
 
   private static final Pattern DOUBLED_COMMA = Pattern.compile(",\\s*([,.;:])");
 

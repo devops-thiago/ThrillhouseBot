@@ -17,9 +17,11 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import java.time.Duration;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -704,5 +706,54 @@ class TestAssertionsTest {
         List.of(),
         TestAssertions.of(List.of(file("c/tests/long.c", patch.toString())))
             .functionsLabelling("long_body_final_check"));
+  }
+
+  /**
+   * The line above the check is one word of 400,000 characters. Looking for a function name used to
+   * start at every letter of it and read the rest of the word each time, which took minutes.
+   */
+  @Test
+  void aLineThatIsOneLongWordIsReadOnce() {
+    var word = "a".repeat(400_000);
+    var tests =
+        TestAssertions.of(
+            List.of(
+                file(
+                    "c/tests/long.c",
+                    "@@ -0,0 +1,4 @@\n+void test_long_word(void) {\n+  "
+                        + word
+                        + "\n+    CHECK(\"long_word_check\", ok);\n+  "
+                        + word
+                        + " (x) {\n+    CHECK(\"long_word_call\", ok);\n")));
+
+    assertTimeoutPreemptively(
+        Duration.ofSeconds(10),
+        () -> {
+          assertEquals(List.of("test_long_word"), tests.functionsLabelling("long_word_check"));
+          assertEquals(List.of("test_long_word"), tests.functionsLabelling("long_word_call"));
+        });
+  }
+
+  /** A name is read from its first letter or underscore, past any digits its word opens with. */
+  @Test
+  void aFunctionNameStartsAfterTheDigitsItsWordOpensWith() {
+    var tests =
+        TestAssertions.of(
+            List.of(
+                file(
+                    "c/tests/digits.c",
+                    """
+                    @@ -0,0 +1,6 @@
+                    +static void 2fa_test_login(void) {
+                    +    CHECK("digits_before_the_name", ok);
+                    +}
+                    +int 9 test_after_a_number(void) {
+                    +    CHECK("a_number_alone_is_no_name", ok);
+                    +}
+                    """)));
+
+    assertEquals(List.of("fa_test_login"), tests.functionsLabelling("digits_before_the_name"));
+    assertEquals(
+        List.of("test_after_a_number"), tests.functionsLabelling("a_number_alone_is_no_name"));
   }
 }

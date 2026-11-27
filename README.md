@@ -1478,8 +1478,9 @@ here and in the deployment setting:
 
 `*` never crosses a `/`; use `**` to span directories. Negation (`!path`) is not
 supported and is dropped with a warning, since nothing may put back an excluded
-file. A glob that matched no file in the PR is named in the review summary, so a
-declaration that does nothing is visible.
+file. A glob longer than 500 characters is dropped with a warning too, like one
+that cannot be parsed. A glob that matched no file in the PR is named in the
+review summary, so a declaration that does nothing is visible.
 
 **Review rules: global instructions plus every matching path scope.** The prose
 in `.github/thrillhousebot.md` (or whichever file the fallback lands on) applies

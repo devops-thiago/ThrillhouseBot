@@ -30,7 +30,11 @@ final class LineMentions {
     }
     var mention =
         Pattern.compile(
-            "(?<![\\w./-])(/?(?:[\\w.-]+/)*"
+            // The directories are read possessively: a segment never gives a character back, so
+            // the matcher does not keep a stack frame per directory, which overflowed the stack
+            // on a path of a few thousand of them. No directory can hold the file name followed
+            // by ":", so nothing that matched before needs a segment given back.
+            "(?<![\\w./-])(/?(?:[\\w.-]++/)*+"
                 + Pattern.quote(name)
                 + "):"
                 + from

@@ -66,6 +66,35 @@ cannot resolve its review threads.
 
 ### Security
 
+- **Text from a pull request can no longer make a review spend minutes in pattern matching.**
+  Several patterns read to the end of their input from every place a match could start, so the
+  time grew with the square of the input's length: a description made of line breaks (about 8
+  seconds at GitHub's 65,536-character limit, on the checked "Bug fix" box test), one added line
+  made of `val`, `fun` or `const a=(` (minutes at a few hundred thousand characters), and, with
+  `REVIEW_DIMENSION_ROUTING_ENABLED` or CI-failure context on, an added line that is one long
+  name. Each of these patterns now reads a bounded stretch or reads each word once. An added line
+  longer than 1,000 characters is no longer scanned for parser-like code, so a minified or
+  generated line no longer brings the heuristic-code guidance into the prompt. A "Bug fix"
+  checkbox is read on its own line only: a list marker on one line and `[x]` on the next no longer
+  counts.
+- **A long run of blanks in a model answer no longer stalls the clean-up of its text.** The
+  patterns that tidy finding descriptions, description gaps, file summaries and quoted code spans
+  started at every blank of a run and read the rest each time: a description with a run of 16,000
+  spaces took about 15 seconds, four times that for twice the length. Each now reads a run once,
+  from its first blank, and removes what it removed before.
+- **A glob in `.github/thrillhousebot.yml` can no longer stall a review.** `ignored-files` and
+  `path-instructions` globs were matched by the JDK's backtracking matcher, where each `*` multiplies
+  the work: `*a*a*a*a*b` against a 250-character file name took over a minute and one more wildcard
+  took hours. They are now matched without backtracking, in time proportional to the glob's length
+  times the path's. The syntax and what a glob matches are unchanged. A glob longer than 500
+  characters is dropped with a warning, as an unparseable glob is.
+- **Malformed input no longer ends a review with an error.** A hunk header whose start line has
+  ten or more digits (`@@ -1 +99999999999 @@`) threw a `NumberFormatException`; it now opens no
+  hunk, like any header that cannot be read. A finding description naming a path of several
+  thousand directories overflowed the stack while its `file:line` mention was moved; such a path
+  is now read without recursion. A model answer whose status map has a key of ten or more digits
+  threw too, and now reads as naming no finding.
+
 - **The native image moves to the 2026-11-25 UBI9 micro base**, which ships `pcre2` 10.40-7.el9_8
   (RHSA-2026:81532) with the fixes for CVE-2026-89161, CVE-2026-86145 and CVE-2026-103111, so their
   `.trivyignore` entries are removed. CVE-2026-84782 (`libssl3`, DTLS only) stays ignored for the

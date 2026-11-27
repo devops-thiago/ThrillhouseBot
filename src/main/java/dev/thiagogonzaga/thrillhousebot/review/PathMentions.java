@@ -289,7 +289,7 @@ final class PathMentions {
   private static final Pattern CODE_SPAN = Pattern.compile("`((?:[^`\\n]|\\n(?!\\n))++)`");
 
   /** A line break and the indentation after it, inside a wrapped code span. */
-  private static final Pattern WRAP = Pattern.compile("[ \\t]*+\\n[ \\t]*+");
+  private static final Pattern WRAP = Pattern.compile("(?<![ \\t])[ \\t]*+\\n[ \\t]*+");
 
   /** A code span's text that is a path and nothing else ({@link #quotesMoreThanAPath}). */
   private static final Pattern BARE_PATH = Pattern.compile("[\\w./-]+");

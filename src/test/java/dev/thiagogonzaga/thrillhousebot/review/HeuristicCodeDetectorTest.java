@@ -16,8 +16,10 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.time.Duration;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -262,12 +264,25 @@ class HeuristicCodeDetectorTest {
   void shouldHandleLargeRegexAndArrowBodiesWithoutBacktrackingOverflow() {
     var longToken = "x".repeat(100_000);
 
-    assertTrue(
+    // A line this long is not scanned at all; the arrow pattern is also run on it directly, since
+    // it may not overflow the stack on text of any length.
+    assertFalse(
         HeuristicCodeDetector.introducesHeuristicCode(
             diff("frontend/src/version.ts", "const VERSION = /" + longToken + "/;")));
-    assertTrue(
+    assertFalse(
         HeuristicCodeDetector.introducesHeuristicCode(
             diff("frontend/src/validate.ts", "const validateTag = (" + longToken + ") => true;")));
+    assertFalse(
+        HeuristicCodeDetector.declaresHeuristicMember(
+            "const validateTag = (" + longToken + ") => true;", true));
+
+    var token = "x".repeat(HeuristicCodeDetector.MAX_SCANNED_LINE_CHARS - 40);
+    assertTrue(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff("frontend/src/version.ts", "const VERSION = /" + token + "/;")));
+    assertTrue(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff("frontend/src/validate.ts", "const validateTag = (a, b) => " + token + ";")));
   }
 
   @Test
@@ -391,5 +406,101 @@ class HeuristicCodeDetectorTest {
             @@ -1,2 +1,2 @@
                int unchanged = 1;
             """));
+  }
+
+  /**
+   * One added line of a million characters, each a line the declaration patterns used to read to
+   * its end from every keyword on it. Minified and generated files have such lines; nobody writes a
+   * parser on one.
+   */
+  @Test
+  void shouldNotLetOneLongAddedLineSetTheCostOfTheScan() {
+    var constants = diff("src/main/kotlin/A.kt", "val ".repeat(250_000));
+    var members = diff("src/main/kotlin/A.kt", "fun ".repeat(250_000));
+    var arrows = diff("web/src/a.js", "const a=(".repeat(111_000));
+    assertTimeoutPreemptively(
+        Duration.ofSeconds(10),
+        () -> {
+          assertFalse(HeuristicCodeDetector.introducesHeuristicCode(constants));
+          assertFalse(HeuristicCodeDetector.introducesHeuristicCode(members));
+          assertFalse(HeuristicCodeDetector.introducesHeuristicCode(arrows));
+        });
+  }
+
+  @Test
+  void shouldSkipAnAddedLineLongerThanTheScanReads() {
+    var call = " Pattern.compile(\"a\");";
+    var room = HeuristicCodeDetector.MAX_SCANNED_LINE_CHARS - 1 - call.length();
+    assertTrue(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff("src/main/java/A.java", "x".repeat(room) + call)),
+        "a line of exactly the longest length read is still scanned");
+    assertFalse(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff("src/main/java/A.java", "x".repeat(room + 1) + call)));
+  }
+
+  @Test
+  void shouldEndARunOfAdditionsAtALineTooLongToScan() {
+    // Blank, so that read as part of the run it would join the two halves of the call.
+    var tooLong = " ".repeat(HeuristicCodeDetector.MAX_SCANNED_LINE_CHARS);
+    assertTrue(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff("src/main/java/A.java", "  Pattern", "      .compile(\"x\");")));
+    assertFalse(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff("src/main/java/A.java", "  Pattern", tooLong, "      .compile(\"x\");")));
+  }
+
+  /**
+   * The declaration patterns on their own, without the line cap in front of them: each keyword
+   * reads a bounded stretch of what follows it, never the rest of the text.
+   */
+  @Test
+  void shouldReadABoundedGapAfterEachDeclarationKeyword() {
+    var constants = "val ".repeat(150_000);
+    var members = "fun ".repeat(150_000);
+    var arrows = "const a=(".repeat(66_000);
+    assertTimeoutPreemptively(
+        Duration.ofSeconds(10),
+        () -> {
+          assertFalse(HeuristicCodeDetector.declaresThresholdConstant(constants));
+          assertFalse(HeuristicCodeDetector.declaresHeuristicMember(members, false));
+          assertFalse(HeuristicCodeDetector.declaresHeuristicMember(arrows, true));
+        });
+  }
+
+  @Test
+  void shouldKeepReadingDeclarationsOfOrdinaryLength() {
+    assertTrue(
+        HeuristicCodeDetector.declaresThresholdConstant(
+            "private static final Map<String, List<Integer>> AMBIGUITY_WINDOW_LINES = Map.of();"));
+    assertTrue(
+        HeuristicCodeDetector.declaresHeuristicMember(
+            "public static <K, V extends Comparable<? super V>> Map<K, V> parseSorted(String s) {",
+            false));
+    assertTrue(
+        HeuristicCodeDetector.declaresHeuristicMember(
+            "const validateOrder = async ({ id, lines = [], total: { amount } }) => amount > 0;",
+            true));
+    // A name declared after an earlier, unrelated declaration on the same text is still read.
+    assertTrue(
+        HeuristicCodeDetector.declaresHeuristicMember(
+            "static int count(int a) { return a; } "
+                + "/* pad */ ".repeat(30)
+                + "static int"
+                + " parseAll(String s) {",
+            false));
+  }
+
+  @Test
+  void shouldNotReadADeclarationWhoseGapIsLongerThanAnyRealOne() {
+    var padding = " ".repeat(300);
+    assertFalse(HeuristicCodeDetector.declaresThresholdConstant("val" + padding + "window = 3"));
+    assertFalse(
+        HeuristicCodeDetector.declaresHeuristicMember("fun" + padding + "parseAll(s)", false));
+    assertFalse(
+        HeuristicCodeDetector.declaresHeuristicMember(
+            "const parseAll = (a" + padding + ") => a", true));
   }
 }

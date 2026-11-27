@@ -119,8 +119,14 @@ final class TestAssertions {
    */
   private static final Pattern SINGLE_QUOTE = Pattern.compile("(?<!\\w)'([^'\\n]++)'");
 
-  /** A function declared or called on a line: its name, then its argument list opening. */
-  private static final Pattern FUNCTION_NAME = Pattern.compile("([A-Za-z_]\\w*+)\\s*+\\(");
+  /**
+   * A function declared or called on a line: its name, then its argument list opening. The name is
+   * read from the start of its word, past any digits the word opens with, so each word is read
+   * once. Starting at any letter of a word read the rest of the word from every one of them, which
+   * is quadratic in the length of a line that is one long word.
+   */
+  private static final Pattern FUNCTION_NAME =
+      Pattern.compile("(?<!\\w)\\d*+([A-Za-z_]\\w*+)\\s*+\\(");
 
   /**
    * What a declaration puts before a function's name: its type and modifiers ({@code static void},
@@ -268,7 +274,7 @@ final class TestAssertions {
     if (code.endsWith(";") || !name.find()) {
       return Optional.empty();
     }
-    var prefix = code.substring(0, name.start()).strip();
+    var prefix = code.substring(0, name.start(1)).strip();
     if (prefix.isEmpty() && above != null && above.hunk() == hunk) {
       prefix = above.text().strip();
     }

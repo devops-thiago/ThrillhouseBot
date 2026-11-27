@@ -44,9 +44,14 @@ import java.util.regex.Pattern;
  */
 record PatchIndex(List<Line> lines, int lastHunk, boolean lastHunkReachesEndOfFile) {
 
-  /** A hunk header, with the left-side and the right-side start line. */
+  /**
+   * A hunk header, with the left-side and the right-side start line. A start line is at most nine
+   * digits, so it always fits an {@code int} and counting lines up from it cannot wrap: a header
+   * with a longer number is not read as one, and its lines belong to no hunk, like the lines under
+   * any other header that cannot be read.
+   */
   static final Pattern HUNK_HEADER =
-      Pattern.compile("@@ -(?<left>\\d+)(?:,\\d+)? \\+(?<right>\\d+)(?:,\\d+)? @@");
+      Pattern.compile("@@ -(?<left>\\d{1,9})(?:,\\d+)? \\+(?<right>\\d{1,9})(?:,\\d+)? @@");
 
   /** Context lines a unified diff carries after a change when the file does not end first. */
   private static final int DIFF_CONTEXT_LINES = 3;
