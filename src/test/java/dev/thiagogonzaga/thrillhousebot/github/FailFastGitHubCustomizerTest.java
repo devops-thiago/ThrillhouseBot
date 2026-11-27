@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.github;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -24,6 +25,7 @@ import org.junit.jupiter.api.Test;
 import org.kohsuke.github.GitHubAbuseLimitHandler;
 import org.kohsuke.github.GitHubBuilder;
 import org.kohsuke.github.GitHubRateLimitHandler;
+import org.kohsuke.github.connector.GitHubConnector;
 
 class FailFastGitHubCustomizerTest {
 
@@ -44,5 +46,25 @@ class FailFastGitHubCustomizerTest {
       verify(builder).withRateLimitHandler(GitHubRateLimitHandler.FAIL);
       verify(builder).withAbuseLimitHandler(GitHubAbuseLimitHandler.FAIL);
     }
+  }
+
+  @Test
+  void onlyTheApplicationClientsAskedForByTheAppApiGetTheConnector() {
+    var builder = mock(GitHubBuilder.class);
+    when(builder.withRateLimitHandler(any(GitHubRateLimitHandler.class))).thenReturn(builder);
+    when(builder.withAbuseLimitHandler(any(GitHubAbuseLimitHandler.class))).thenReturn(builder);
+    var connector = mock(GitHubConnector.class);
+    var customizer = new FailFastGitHubCustomizer();
+
+    customizer.customizeApplicationClient(builder);
+    verify(builder, never()).withConnector(any(GitHubConnector.class));
+
+    ScopedValue.where(GitHubAppApi.CONNECTOR, connector)
+        .run(
+            () -> {
+              customizer.customize(builder);
+              customizer.customizeApplicationClient(builder);
+            });
+    verify(builder).withConnector(connector);
   }
 }

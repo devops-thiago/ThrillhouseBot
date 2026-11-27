@@ -16,9 +16,8 @@
 package dev.thiagogonzaga.thrillhousebot.github;
 
 /**
- * Thrown when GitHub App JWT generation fails due to a checked exception (NoSuchAlgorithmException,
- * InvalidKeySpecException, or JOSEException) that must be wrapped for use in CDI-managed
- * components.
+ * Thrown when the extension cannot sign the App JWT or build the client that carries it, so the App
+ * cannot authenticate at all.
  */
 public class GitHubAuthException extends RuntimeException {
   public GitHubAuthException(String message, Throwable cause) {

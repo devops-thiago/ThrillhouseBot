@@ -73,7 +73,7 @@ same diff.
 | `webhook/` | The webhook entry (`WebhookEvents`, driven by the Quarkiverse GitHub App extension's route on `POST /api/webhook`; it owns the HMAC check), triggers and filters (`TriggerDetector`, `ReviewTriggerFilter`), dedupe, pause state, the comment commands (`CommentCommandService`) |
 | `review/` | Everything between "a review was requested" and "the result is on GitHub": orchestration, context loading, prompt assembly, budgeting, the post-model finding chain, verdict, publishing, CI gating, follow-ups, the on-request commands |
 | `review/ai/` | The LangChain4j layer: AI service interfaces and their prompt constants (`*Prompts`), streaming and retries (`AiReviewService`), parsing and salvage, the verifier, the token ledger, the call gate |
-| `github/` | REST and GraphQL clients (plus hub4j through the Quarkiverse `GitHubClientProvider` for permission, membership, issue and file reads), app auth, write pacing and retry (`GitHubWritePacer`, `GitHubWriteRetry`), instructions and repo-settings resolution |
+| `github/` | REST and GraphQL clients (plus hub4j through the Quarkiverse `GitHubClientProvider` for permission, membership, issue and file reads), app auth (`GitHubAppApi`, through the extension's application client), write pacing and retry (`GitHubWritePacer`, `GitHubWriteRetry`), instructions and repo-settings resolution |
 | `dashboard/` | OAuth sessions, the WebSocket broadcaster, `ReviewSession` persistence, finding-feedback aggregates |
 | `notification/` | The opt-in outgoing review-outcome webhook |
 | `observability/` | The Prometheus endpoint, review-outcome metrics, and the OpenTelemetry resource's `service.instance.id` (`ServiceInstanceResource`: `HOSTNAME`, else a random id per start; `OTEL_RESOURCE_ATTRIBUTES`, comma-separated `key=value` pairs, overrides it) |
@@ -547,6 +547,15 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   rollback and the duplicate-skip recording lived with the routing. HTTP corner cases come from
   the extension's `Routes`: missing mandatory headers `400`, signature mismatch `400`, signed
   non-JSON body `500`, accepted delivery `200` with an empty body (`NativeImageIT` pins these).
+- **App authentication goes through the extension's application client** (#1314). `GitHubAppApi`
+  binds its `CONNECTOR` while it asks `GitHubClientProvider` for that client, and
+  `FailFastGitHubCustomizer` installs it. That class stays the only `GitHubCustomizer` bean: the
+  extension uses one only when exactly one exists, so a second switches both off without an error
+  (`GitHubAppAuthWiringTest` pins it). `GitHubAppConnector` keeps the REST clients' contract that
+  `GitHubTokenRefresh` and the installation handling read: `ClientWebApplicationException` for a
+  refusal, `ProcessingException` for a transport failure, no response body in a message, one
+  attempt. `GitHubAppCredentialInterceptor` rewrites the configured key and strips the App ID for
+  the extension, so a form the start-up check accepts works for the signer too.
 
 ## Prompts
 

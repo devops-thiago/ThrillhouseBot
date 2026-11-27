@@ -45,9 +45,10 @@ flowchart LR
     RO --> NOTE --> HOOK
 ```
 
-The `github/` clients handle app authentication, installation tokens and GitHub API calls for
-pull request files, reviews and review comments, issue comments, check runs, labels, reactions,
-thread resolution over GraphQL, the instructions file and the repository settings file.
+The `github/` package handles app authentication and installation tokens (through the Quarkiverse
+GitHub App extension's application client) and GitHub API calls for pull request files, reviews and
+review comments, issue comments, check runs, labels, reactions, thread resolution over GraphQL, the
+instructions file and the repository settings file.
 
 ## Request flow
 
