@@ -36,7 +36,9 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 
@@ -47,6 +49,9 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
  */
 @ApplicationScoped
 public class ReviewPublisher {
+
+  /** Prints no basis (#1435). */
+  private static final Function<Finding, String> NO_BASIS = finding -> "";
 
   private static final String FOUND_PREFIX = "ThrillhouseBot found ";
   private static final String ACCEPT = "application/vnd.github+json";
@@ -533,10 +538,38 @@ public class ReviewPublisher {
       boolean summaryPosted,
       List<ReviewResponse.Finding> previousFindings,
       String followUpDeltaSection,
-      List<GitHubReviewClient.ReviewResponse> priorReviews) {
+      List<GitHubReviewClient.ReviewResponse> priorReviews,
+      Function<Finding, String> basis) {
     PostReviewRequest {
       followUpDeltaSection = java.util.Objects.requireNonNullElse(followUpDeltaSection, "");
       priorReviews = List.copyOf(java.util.Objects.requireNonNullElse(priorReviews, List.of()));
+    }
+
+    PostReviewRequest(
+        String auth,
+        String owner,
+        String repo,
+        int prNumber,
+        String commitSha,
+        ReviewResult result,
+        DiffLineResolver lineResolver,
+        boolean summaryPosted,
+        List<ReviewResponse.Finding> previousFindings,
+        String followUpDeltaSection,
+        List<GitHubReviewClient.ReviewResponse> priorReviews) {
+      this(
+          auth,
+          owner,
+          repo,
+          prNumber,
+          commitSha,
+          result,
+          lineResolver,
+          summaryPosted,
+          previousFindings,
+          followUpDeltaSection,
+          priorReviews,
+          NO_BASIS);
     }
 
     // Direct callers retain the default closed-finding report without opt-in enrichment. They
@@ -661,7 +694,7 @@ public class ReviewPublisher {
     var commitSha = post.commitSha();
     var inline =
         postInlineComments(
-            new CommentTarget(auth, owner, repo, prNumber, commitSha, pending),
+            new CommentTarget(auth, owner, repo, prNumber, commitSha, pending, post.basis()),
             result,
             post.lineResolver());
     var event =
@@ -1325,7 +1358,19 @@ public class ReviewPublisher {
       String repo,
       int prNumber,
       String commitSha,
-      Optional<PendingReview> pendingReview) {}
+      Optional<PendingReview> pendingReview,
+      Function<Finding, String> basis) {
+
+    CommentTarget(
+        String auth,
+        String owner,
+        String repo,
+        int prNumber,
+        String commitSha,
+        Optional<PendingReview> pendingReview) {
+      this(auth, owner, repo, prNumber, commitSha, pendingReview, NO_BASIS);
+    }
+  }
 
   /**
    * The pending review a batched round attaches its threads to (#1434): the REST id that submits or
@@ -1633,7 +1678,8 @@ public class ReviewPublisher {
     var body =
         fileLevelLeadIn(finding)
             + "\n\n"
-            + suggestionFormatter.formatReviewComment(finding, false, findingId);
+            + suggestionFormatter.formatReviewComment(
+                withBasis(finding, target.basis().apply(finding)), false, findingId);
     try {
       createThread(
           target,
@@ -1656,10 +1702,28 @@ public class ReviewPublisher {
   private record InlineAnchor(
       DiffLineResolver.Side side, int line, Optional<DiffLineResolver.LineRange> range) {}
 
+  /** {@code finding} with its basis (#1435), when it has one, under the description. */
+  private static Finding withBasis(Finding finding, String basis) {
+    if (basis.isBlank()) {
+      return finding;
+    }
+    return new Finding(
+        finding.risk(),
+        finding.confidence(),
+        finding.file(),
+        finding.line(),
+        finding.title(),
+        Objects.toString(finding.description(), "") + "\n\n" + basis,
+        finding.suggestionOld(),
+        finding.suggestionNew());
+  }
+
   /** Inline finding comments only; file-level threads skip the agent prompt (#1432). */
   private String formatInlineFindingComment(
-      Finding finding, boolean includeSuggestion, int findingId) {
-    var body = suggestionFormatter.formatReviewComment(finding, includeSuggestion, findingId);
+      Finding finding, boolean includeSuggestion, int findingId, String basis) {
+    var body =
+        suggestionFormatter.formatReviewComment(
+            withBasis(finding, basis), includeSuggestion, findingId);
     if (config.review().agentPromptEnabled()) {
       body = AgentPromptBlock.withAgentPrompt(body, finding, includeSuggestion);
     }
@@ -1671,8 +1735,12 @@ public class ReviewPublisher {
    * in its marker, since GitHub numbers that thread on the base side (#1360).
    */
   private String commentBody(
-      Finding finding, int findingId, InlineAnchor anchor, boolean includeSuggestion) {
-    var body = formatInlineFindingComment(finding, includeSuggestion, findingId);
+      Finding finding,
+      int findingId,
+      InlineAnchor anchor,
+      boolean includeSuggestion,
+      String basis) {
+    var body = formatInlineFindingComment(finding, includeSuggestion, findingId, basis);
     return anchor.side() == DiffLineResolver.Side.LEFT
         ? SuggestionFormatter.withMarkedLine(body, finding.line())
         : body;
@@ -1704,7 +1772,8 @@ public class ReviewPublisher {
           target,
           new GitHubReviewClient.CreatePullRequestCommentRequest(
               target.commitSha(),
-              commentBody(finding, findingId, anchor, includeSuggestion),
+              commentBody(
+                  finding, findingId, anchor, includeSuggestion, target.basis().apply(finding)),
               finding.file(),
               endLine,
               side,
