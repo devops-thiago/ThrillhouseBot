@@ -84,14 +84,6 @@ final class DescriptionGapScreen {
   static final int MIN_RUN_PART = 4;
 
   /**
-   * A quoted passage: in double quotes, or in single quotes whose opening one does not follow a
-   * letter and whose closing one is not followed by one, so the apostrophes of "PR's" and "doesn't"
-   * neither open nor close it. Curly quotes are folded to these before matching.
-   */
-  private static final Pattern QUOTED =
-      Pattern.compile("\"([^\"\n]++)\"|(?<![\\p{L}\\p{N}])'([^\n]+?)'(?![\\p{L}\\p{N}])");
-
-  /**
    * The description named as such: a citation of the pull request's own text, though not by itself
    * what attributes a quote to it, since "the description column renders ('…')" quotes the change.
    */
@@ -215,16 +207,19 @@ final class DescriptionGapScreen {
   /** Where {@link #INFLECTION} took a bracket out, until the quote's parts are matched. */
   private static final String STEM_END = "\uE000";
 
-  /** An omission inside a quote: a bracketed insertion, or an ellipsis. */
-  private static final Pattern OMISSION = Pattern.compile("\\[[^]]*+]|\\.{3}|…");
+  /** Three full stops standing for words a quote leaves out. */
+  private static final String ELLIPSIS = "...";
 
   /** A possessive ending belongs to its word, not between a compound identifier's parts. */
   private static final Pattern POSSESSIVE = Pattern.compile("(?i)(?<=[\\p{L}\\p{N}])['’]s\\b");
 
   private static final Pattern NON_ALPHANUMERIC = Pattern.compile("[^\\p{L}\\p{N}]+");
 
-  /** Full stops ending a name, which end its sentence rather than the name. */
-  private static final Pattern TRAILING_DOTS = Pattern.compile("\\.++$");
+  /**
+   * Full stops ending a name, which end its sentence rather than the name. Read from the first of
+   * their run only, so a long run inside a name is not read again from each of its stops.
+   */
+  private static final Pattern TRAILING_DOTS = Pattern.compile("(?<!\\.)\\.++$");
 
   /**
    * A file or component an omission bullet names, one pattern or more per shape: a path of two
@@ -232,17 +227,42 @@ final class DescriptionGapScreen {
    * sentence's full stop may follow it), a file name with an extension, a CI job name
    * ("python-ci"), or a file conventionally named without one ("Dockerfile", "README", written as
    * the file is). A backticked span alone is not one (it is as often a setting or an identifier),
-   * nor is a word such as "license" that prose uses for other things.
+   * nor is a word such as "license" that prose uses for other things. Group 1 is the name: a
+   * pattern may read what stands before a name to find where it starts.
    */
   private static final List<Pattern> NAMED_FILES =
       List.of(
-          Pattern.compile("(?<![\\w/.-])[\\w.-]*+(?:/[\\w.-]++){2,}+"),
-          Pattern.compile("\\b[\\w.-]++/(?![\\w-]|\\.\\w)"),
-          Pattern.compile("\\b[\\w-]++\\.(?:md|ya?ml|json|toml|xml|txt|sh|env|cfg|ini|lock)\\b"),
-          Pattern.compile("\\b[\\w-]++\\.(?:java|kts?|scala|py|go|rs|zig|c|h|rb|php|cs)\\b"),
-          Pattern.compile("\\b[\\w-]++\\.(?:[jt]sx?|mjs|vue|html|css|sql|gradle|properties)\\b"),
-          Pattern.compile("(?i)\\b[\\w]++-ci\\b"),
-          Pattern.compile("\\b(?:Dockerfile|Containerfile|Makefile|Jenkinsfile|README)\\b"));
+          Pattern.compile("((?<![\\w/.-])[\\w.-]*+(?:/[\\w.-]++){2,}+)"),
+          Pattern.compile(firstBoundaryIn("\\w.-", ".-") + "([\\w.-]++/(?![\\w-]|\\.\\w))"),
+          fileName("md|ya?ml|json|toml|xml|txt|sh|env|cfg|ini|lock"),
+          fileName("java|kts?|scala|py|go|rs|zig|c|h|rb|php|cs"),
+          fileName("[jt]sx?|mjs|vue|html|css|sql|gradle|properties"),
+          Pattern.compile("(?i)(\\b[\\w]++-ci\\b)"),
+          Pattern.compile("(\\b(?:Dockerfile|Containerfile|Makefile|Jenkinsfile|README)\\b)"));
+
+  /**
+   * A file name ending in one of {@code extensions}: the run of word characters and hyphens before
+   * the full stop, from the first word boundary in it. A name may also start where the last one
+   * ended ({@code a.md-b.md}), which is inside a run.
+   */
+  private static Pattern fileName(String extensions) {
+    return Pattern.compile(
+        "(?:" + firstBoundaryIn("\\w-", "-") + "|\\G\\b)([\\w-]++\\.(?:" + extensions + ")\\b)");
+  }
+
+  /**
+   * What reads up to the first word boundary in a run of the characters of {@code run}, a character
+   * class's content: word characters and {@code punctuation}. The boundary is at the run's start,
+   * after the punctuation that opens it, or after the word that opens it when that word carries on
+   * one before the run (a combining mark on a letter is part of its word).
+   *
+   * <p>A name is looked for from that boundary only, not from each boundary of the run as {@code
+   * \b} alone would: where the run ends is the same from every one of them, so when no name starts
+   * at the first, none starts at a later one, and a long run is read a fixed number of times.
+   */
+  private static String firstBoundaryIn(String run, String punctuation) {
+    return "(?<![" + run + "])(?:\\b|[" + punctuation + "]++\\b|\\w++(?=[" + punctuation + "]))";
+  }
 
   /**
    * The description as a clause's subject. Followed by a claim verb ({@link #claimsFirst}) it
@@ -498,14 +518,7 @@ final class DescriptionGapScreen {
             || (anyFinds(PR_TEXT_NAMED, gap) && anyFinds(OMISSION_CUES, gap)))) {
       return false;
     }
-    var names = new LinkedHashSet<String>();
-    for (var pattern : NAMED_FILES) {
-      var m = pattern.matcher(gap);
-      while (m.find()) {
-        // A sentence's full stop is not part of the path it ends on.
-        names.add(TRAILING_DOTS.matcher(m.group()).replaceAll("").toLowerCase(Locale.ROOT));
-      }
-    }
+    var names = namedFiles(gap);
     // One file matched by two shapes ("README" in "README.md") is one name.
     var distinct =
         names.stream()
@@ -517,6 +530,19 @@ final class DescriptionGapScreen {
     var text = prText.toLowerCase(Locale.ROOT);
     var named = distinct.stream().filter(name -> holdsToken(text, lastSegment(name))).count();
     return named * 2 > distinct.size();
+  }
+
+  /** The files and components {@code gap} names ({@link #NAMED_FILES}), in lower case. */
+  static Set<String> namedFiles(String gap) {
+    var names = new LinkedHashSet<String>();
+    for (var pattern : NAMED_FILES) {
+      var m = pattern.matcher(gap);
+      while (m.find()) {
+        // A sentence's full stop is not part of the path it ends on.
+        names.add(TRAILING_DOTS.matcher(m.group(1)).replaceAll("").toLowerCase(Locale.ROOT));
+      }
+    }
+    return names;
   }
 
   /**
@@ -777,9 +803,7 @@ final class DescriptionGapScreen {
       var rest = linked.group(2);
       own = rest.substring(DescriptionGapCarryover.criterionOf(rest).length());
     }
-    return STATED_EVIDENCE
-        .matcher(QUOTED.matcher(foldQuotes(own)).replaceAll(" "))
-        .replaceAll("`code`");
+    return STATED_EVIDENCE.matcher(QuotedPassages.blanked(foldQuotes(own))).replaceAll("`code`");
   }
 
   /**
@@ -790,9 +814,9 @@ final class DescriptionGapScreen {
    */
   static boolean echoes(String findingText, String claimText) {
     var source = normalize(claimText);
-    var quotes = QUOTED.matcher(foldQuotes(findingText));
-    while (quotes.find()) {
-      var quote = quotes.group(quotes.group(1) != null ? 1 : 2);
+    var folded = foldQuotes(findingText);
+    for (var passage : QuotedPassages.in(folded)) {
+      var quote = passage.body(folded);
       if (judged(quote, source) && present(quote, source)) {
         return true;
       }
@@ -821,7 +845,7 @@ final class DescriptionGapScreen {
     if (DescriptionGapCarryover.linkedIssueGap(gap) != null) {
       return false;
     }
-    var own = QUOTED.matcher(foldQuotes(gap)).replaceAll(" ");
+    var own = QuotedPassages.blanked(foldQuotes(gap));
     // A closing "(disclosed)" is set apart from the sentence before it, so it is the verdict even
     // after "the description says" or a negation.
     if (DISCLOSED_VERDICTS.stream().anyMatch(verdict -> verdict.matcher(own).find())) {
@@ -885,7 +909,7 @@ final class DescriptionGapScreen {
     if (DescriptionGapCarryover.linkedIssueGap(gap) != null) {
       return false;
     }
-    var own = QUOTED.matcher(foldQuotes(gap)).replaceAll(" ");
+    var own = QuotedPassages.blanked(foldQuotes(gap));
     if (STATED_EVIDENCE.matcher(own).find() || anyFinds(NAMED_FILES, own)) {
       return false;
     }
@@ -931,7 +955,7 @@ final class DescriptionGapScreen {
    * on a removed line does not count.
    */
   static boolean answeredByDiff(String gap, Set<String> added) {
-    var own = QUOTED.matcher(foldQuotes(gap)).replaceAll(" ");
+    var own = QuotedPassages.blanked(foldQuotes(gap));
     if (firstMatch(UNSHOWN, own) < 0
         || Arrays.stream(CLAUSE_BREAK.split(own))
             .flatMap(DescriptionGapScreen::outsideUnshown)
@@ -1207,13 +1231,12 @@ final class DescriptionGapScreen {
    */
   static boolean misquotes(String gap, String normalizedSource) {
     var text = foldQuotes(gap);
-    var quotes = QUOTED.matcher(text);
     var since = 0;
-    while (quotes.find()) {
-      var lead = clauseOf(text.substring(since, quotes.start()));
-      since = quotes.end();
-      var quote = quotes.group(quotes.group(1) != null ? 1 : 2);
-      if ((attributedBefore(lead) || attributedAfter(text.substring(quotes.end())))
+    for (var passage : QuotedPassages.in(text)) {
+      var lead = clauseOf(text.substring(since, passage.start()));
+      since = passage.end();
+      var quote = passage.body(text);
+      if ((attributedBefore(lead) || attributedAfter(text.substring(passage.end())))
           && judged(quote, normalizedSource)
           && !present(quote, normalizedSource)) {
         return true;
@@ -1230,12 +1253,11 @@ final class DescriptionGapScreen {
    */
   static boolean omissionCovered(String gap, String normalizedSource) {
     var text = foldQuotes(gap);
-    var quotes = QUOTED.matcher(text);
     var since = 0;
-    while (quotes.find()) {
-      var lead = clauseOf(text.substring(since, quotes.start()));
-      since = quotes.end();
-      var quote = quotes.group(quotes.group(1) != null ? 1 : 2);
+    for (var passage : QuotedPassages.in(text)) {
+      var lead = clauseOf(text.substring(since, passage.start()));
+      since = passage.end();
+      var quote = passage.body(text);
       if (anyFinds(PR_TEXT_NAMED, lead)
           && negated(lead)
           && judged(quote, normalizedSource)
@@ -1365,7 +1387,7 @@ final class DescriptionGapScreen {
     var haystack = " " + normalizedSource + " ";
     var from = 0;
     var marked = INFLECTION.matcher(quote).replaceAll(STEM_END);
-    for (var part : OMISSION.split(joinEditorialLetters(marked))) {
+    for (var part : betweenOmissions(joinEditorialLetters(marked))) {
       var needle = needle(part);
       if (needle == null) {
         continue;
@@ -1377,6 +1399,43 @@ final class DescriptionGapScreen {
       from = at.start() + 1;
     }
     return true;
+  }
+
+  /**
+   * The parts of {@code quote} between its omissions, in order: a bracket and what it holds up to
+   * the next closing bracket, three full stops, or an ellipsis character. A bracket nothing closes
+   * is part of the text around it: that is every bracket after the quote's last closing one, so
+   * none of those is read for a closing bracket.
+   */
+  static List<String> betweenOmissions(String quote) {
+    var parts = new ArrayList<String>();
+    int lastClosing = quote.lastIndexOf(']');
+    int from = 0;
+    int at = 0;
+    while (at < quote.length()) {
+      int end = omissionEnd(quote, at, lastClosing);
+      if (end < 0) {
+        at++;
+      } else {
+        parts.add(quote.substring(from, at));
+        from = end;
+        at = end;
+      }
+    }
+    parts.add(quote.substring(from));
+    return parts;
+  }
+
+  /** Where the omission that starts at {@code at} ends; -1 when none starts there. */
+  private static int omissionEnd(String quote, int at, int lastClosing) {
+    char c = quote.charAt(at);
+    if (c == '[' && at < lastClosing) {
+      return quote.indexOf(']', at) + 1;
+    }
+    if (c == '…') {
+      return at + 1;
+    }
+    return quote.startsWith(ELLIPSIS, at) ? at + ELLIPSIS.length() : -1;
   }
 
   /**
