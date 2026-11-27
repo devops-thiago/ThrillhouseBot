@@ -51,8 +51,8 @@ import org.slf4j.LoggerFactory;
  * documented rule that the client-side wait is at least the HTTP timeout ({@code AI_TIMEOUT}),
  * whose clock starts only when the request goes out.
  *
- * <p>{@code 0}, the default, builds no semaphore at all, so an unbounded deployment takes no lock
- * and behaves as it did before.
+ * <p>{@code 0} builds no semaphore at all, so an unbounded deployment takes no lock and behaves as
+ * it did before the ceiling existed. The default is 16.
  */
 @ApplicationScoped
 public class ModelCallGate {

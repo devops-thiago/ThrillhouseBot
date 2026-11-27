@@ -117,6 +117,7 @@ public class StartupConfigValidator {
         "thrillhousebot.github.webhook-secret");
     requirePresent(problems, aiApiKey, "AI_API_KEY", "quarkus.langchain4j.openai.api-key");
     validateReviewBudget(problems, config.review());
+    validateAutoReviewLimits(problems, config.review());
     validateCiGating(problems, config.review());
     validateCiContext(problems, config.review().ciContext());
     validateTicketContext(problems, config.review().ticketContext());
@@ -137,6 +138,7 @@ public class StartupConfigValidator {
     }
 
     logDashboardStatus();
+    spendCeilingWarning(config.review()).ifPresent(log::warn);
     logReasoningStatus();
     logCiGatingStatus();
     logNotificationStatus();
@@ -234,6 +236,52 @@ public class StartupConfigValidator {
               + " ceiling (thrillhousebot.review.max-tokens-per-review): "
               + review.maxTokensPerReview());
     }
+  }
+
+  /**
+   * Rejects a negative per-repository automatic review limit at boot. {@code 0} is the documented
+   * way to turn either limit off, so a negative value is a typo rather than a request.
+   */
+  private static void validateAutoReviewLimits(
+      List<String> problems, ThrillhouseConfig.ReviewConfig review) {
+    if (review.autoReviewMaxConcurrentPerRepo() < 0) {
+      problems.add(
+          "AUTO_REVIEW_MAX_CONCURRENT_PER_REPO must be >= 0, where 0 leaves the automatic reviews"
+              + " of a repository unbounded"
+              + " (thrillhousebot.review.auto-review-max-concurrent-per-repo): "
+              + review.autoReviewMaxConcurrentPerRepo());
+    }
+    if (review.autoReviewMaxQueuedPerRepo() < 0) {
+      problems.add(
+          "AUTO_REVIEW_MAX_QUEUED_PER_REPO must be >= 0, where 0 lets any number of automatic"
+              + " reviews wait (thrillhousebot.review.auto-review-max-queued-per-repo): "
+              + review.autoReviewMaxQueuedPerRepo());
+    }
+  }
+
+  /**
+   * The boot warning for a spend ceiling below what the planned calls alone can send: an operator
+   * who raised {@code REVIEW_MAX_INPUT_TOKENS} or {@code REVIEW_MAX_AI_CALLS} and left the ceiling
+   * at its default would otherwise find large reviews cut short with nothing at boot saying why.
+   * Empty when the ceiling or token budgeting is off, or the ceiling covers the planned input.
+   */
+  static Optional<String> spendCeilingWarning(ThrillhouseConfig.ReviewConfig review) {
+    long ceiling = review.maxTokensPerReview();
+    long plannedInput = (long) review.maxInputTokens() * review.maxAiCalls();
+    if (ceiling <= 0 || review.maxInputTokens() <= 0 || plannedInput <= ceiling) {
+      return Optional.empty();
+    }
+    return Optional.of(
+        "REVIEW_MAX_TOKENS_PER_REVIEW ("
+            + ceiling
+            + ") is below the input one review may plan (REVIEW_MAX_INPUT_TOKENS "
+            + review.maxInputTokens()
+            + " x REVIEW_MAX_AI_CALLS "
+            + review.maxAiCalls()
+            + " = "
+            + plannedInput
+            + "), so a large review stops at the ceiling and lists the files it did not reach."
+            + " Raise REVIEW_MAX_TOKENS_PER_REVIEW, or set it to 0 to turn the ceiling off.");
   }
 
   /**
