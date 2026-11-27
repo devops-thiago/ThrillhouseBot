@@ -256,6 +256,13 @@ Prices used for cost tracking, keyed by model name (the `AI_MODEL` value) like t
 | `REVIEW_SECRET_SCAN_ENABLED`<br>`thrillhousebot.review.security-scan.secrets-enabled` | Scan added lines for leaked credentials (provider token formats, private keys, JWTs, assignments). See [Security scan](https://github.com/devops-thiago/ThrillhouseBot#security-scan). | boolean | `false` |
 | `REVIEW_SECURITY_SCAN_SKIPPED_FILES`<br>`thrillhousebot.review.security-scan.skipped-files` | Comma-separated globs the scan skips on top of the review's ignore list, for fixtures and snapshots where token-shaped sample data is expected. | list | `**/fixtures/**`, `**/__fixtures__/**`, `**/testdata/**`, `**/test-data/**`, `**/__snapshots__/**`, `**/*.snap` |
 
+## `thrillhousebot.review.static-analysis`
+
+| Variable | Description | Type | Default |
+|---|---|---|---|
+| `REVIEW_STATIC_ANALYSIS_ENABLED`<br>`thrillhousebot.review.static-analysis.enabled` | Include the annotations that completed checks attached to the changed files. See [Static-analysis context](https://github.com/devops-thiago/ThrillhouseBot#static-analysis-context). | boolean | `false` |
+| `REVIEW_STATIC_ANALYSIS_MAX_CHARS`<br>`thrillhousebot.review.static-analysis.max-chars` | Character cap on the static-analysis section (500–20000). | integer | `3000` |
+
 ## `thrillhousebot.review.ticket-context`
 
 | Variable | Description | Type | Default |
