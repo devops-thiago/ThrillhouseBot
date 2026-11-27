@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.dashboard;
 
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubTokenReads;
 import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -24,13 +25,10 @@ import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.core.Response;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.function.IntFunction;
 import java.util.regex.Pattern;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 import org.slf4j.Logger;
@@ -62,21 +60,22 @@ public class ScopeBackfill {
 
   private static final Logger log = LoggerFactory.getLogger(ScopeBackfill.class);
   private static final String ACCEPT = "application/vnd.github+json";
-  private static final int PER_PAGE = 100;
-  private static final int MAX_PAGES = 100;
   private static final Pattern REPOSITORY_ID_LOCATION = Pattern.compile("/repositories/(\\d+)$");
 
   private final ScopeBackfillStore store;
   private final GitHubAuthClient authClient;
+  private final GitHubTokenReads tokenReads;
   private final GitHubInstallationClient installationClient;
 
   @Inject
   public ScopeBackfill(
       ScopeBackfillStore store,
       GitHubAuthClient authClient,
+      GitHubTokenReads tokenReads,
       @RestClient GitHubInstallationClient installationClient) {
     this.store = store;
     this.authClient = authClient;
+    this.tokenReads = tokenReads;
     this.installationClient = installationClient;
   }
 
@@ -107,13 +106,11 @@ public class ScopeBackfill {
     if (names.isEmpty()) {
       return new Result(0, 0, 0);
     }
-    var jwt = "Bearer " + authClient.generateAppJwt();
-    var installations =
-        allPages(page -> installationClient.listInstallations(jwt, ACCEPT, PER_PAGE, page));
+    var installationIds = authClient.listInstallationIds();
     var byName = new HashMap<String, Match>();
     var byOwner = new HashMap<String, Installed>();
-    for (var installation : installations) {
-      installed(installation).ifPresent(i -> index(i, byName, byOwner));
+    for (var installationId : installationIds) {
+      installed(installationId).ifPresent(i -> index(i, byName, byOwner));
     }
     int matched = 0;
     int rows = 0;
@@ -142,33 +139,25 @@ public class ScopeBackfill {
   /** A matched repository and when it was created ({@code null} when GitHub did not say). */
   private record Match(RepoScope scope, Instant createdAt) {}
 
-  private Optional<Installed> installed(GitHubInstallationClient.Installation installation) {
+  private Optional<Installed> installed(long installationId) {
     try {
-      var auth = authClient.getAuthHeader(installation.id());
+      var auth = authClient.getAuthHeader(installationId);
       var repositories = new HashMap<String, Long>();
       var createdAt = new HashMap<Long, Instant>();
-      for (var repo :
-          allPages(
-              page ->
-                  installationClient
-                      .listInstallationRepositories(auth, ACCEPT, PER_PAGE, page)
-                      .repositories())) {
-        if (repo.id() > 0
-            && repo.owner() != null
-            && repo.owner().login() != null
-            && repo.name() != null) {
-          repositories.put(lower(repo.owner().login() + "/" + repo.name()), repo.id());
+      for (var repo : tokenReads.installationRepositories(auth)) {
+        if (repo.id() > 0 && repo.fullName() != null && repo.fullName().indexOf('/') > 0) {
+          repositories.put(lower(repo.fullName()), repo.id());
           if (repo.createdAt() != null) {
             createdAt.put(repo.id(), repo.createdAt());
           }
         }
       }
-      return Optional.of(new Installed(installation.id(), auth, repositories, createdAt));
+      return Optional.of(new Installed(installationId, auth, repositories, createdAt));
     } catch (RuntimeException e) {
       log.warn(
           "Scope backfill could not list the repositories of installation {}; its rows stay"
               + " hidden until the next start: {}",
-          installation.id(),
+          installationId,
           e.getMessage());
       return Optional.empty();
     }
@@ -224,21 +213,6 @@ public class ScopeBackfill {
     var matcher =
         REPOSITORY_ID_LOCATION.matcher(String.valueOf(response.getHeaderString("Location")));
     return matcher.find() ? Optional.of(Long.parseLong(matcher.group(1))) : Optional.empty();
-  }
-
-  private static <T> List<T> allPages(IntFunction<List<T>> fetch) {
-    var all = new ArrayList<T>();
-    for (var page = 1; page <= MAX_PAGES; page++) {
-      var items = fetch.apply(page);
-      if (items == null || items.isEmpty()) {
-        return all;
-      }
-      all.addAll(items);
-      if (items.size() < PER_PAGE) {
-        return all;
-      }
-    }
-    throw new IllegalStateException("GitHub listing exceeded " + MAX_PAGES + " pages");
   }
 
   private static String lower(String value) {

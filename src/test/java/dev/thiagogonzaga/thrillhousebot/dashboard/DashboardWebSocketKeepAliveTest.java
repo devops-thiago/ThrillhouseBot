@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.dashboard;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -32,34 +33,97 @@ import io.quarkus.runtime.ShutdownEvent;
 import io.quarkus.runtime.StartupEvent;
 import io.vertx.core.Handler;
 import io.vertx.core.Vertx;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class DashboardWebSocketKeepAliveTest {
+
+  /** Periodic timers a mocked Vert.x was asked for, by the interval each was scheduled at. */
+  private static Map<Long, Handler<Long>> timersOf(Vertx vertx) {
+    var timers = new LinkedHashMap<Long, Handler<Long>>();
+    var ids = new AtomicLong(40);
+    when(vertx.setPeriodic(anyLong(), any()))
+        .thenAnswer(
+            invocation -> {
+              timers.put(invocation.getArgument(0), invocation.getArgument(1));
+              return ids.incrementAndGet();
+            });
+    return timers;
+  }
 
   @Test
   void shouldScheduleKeepAliveAndEvictionOnStart() {
     Vertx vertx = mock(Vertx.class);
     SessionEventBroadcaster broadcaster = mock(SessionEventBroadcaster.class);
     ThrillhouseConfig config = mock(ThrillhouseConfig.class);
-    when(config.websocketKeepAliveMs()).thenReturn(25_000L);
-    when(vertx.setPeriodic(anyLong(), any()))
-        .thenAnswer(
-            invocation -> {
-              Handler<Long> handler = invocation.getArgument(1);
-              handler.handle(1L);
-              return 99L;
-            });
+    when(config.websocketKeepAliveMs()).thenReturn(10_000L);
+    var timers = timersOf(vertx);
+
+    var keepAlive = new DashboardWebSocketKeepAlive(vertx, broadcaster, config);
+    keepAlive.onStart(mock(StartupEvent.class));
+    timers.values().forEach(handler -> handler.handle(1L));
+
+    verify(vertx).setPeriodic(eq(10_000L), any());
+    verify(broadcaster).sendKeepAlive();
+    verify(broadcaster).evictStaleSessionBuffers();
+    verify(broadcaster, timeout(5_000)).refreshReaders();
+    keepAlive.onStop(mock(ShutdownEvent.class));
+  }
+
+  @ParameterizedTest
+  @ValueSource(longs = {0L, -1L})
+  void accessIsStillRecheckedOnATimerWhenTheKeepAliveIsOff(long keepAliveMs) {
+    Vertx vertx = mock(Vertx.class);
+    SessionEventBroadcaster broadcaster = mock(SessionEventBroadcaster.class);
+    ThrillhouseConfig config = mock(ThrillhouseConfig.class);
+    when(config.websocketKeepAliveMs()).thenReturn(keepAliveMs);
+    var timers = timersOf(vertx);
 
     var keepAlive = new DashboardWebSocketKeepAlive(vertx, broadcaster, config);
     keepAlive.onStart(mock(StartupEvent.class));
 
-    verify(vertx).setPeriodic(eq(25_000L), any());
+    assertEquals(1, timers.size(), "the access re-check is the only timer");
+    timers.values().forEach(handler -> handler.handle(1L));
+    verify(broadcaster, timeout(5_000)).refreshReaders();
+    verify(broadcaster, never()).sendKeepAlive();
+    verify(broadcaster, never()).evictStaleSessionBuffers();
+    keepAlive.onStop(mock(ShutdownEvent.class));
+    verify(vertx).cancelTimer(41L);
+  }
+
+  @Test
+  void accessRecheckDoesNotWaitForALongKeepAlive() {
+    Vertx vertx = mock(Vertx.class);
+    SessionEventBroadcaster broadcaster = mock(SessionEventBroadcaster.class);
+    ThrillhouseConfig config = mock(ThrillhouseConfig.class);
+    var hour = TimeUnit.HOURS.toMillis(1);
+    when(config.websocketKeepAliveMs()).thenReturn(hour);
+    var timers = timersOf(vertx);
+
+    var keepAlive = new DashboardWebSocketKeepAlive(vertx, broadcaster, config);
+    keepAlive.onStart(mock(StartupEvent.class));
+
+    var recheck =
+        timers.entrySet().stream()
+            .filter(timer -> timer.getKey() <= TimeUnit.MINUTES.toMillis(1))
+            .map(Map.Entry::getValue)
+            .findFirst()
+            .orElseThrow(() -> new AssertionError("no timer shorter than the keepalive"));
+    recheck.handle(1L);
+    verify(broadcaster, timeout(5_000)).refreshReaders();
+    verify(broadcaster, never()).sendKeepAlive();
+    // The keepalive tick keeps its own work and leaves the re-check to the other timer.
+    timers.get(hour).handle(2L);
     verify(broadcaster).sendKeepAlive();
     verify(broadcaster).evictStaleSessionBuffers();
-    verify(broadcaster, timeout(5_000)).refreshReaders();
+    keepAlive.onStop(mock(ShutdownEvent.class));
   }
 
   @Test
@@ -134,7 +198,7 @@ class DashboardWebSocketKeepAliveTest {
     ThrillhouseConfig config = mock(ThrillhouseConfig.class);
     when(config.websocketKeepAliveMs()).thenReturn(0L);
     var keepAlive = new DashboardWebSocketKeepAlive(mock(Vertx.class), broadcaster, config);
-    // With the keepalive off, no later tick would ever catch up a dropped change.
+    // A dropped change would otherwise wait for the next re-check tick.
     keepAlive.onStart(mock(StartupEvent.class));
 
     keepAlive.refreshReaders();
@@ -178,45 +242,30 @@ class DashboardWebSocketKeepAliveTest {
   }
 
   @Test
-  void shouldDisableKeepAliveWhenIntervalIsZero() {
+  void shouldCancelBothTimersOnStop() {
     Vertx vertx = mock(Vertx.class);
     SessionEventBroadcaster broadcaster = mock(SessionEventBroadcaster.class);
     ThrillhouseConfig config = mock(ThrillhouseConfig.class);
-    when(config.websocketKeepAliveMs()).thenReturn(0L);
+    when(config.websocketKeepAliveMs()).thenReturn(10_000L);
+    timersOf(vertx);
 
     var keepAlive = new DashboardWebSocketKeepAlive(vertx, broadcaster, config);
     keepAlive.onStart(mock(StartupEvent.class));
     keepAlive.onStop(mock(ShutdownEvent.class));
 
-    verify(vertx, never()).setPeriodic(anyLong(), any());
-    verify(vertx, never()).cancelTimer(anyLong());
-  }
-
-  @Test
-  void shouldDisableKeepAliveWhenIntervalIsNegative() {
-    Vertx vertx = mock(Vertx.class);
-    SessionEventBroadcaster broadcaster = mock(SessionEventBroadcaster.class);
-    ThrillhouseConfig config = mock(ThrillhouseConfig.class);
-    when(config.websocketKeepAliveMs()).thenReturn(-1L);
-
-    var keepAlive = new DashboardWebSocketKeepAlive(vertx, broadcaster, config);
-    keepAlive.onStart(mock(StartupEvent.class));
-
-    verify(vertx, never()).setPeriodic(anyLong(), any());
-  }
-
-  @Test
-  void shouldCancelTimerOnStop() {
-    Vertx vertx = mock(Vertx.class);
-    SessionEventBroadcaster broadcaster = mock(SessionEventBroadcaster.class);
-    ThrillhouseConfig config = mock(ThrillhouseConfig.class);
-    when(config.websocketKeepAliveMs()).thenReturn(25_000L);
-    when(vertx.setPeriodic(anyLong(), any())).thenReturn(42L);
-
-    var keepAlive = new DashboardWebSocketKeepAlive(vertx, broadcaster, config);
-    keepAlive.onStart(mock(StartupEvent.class));
-    keepAlive.onStop(mock(ShutdownEvent.class));
-
+    verify(vertx).cancelTimer(41L);
     verify(vertx).cancelTimer(42L);
+  }
+
+  @Test
+  void stoppingBeforeStartCancelsNothing() {
+    Vertx vertx = mock(Vertx.class);
+    var keepAlive =
+        new DashboardWebSocketKeepAlive(
+            vertx, mock(SessionEventBroadcaster.class), mock(ThrillhouseConfig.class));
+
+    keepAlive.onStop(mock(ShutdownEvent.class));
+
+    verify(vertx, never()).cancelTimer(anyLong());
   }
 }

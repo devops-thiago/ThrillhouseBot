@@ -111,6 +111,38 @@ class ReviewPublisherTest {
   private static final ReviewResult SUPERSEDED_RESULT =
       followUpResult(List.of(new ReviewResult.PreviousFindingStatus(1, "superseded", "code gone")));
 
+  private static ReviewResult approvedOnCi() {
+    return followUpResult(List.of());
+  }
+
+  @Test
+  void refreshingTheCiStateEditsOnlyASummaryWithMarkedSections() {
+    var bot = new GitHubReviewClient.ReviewResponse.User("thrillhousebot");
+    var marked =
+        PrSummaryGenerator.SUMMARY_HEADING
+            + "\n\n"
+            + CiSummarySections.wrap(CiSummarySections.HOLD, "cannot be approved");
+    when(commentClient.listComments(anyString(), anyString(), anyString(), anyString(), anyInt()))
+        .thenReturn(List.of(new GitHubCommentClient.IssueComment(77L, marked, bot)))
+        .thenReturn(
+            List.of(
+                new GitHubCommentClient.IssueComment(
+                    78L, PrSummaryGenerator.SUMMARY_HEADING + "\n\nunmarked", bot)))
+        .thenReturn(List.of());
+
+    publisher.refreshCiState("auth", "o", "r", 1, approvedOnCi());
+    publisher.refreshCiState("auth", "o", "r", 1, approvedOnCi());
+    publisher.refreshCiState("auth", "o", "r", 1, approvedOnCi());
+
+    var edited = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .updateComment(
+            anyString(), anyString(), anyString(), anyString(), eq(77L), edited.capture());
+    assertTrue(edited.getValue().body().contains("the held approval was posted"));
+    verify(commentClient, never())
+        .updateComment(anyString(), anyString(), anyString(), anyString(), eq(78L), any());
+  }
+
   @Test
   void followUpWithSupersededFindingEditsTheExistingSummaryInPlace() {
     var bot = new GitHubReviewClient.ReviewResponse.User("thrillhousebot");

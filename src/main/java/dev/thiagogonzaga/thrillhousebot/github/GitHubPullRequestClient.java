@@ -139,13 +139,38 @@ public interface GitHubPullRequestClient {
       @PathParam("path") String path,
       @QueryParam("ref") String ref);
 
-  /** Reads one file's content at a ref, healing a rejected credential once (#626). */
+  /**
+   * Reads one file's content at a ref, healing a rejected credential once (#626). The path comes
+   * from model output and repository files, so one that is not a plain repository-relative path
+   * ({@link #isRepositoryRelative}) is answered as a missing file without a request: the URL it
+   * would build could address another endpoint of the API.
+   */
   default FileContent getFileContent(
       String auth, String accept, String owner, String repo, String path, String ref) {
+    if (!isRepositoryRelative(path)) {
+      return null;
+    }
     return GitHubTokenRefresh.SHARED.retrying(
         "file content of " + path + " on " + owner + "/" + repo,
         auth,
         credential -> getFileContentOnce(credential, accept, owner, repo, path, ref));
+  }
+
+  /**
+   * Whether {@code path} names a file inside the repository: not blank, no leading {@code /}, and
+   * no {@code ..} segment under either separator. A name that only contains two dots, such as
+   * {@code a..b.txt}, is an ordinary file.
+   */
+  static boolean isRepositoryRelative(String path) {
+    if (path == null || path.isBlank() || path.startsWith("/") || path.startsWith("\\")) {
+      return false;
+    }
+    for (var segment : path.split("[/\\\\]", -1)) {
+      if (segment.equals("..")) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /**

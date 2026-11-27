@@ -168,7 +168,7 @@ public class MaintainerReplyService {
             task.commenterLogin(), task.owner(), task.repo(), task.prNumber());
         return;
       }
-      var auth = authClient.getAuthHeader(task.installationId());
+      var auth = authClient.getAuthHeader(task.installationId(), task.repo());
       if (task.reviewThread()) {
         handleReviewThreadReply(auth, task);
       } else {
@@ -577,7 +577,8 @@ public class MaintainerReplyService {
       // vocabulary from a round posted before the guard existed; it must not echo it (#950).
       // The paths the reply can really be about are passed, so a file of this pull request that
       // happens to be named like the prompt's example locator is kept.
-      return PromptLabelScrubber.scrub(reply.strip(), realPaths);
+      // The reply is the model's markdown, posted as prose: it must not notify anyone it names.
+      return MarkdownSafe.prose(PromptLabelScrubber.scrub(reply.strip(), realPaths));
     } catch (AiResponseTruncatedException e) {
       // Named separately from the generic failure: the cause is a cap the operator set, not a
       // provider error, and the message says which knob to raise.

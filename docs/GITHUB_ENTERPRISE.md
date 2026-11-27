@@ -31,13 +31,8 @@ Each one defaults to `github.com` on its own, so a missed one keeps calling
 them. Dashboard sign-in follows `GITHUB_URL` unless `GITHUB_OAUTH_URL` is set.
 
 Support for these addresses is still being completed, tracked in
-[#1487](https://github.com/devops-thiago/ThrillhouseBot/issues/1487):
-
-- a linked issue written as a full URL is recognized only for `github.com`, so
-  write it as `#123` or `owner/repo#123`;
-- the pull request links in the dashboard's session list lead to `github.com`;
-- no way to add an internal certificate authority to the published images is
-  documented yet.
+[#1487](https://github.com/devops-thiago/ThrillhouseBot/issues/1487): no way to
+add an internal certificate authority to the published images is documented yet.
 
 ## Register the app under the organization
 

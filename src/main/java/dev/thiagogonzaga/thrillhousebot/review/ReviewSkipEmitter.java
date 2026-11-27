@@ -35,10 +35,14 @@ import org.slf4j.LoggerFactory;
 /**
  * Single emit point for automatic-review skips. Each skip produces a structured log line with a
  * {@link ReviewSkipReason} code, increments the {@code thrillhouse.review.skips} OpenTelemetry
- * counter (attributes: {@code reason}, {@code repository}), and bumps an in-memory count per
- * installation and reason exposed on the dashboard summary endpoint. The dashboard shows a login
- * only the counts of installations whose installation-wide views it may see (#1221). Counts are per
- * replica and reset on restart.
+ * counter (attribute: {@code reason}), and bumps an in-memory count per installation and reason
+ * exposed on the dashboard summary endpoint. The dashboard shows a login only the counts of
+ * installations whose installation-wide views it may see (#1221). Counts are per replica and reset
+ * on restart.
+ *
+ * <p>The counter carries no repository: {@code GET /metrics} is served without authentication, so a
+ * repository label there would list the names of private repositories to anyone who can reach the
+ * port. The repository and pull request are in the log line.
  */
 @ApplicationScoped
 public class ReviewSkipEmitter {
@@ -46,7 +50,6 @@ public class ReviewSkipEmitter {
   private static final Logger log = LoggerFactory.getLogger(ReviewSkipEmitter.class);
 
   private static final AttributeKey<String> ATTR_REASON = stringKey("reason");
-  private static final AttributeKey<String> ATTR_REPOSITORY = stringKey("repository");
 
   private final LongCounter skipCounter;
 
@@ -74,8 +77,8 @@ public class ReviewSkipEmitter {
    *
    * @param reason structured reason code
    * @param installationId installation the event came from, or {@link #UNKNOWN_INSTALLATION}
-   * @param owner repository owner login
-   * @param repo repository name
+   * @param owner repository owner login (log line only, never a metric attribute)
+   * @param repo repository name (log line only, never a metric attribute)
    * @param prNumber pull request number
    * @param detail free-text context for the log line (never used as a metric attribute)
    */
@@ -93,8 +96,7 @@ public class ReviewSkipEmitter {
         repo,
         prNumber,
         detail);
-    skipCounter.add(
-        1, Attributes.of(ATTR_REASON, reason.name(), ATTR_REPOSITORY, owner + "/" + repo));
+    skipCounter.add(1, Attributes.of(ATTR_REASON, reason.name()));
     counts
         .computeIfAbsent(installationId, ignored -> new ConcurrentHashMap<>())
         .computeIfAbsent(reason, ignored -> new LongAdder())

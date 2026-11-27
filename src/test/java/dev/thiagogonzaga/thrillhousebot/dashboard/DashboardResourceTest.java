@@ -552,6 +552,10 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
         .then()
         .statusCode(200)
         .body("sessions", hasSize(2))
+        .body(
+            "sessions.pullRequestUrl",
+            containsInAnyOrder(
+                "https://github.com/repo/a/pull/1", "https://github.com/repo/b/pull/2"))
         .body("total", equalTo(2))
         .body("page", equalTo(0))
         .body("size", equalTo(10));

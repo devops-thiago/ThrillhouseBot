@@ -174,8 +174,10 @@ public interface GitHubCheckRunClient {
 
   /**
    * One page of a check run's annotations — the file/line-anchored messages a CI tool attached to
-   * it (a failing test's assertion, a compiler error). Read only by the opt-in CI-failure review
-   * context (#59), one page per failing run, so the cost is bounded by the caller.
+   * it (a failing test's assertion, a compiler error, a Code Scanning alert). Read only by the
+   * opt-in CI-failure review context (#59), one page per detailed failing run, and the opt-in
+   * static-analysis context (#34), one page per annotated run it reads, so the cost is bounded by
+   * the caller.
    */
   @GET
   @Path("/repos/{owner}/{repo}/check-runs/{checkRunId}/annotations")

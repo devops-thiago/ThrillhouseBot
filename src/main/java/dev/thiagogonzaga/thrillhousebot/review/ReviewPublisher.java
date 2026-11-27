@@ -411,6 +411,27 @@ public class ReviewPublisher {
   }
 
   /**
+   * Rewrites the CI hold the summary comment still shows after a CI completion released or kept it
+   * (#1462). A summary with nothing marked, or none at all, is left as it is.
+   */
+  void refreshCiState(String auth, String owner, String repo, int prNumber, ReviewResult ci) {
+    latestBotSummaryComment(auth, owner, repo, prNumber)
+        .ifPresent(
+            comment -> {
+              var body = CiSummarySections.refresh(comment.body(), ci);
+              if (!body.equals(comment.body())) {
+                commentClient.updateComment(
+                    auth,
+                    ACCEPT,
+                    owner,
+                    repo,
+                    comment.id(),
+                    new GitHubCommentClient.CreateCommentRequest(body));
+              }
+            });
+  }
+
+  /**
    * Applies or suggests the model's labels (best-effort; never blocks the review). The suggested
    * labels come from the model summary and are reconciled against the repo's existing labels.
    */
@@ -1065,14 +1086,17 @@ public class ReviewPublisher {
       sb.append("- **")
           .append(f.risk().name())
           .append(":** ")
-          .append(f.title())
+          .append(MarkdownSafe.inline(f.title()))
           .append(" (`")
-          .append(f.file())
+          .append(MarkdownSafe.inlineCode(f.file()))
           .append(":")
           .append(f.line())
           .append("`)");
       if (f.description() != null && !f.description().isBlank()) {
-        sb.append("\n  ").append(f.description().strip().replace("\n", "\n  "));
+        sb.append("\n  ")
+            .append(
+                SecurityScan.postedDescription(f.title(), f.description().strip())
+                    .replace("\n", "\n  "));
       }
       sb.append("\n");
     }
@@ -1219,7 +1243,7 @@ public class ReviewPublisher {
             status ->
                 "unresolved".equalsIgnoreCase(status.status())
                     && RebuttalContradiction.explainsKeptFinding(status.note()))
-        .map(status -> status.note().strip())
+        .map(status -> MarkdownSafe.prose(status.note().strip()))
         .toList();
   }
 

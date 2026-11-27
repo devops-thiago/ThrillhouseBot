@@ -72,7 +72,9 @@ touches `pom.xml`, `src/main/**`, the native integration tests or
 binary. To build a
 throwaway test image for a branch or pull request without touching `latest`, run
 the Docker test image workflow (`.github/workflows/docker-test-image.yml`) from
-the Actions tab.
+the Actions tab. It builds same-repository pull requests only, compiles them in
+jobs that cannot write to the registry, and saves no build cache from a pull
+request.
 
 CI enforces this bar:
 
@@ -88,6 +90,17 @@ CI enforces this bar:
   rating on new code.
 - Every commit is signed off (see
   [Developer Certificate of Origin](#developer-certificate-of-origin)).
+
+### Released history is read-only
+
+A released version's section in `CHANGELOG.md` and its archived docs
+(`website/src/content/docs/<version>/`, `website/src/assets/<version>/`,
+`website/src/content/versions/<version>.json` and its entry in
+`website/versions.json`) record what shipped. The `released-history` check fails
+a pull request that edits, removes or renames any of them, or adds a file to an
+archive that already exists, for a version with a `vX.Y.Z` tag. To correct one, add an **Errata** entry to the next release's
+section instead. New entries under `[Unreleased]`, a new release section and a
+new docs archive are always allowed.
 
 ## Coding style
 
@@ -114,8 +127,10 @@ reason on the pull request.
 Other review bots, such as Cursor Bugbot, may comment on a pull request. They
 are not a merge requirement.
 
-The static gate stays separate from the bot. Linter output is not fed into the
-review prompt ([#34](https://github.com/devops-thiago/ThrillhouseBot/issues/34)).
+The static gate stays separate from the bot. Linter output reaches the review
+prompt only through the opt-in static-analysis context
+([#34](https://github.com/devops-thiago/ThrillhouseBot/issues/34)), and only as
+context: the static checks stay required either way.
 
 ### When the gates disagree
 

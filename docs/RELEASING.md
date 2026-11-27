@@ -38,9 +38,12 @@ commits from bot-authored pull requests.
 6. Merge it with a rebase merge, which puts each squashed pull request from
    the release branch on `main` as its own commit.
 7. Wait for CI on `main` to finish. It publishes the images that the release
-   workflow promotes, tagged with the commit SHA.
+   workflow promotes, tagged with the commit SHA, and attaches the provenance
+   the release workflow asks for. Do not re-run that CI run's `docker` job once
+   it has passed: a re-run rebuilds the images under the same tags.
 8. Tag the last commit the rebase put on `main` as `vX.Y.Z` with a signed
-   tag and push it. That starts the release workflow.
+   tag and push it. That starts the release workflow. The workflow refuses a
+   tag that is unsigned, lightweight, or on a commit that is not on `main`.
 
    ```bash
    git tag -s vX.Y.Z -m vX.Y.Z <last-release-commit>
@@ -60,6 +63,20 @@ gh api users/devops-thiago/ssh_signing_keys \
 git -c gpg.ssh.allowedSignersFile=allowed_signers tag -v vX.Y.Z
 ```
 
+The release workflow makes the same check before it publishes anything. It
+reads the SSH signing keys GitHub lists for the accounts named in
+`RELEASE_TAG_SIGNERS` in `release.yml`, and accepts a tag only when one of
+those keys signed it. To let another maintainer cut releases, add their login
+there, separated from the others by a comma (`alice,bob`); the key has to be
+registered on their account as a signing key. A GPG
+signature is not accepted. Removing a key from the account makes the tags it
+signed fail this check from then on.
+
+If a tag was pushed unsigned, the release stops in `verify` and publishes
+nothing. Delete the tag, sign it and push it again; with the tag ruleset
+described under [Repository settings](#repository-settings) only an
+administrator can delete it.
+
 The images and binaries a release publishes are signed separately with cosign;
 see [Verifying a release](../README.md#verifying-a-release).
 
@@ -69,29 +86,69 @@ see [Verifying a release](../README.md#verifying-a-release).
 is pushed. It can also be re-run with `workflow_dispatch` against an existing
 tag. Its jobs:
 
-1. `verify` checks that the tag is semver and matches the `pom.xml` version,
-   and that CI has already published both images for the tagged commit to GHCR.
-   If an image is missing, wait for `main` CI to finish and re-run.
-2. `scan` runs Trivy on both images and fails on CRITICAL or HIGH findings. It
+1. `verify` decides whether the tag may be released and fixes what is
+   released. It runs the copy of `scripts/release/check-tag.mjs` on `main`,
+   never the tag's own, which checks that the tag is `vX.Y.Z`, is a signed annotated tag (see
+   [Verifying a release tag](#verifying-a-release-tag)), points at a commit on
+   `main` and matches the `pom.xml` version. It builds nothing from the tagged
+   tree. It then resolves the two images CI pushed for the commit to their
+   digests and checks each one's provenance with `gh attestation verify`: signed
+   by `ci.yml`, on `refs/heads/main`, from exactly the tagged commit. An image
+   that something else pushed under the commit's tag has no such provenance and
+   stops the release. If an image or its provenance is missing, wait for `main`
+   CI to finish and re-run.
+2. `scan` runs Trivy on both images, by digest, and fails on CRITICAL or HIGH
+   findings. It
    uploads nothing to code scanning, because code scanning judges a category's
    freshness against `main`, and a category that only tags update shows as
    stale in the Security tab (#869). The SARIF reports are kept as the run's
    `trivy-release-sarif` artifact, and a failed gate names the findings there.
    The Security tab's image results come from `ci.yml` (`trivy-image`,
    `trivy-image-distroless`) and `security-scan.yml`, which scan `main`.
-3. `promote` retags the commit's images as `:vX.Y.Z`, signs them with cosign and
-   attests provenance. It also moves `:latest` when the tag is the highest
+3. `promote` tags those digests as `:vX.Y.Z`, signs them with cosign and
+   attests provenance. It never moves a version tag that already names other
+   images. It also moves `:latest` when the tag is the highest
    `vX.Y.Z` release; a pre-release or floating tag such as `v0.6.8-rc1` or
-   `nightly` does not count. The decision is written to the run summary either
-   way.
-4. `release` extracts the native binaries, signs the tarballs, takes the notes
-   from `CHANGELOG.md` and creates the GitHub release.
+   `nightly` does not count. The decision and the digests are written to the
+   run summary.
+4. `release` extracts the native binaries from the same digest, signs the
+   tarballs, takes the notes from `CHANGELOG.md` and creates the GitHub release.
 5. `publish-docs` deploys the docs site from the tag (see
    [Publishing the docs](#publishing-the-docs)).
 6. `bump-version` opens a pull request moving `main` to the next `-SNAPSHOT`
    version.
 
 `publish-docs` and `bump-version` run only when `promote` moved `:latest`.
+
+`promote` and `release` run in the `release` environment, so that environment's
+protection rules apply to the two jobs that publish. With required reviewers
+set, each of the two waits for an approval.
+
+### Running a release again
+
+A failed run can be re-run from the Actions page, or started again with
+`workflow_dispatch` and the tag as `version`. Start a manual run from `main` or
+from the tag itself; the workflow refuses any other ref. A run from `main` uses
+`main`'s workflow file and signs as `release.yml@refs/heads/main`, which the
+verification commands in the README accept.
+
+A second run repeats the same checks and publishes the same digests: the
+version tags stay where they are, the images get another signature and
+attestation, and the release assets and notes are replaced.
+
+Two cases stop a second run:
+
+- The images for the commit changed since the first run, because the `docker`
+  job of `main` CI was run again and rebuilt them. `promote` refuses to move
+  `:vX.Y.Z` to the new images. The published images stay as they are, and
+  they are what users have already pulled and verified, so cut a new patch
+  release instead of replacing them. GHCR has no way to drop one tag: deleting
+  the package version removes every tag on it, `:latest` included when it
+  points there.
+- The release is v0.9.3 or older. Those images were built before CI attached
+  provenance, so `verify` cannot tell who built them and stops. They cannot be
+  released again by the workflow. Their published images, signatures and
+  binaries are unaffected.
 
 ## Freezing the docs version
 
@@ -113,6 +170,12 @@ cd .. && git restore --source HEAD -- README.md CONTRIBUTING.md docs/ website/sr
 
 Then set `current.label` in `website/versions.json` to `vX.Y.Z`, the version
 being released, and check that `npm run build` picks up the new pages.
+
+The archive is locked once this pull request merges: for a tagged version, the
+`released-history` check fails any later pull request that changes an archive
+that already exists, so review the new archive here. The same check locks each
+tagged version's `CHANGELOG.md` section. A correction afterwards goes into the
+next release as an Errata entry.
 
 Run `git status` after the second restore. Restoring from a tag brings back any
 file deleted since that tag, so a change outside the new archive directories and
@@ -178,12 +241,22 @@ tag:
 gh workflow run docs.yml --ref vX.Y.Z
 ```
 
+The workflow builds the ref it was started on and takes no other ref as input,
+so these two policies decide what can reach the live site.
+
 ## The version bump
 
-After a release that moves `:latest`, the `bump-version` job pushes a
+After a release that moves `:latest`, the `bump-version` job creates a
 `chore/bump-<next>-SNAPSHOT` branch, where `<next>` is the next patch version,
 and opens a pull request into `main` with the default `GITHUB_TOKEN`. It skips
 the bump when `main` is already at that version or later.
+
+`main` requires signed commits, and a commit pushed with `GITHUB_TOKEN` is
+unsigned. So the job doesn't push a local commit. It makes the commit through
+the GraphQL `createCommitOnBranch` mutation, which GitHub signs as
+`github-actions[bot]`, with a DCO sign-off in the message. It then checks that
+GitHub reports the commit as verified, and fails if it doesn't. The v0.9.3 bump
+(#1477) was pushed unsigned before this change and had to be redone as #1482.
 
 Opening the pull request depends on one repository setting: Settings → Actions
 → General → Workflow permissions → "Allow GitHub Actions to create and approve
@@ -214,3 +287,43 @@ with a GitHub App token or a PAT instead of the default `GITHUB_TOKEN`; a pull
 request from any other identity starts `pull_request` CI. That trades the
 repository setting for a stored credential, and the workflow deliberately keeps
 no release secret.
+
+## Repository settings
+
+The workflows check what they can. The rest is configuration that only a
+repository administrator can set, and the checks above assume it.
+
+- **Tag ruleset for `v*`** (Settings → Rules → Rulesets, target: tags). Restrict
+  creations, updates and deletions to the maintainers who cut releases. Without
+  it, anyone with write access can push a `v*` tag, and a tag carries its own
+  copy of the workflow files: the `release` and `github-pages` environments
+  both accept `v*` tags. A ruleset cannot require a tag to be signed, which is
+  why `verify` checks the signature.
+- **`release` environment** (Settings → Environments). GitHub creates it
+  without protection the first time the workflow runs. Add required reviewers,
+  and under "Deployment branches and tags" allow the branch `main` and the tag
+  pattern `v*` only. The workflow file at a tag or on `main` is then the only
+  one that can run the publishing jobs in this environment. Turn off "Allow
+  administrators to bypass configured protection rules" if a second approver is
+  wanted even for an administrator.
+- **`github-pages` environment.** Keep the `main` and `v*` policies described
+  under [The tag must be allowed to deploy](#the-tag-must-be-allowed-to-deploy).
+- **GHCR package access** (the package's settings → Manage Actions access).
+  Only this repository should have write access. Any workflow in a repository
+  with write access can push or retag images, whatever branch it runs from. The
+  release workflow no longer trusts a tag in the registry, but `:snapshot` and
+  the test tags are still only as trustworthy as the set of writers.
+- **"Allow GitHub Actions to create and approve pull requests"** (Settings →
+  Actions → General). The version bump needs it to open its pull request (see
+  [The version bump](#the-version-bump)). It also lets a workflow approve a
+  pull request, so keep the `main` rule that requires a code owner's review:
+  a workflow's approval is not a code owner's.
+- **Code-owner review on `main`.** `.github/CODEOWNERS` now names an owner for
+  every path, so the required review covers the whole repository, not only the
+  workflows.
+
+Tags created before these checks existed keep their old workflow files. Anyone
+who can start a workflow on such a tag runs the old `release.yml` or `docs.yml`
+from it, without the checks added since. The `release` environment does not
+gate those runs, because the old file does not name it. Required reviewers on
+`github-pages` and the write-access list are what limit this.

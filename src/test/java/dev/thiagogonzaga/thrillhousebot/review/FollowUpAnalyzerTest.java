@@ -2904,7 +2904,7 @@ class FollowUpAnalyzerTest {
         note.contains("executor.execute(() -> execute(ctx));"),
         "the note must quote the contradicting line: " + note);
     assertTrue(
-        note.contains("A second @thrillhousebot declined comment naming this finding"),
+        note.contains("A second `@thrillhousebot declined` comment naming this finding"),
         "a finding with no thread must be told which reply ends the re-check: " + note);
   }
 
@@ -3626,6 +3626,23 @@ class FollowUpAnalyzerTest {
     assertTrue(FollowUpAnalyzer.CommentNaming.of(comment).names("src/A.java", 10, title));
     assertTrue(
         FollowUpAnalyzer.CommentNaming.of(comment).namesPathAndLine("src/A.java", 10, title));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "Missing @Override on run",
+        // Copied from the rendered summary: the zero-width space after the "@" comes along.
+        "Missing @\u200BOverride on run",
+        // Copied from the comment's source.
+        "Missing @&#8203;Override on run"
+      })
+  void aTitleWithAnAtSignNamesItsFindingHoweverItWasCopied(String named) {
+    var comment = "@thrillhousebot resolved src/A.java:10 — " + named;
+
+    assertTrue(
+        FollowUpAnalyzer.CommentNaming.of(comment)
+            .names("src/A.java", 10, "Missing @Override on run"));
   }
 
   @Test
@@ -6142,7 +6159,7 @@ class FollowUpAnalyzerTest {
     assertEquals(1, held.get(0).status().id(), "a hold keeps the id its own round gave it");
     var note = held.get(0).status().note();
     assertTrue(note.startsWith(RebuttalContradiction.NOTE_LEAD_IN), note);
-    assertTrue(note.contains("A second @thrillhousebot declined comment"), note);
+    assertTrue(note.contains("A second `@thrillhousebot declined` comment"), note);
   }
 
   /** With the re-check off a conversation decline stands unweighed, as on the effective round. */

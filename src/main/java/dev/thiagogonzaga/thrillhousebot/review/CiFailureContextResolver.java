@@ -418,6 +418,24 @@ public class CiFailureContextResolver {
     return sb.toString();
   }
 
+  /**
+   * The ids of the failing check runs whose annotations {@link #render} reads: one of the {@link
+   * #MAX_CHECKS_DETAILED} it describes in full, a check run (not a commit status) that reports
+   * annotations. The static-analysis context (#34) leaves exactly these to this section, so the
+   * rule lives next to the code it describes.
+   */
+  static Set<Long> runsWithAnnotationsRead(CiStatusEvaluator.CiFailures failures) {
+    return failures.failed().stream()
+        .limit(MAX_CHECKS_DETAILED)
+        .filter(CiFailureContextResolver::hasAnnotationsToRead)
+        .map(CiStatusEvaluator.FailedCheck::checkRunId)
+        .collect(java.util.stream.Collectors.toUnmodifiableSet());
+  }
+
+  private static boolean hasAnnotationsToRead(CiStatusEvaluator.FailedCheck check) {
+    return check.checkRunId() > 0 && check.annotationsCount() > 0;
+  }
+
   private static void appendCheck(StringBuilder sb, CiStatusEvaluator.FailedCheck check) {
     sb.append(CHECK_HEADING)
         .append(oneLine(check.name()))
@@ -440,7 +458,7 @@ public class CiFailureContextResolver {
       String owner,
       String repo,
       CiStatusEvaluator.FailedCheck check) {
-    if (check.checkRunId() <= 0 || check.annotationsCount() <= 0) {
+    if (!hasAnnotationsToRead(check)) {
       return;
     }
     List<GitHubCheckRunClient.Annotation> page;
@@ -483,7 +501,7 @@ public class CiFailureContextResolver {
    * workflow file is about that file's own content (an unpinned action, a bad expression) and is
    * kept.
    */
-  private static boolean isRunnerNotice(GitHubCheckRunClient.Annotation annotation) {
+  static boolean isRunnerNotice(GitHubCheckRunClient.Annotation annotation) {
     var path = annotation.path();
     if (levelRank(annotation) == 0 || path == null) {
       return false;
@@ -558,11 +576,11 @@ public class CiFailureContextResolver {
         && !FILE_EXTENSIONS.contains(method.toLowerCase(Locale.ROOT));
   }
 
-  private static int levelRank(GitHubCheckRunClient.Annotation annotation) {
+  static int levelRank(GitHubCheckRunClient.Annotation annotation) {
     return "failure".equalsIgnoreCase(annotation.annotationLevel()) ? 0 : 1;
   }
 
-  private static String formatAnnotation(GitHubCheckRunClient.Annotation annotation) {
+  static String formatAnnotation(GitHubCheckRunClient.Annotation annotation) {
     var location = oneLine(annotation.path());
     if (annotation.startLine() != null) {
       location = location + ":" + annotation.startLine();

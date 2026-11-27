@@ -1,3 +1,9 @@
+# Default owners for everything. Without this line a path with no entry has no code owner, so
+# the required code-owner review does not apply to it: build files, the composite actions
+# under .github/actions/ and Dependabot's configuration among them. The last matching
+# pattern wins, so this line stays first and the entries below keep their own owners.
+* @devops-thiago @omatheusmesmo @matheusandre1
+
 # Protect CI/CD workflows — require owner review for any changes
 /.github/workflows/ @devops-thiago @omatheusmesmo @matheusandre1
 /.github/CODEOWNERS @devops-thiago @omatheusmesmo @matheusandre1
@@ -5,3 +11,5 @@
 /scripts/dco/ @devops-thiago @omatheusmesmo @matheusandre1
 # Deletes container image versions; a wrong rule removes published images.
 /scripts/ghcr-prune/ @devops-thiago @omatheusmesmo @matheusandre1
+# The required released-history check runs this checker from the base branch.
+/scripts/released-history/ @devops-thiago @omatheusmesmo @matheusandre1

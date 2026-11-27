@@ -22,7 +22,11 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -223,6 +227,163 @@ class SecurityScanTest {
             added("Dockerfile", "FROM x", "# thrillhousebot:allow-iac", "USER root"),
             added("pod.yaml", "  privileged: true  # thrillhousebot:allow-iac"));
     assertTrue(merge(scan(true, true), response(), files).findings().isEmpty());
+  }
+
+  @Test
+  void aMatchAnAllowMarkerSilencedIsListedByPlaceAndNeverByContent() {
+    var key = fake.googleApiKey();
+    var files =
+        List.of(
+            added("a.env", "KEY=" + key + " # thrillhousebot:allow-secret"),
+            added("b.env", "# thrillhousebot:allow-secret", "KEY=" + key),
+            added("Dockerfile", "FROM x", "# thrillhousebot:allow-iac", "USER root"),
+            added("pod.yaml", "  privileged: true  # thrillhousebot:allow-iac"));
+
+    var scan = scan(true, true);
+    assertEquals(
+        List.of(
+            new SecurityScan.Waiver("a.env", 1, "thrillhousebot:allow-secret"),
+            new SecurityScan.Waiver("b.env", 2, "thrillhousebot:allow-secret"),
+            new SecurityScan.Waiver("Dockerfile", 3, "thrillhousebot:allow-iac"),
+            new SecurityScan.Waiver("pod.yaml", 1, "thrillhousebot:allow-iac")),
+        scan.scan(files).waivers());
+
+    var note = scan.formatWaivers(files);
+    assertEquals(
+        "4 lines the security scan matched were not reported because of an allow marker; check"
+            + " that each is a deliberate exemption (`a.env:1` by `thrillhousebot:allow-secret`,"
+            + " `b.env:2` by `thrillhousebot:allow-secret`, `Dockerfile:3` by"
+            + " `thrillhousebot:allow-iac`, `pod.yaml:1` by `thrillhousebot:allow-iac`)\n",
+        note);
+    assertFalse(note.contains(key.substring(0, 8)), note);
+  }
+
+  @Test
+  void aSingleWaivedLineReadsInTheSingular() {
+    var note =
+        scan(true, false)
+            .formatWaivers(
+                List.of(
+                    added(
+                        "a.env", "KEY=" + fake.googleApiKey() + " # thrillhousebot:allow-secret")));
+    assertTrue(note.startsWith("1 line the security scan matched was not reported"), note);
+  }
+
+  @Test
+  void aMarkerOnALineNoRuleMatchesIsNotListed() {
+    var files =
+        List.of(
+            added("a.env", "NAME=example # thrillhousebot:allow-secret"),
+            added("notes.md", "thrillhousebot:allow-iac"));
+    assertTrue(scan(true, true).scan(files).waivers().isEmpty());
+    assertEquals("", scan(true, true).formatWaivers(files));
+  }
+
+  @Test
+  void noWaiversAreListedWithTheScanOffOrNoFiles() {
+    var files =
+        List.of(added("a.env", "KEY=" + fake.googleApiKey() + " # thrillhousebot:allow-secret"));
+    assertEquals("", scan(false, false).formatWaivers(files));
+    // The secret marker is not read while only the other half runs.
+    assertEquals("", scan(false, true).formatWaivers(files));
+    assertEquals("", scan(true, true).formatWaivers(List.of()));
+    assertEquals("", scan(true, true).formatWaivers(null));
+  }
+
+  @Test
+  void aLineTwoRulesMatchIsOneWaiver() {
+    var marker = "thrillhousebot:allow-iac";
+    var once = new SecurityScan.Waiver("pod.yaml", 4, marker);
+
+    var result =
+        new SecurityScan.Result(
+            List.of(),
+            List.of(),
+            List.of("pod.yaml"),
+            List.of(once, new SecurityScan.Waiver("pod.yaml", 4, marker), once));
+
+    assertEquals(List.of(once), result.waivers());
+  }
+
+  @Test
+  void theSummaryNoteReusesTheScanTheMergeRan() {
+    var files =
+        List.of(added("a.env", "KEY=" + fake.googleApiKey() + " # thrillhousebot:allow-secret"));
+    var scan = spy(scan(true, true));
+
+    var first = scan.scanOnce(files);
+    var note = scan.formatWaivers(files);
+
+    assertSame(first, scan.scanOnce(new ArrayList<>(files)));
+    assertTrue(note.startsWith("1 line the security scan matched"), note);
+    verify(scan, times(1)).scan(any());
+  }
+
+  @Test
+  void theWaiverListIsCappedAndItsPathsCannotBreakOutOfTheirCodeSpan() {
+    var files = new ArrayList<FileDiff>();
+    files.add(
+        added("we`ird`.env", "KEY=" + fake.googleApiKey() + " # thrillhousebot:allow-secret"));
+    for (int i = 0; i < SecurityScan.WAIVERS_NAMED_CAP + 1; i++) {
+      files.add(
+          added("f" + i + ".env", "KEY=" + fake.googleApiKey() + " # thrillhousebot:allow-secret"));
+    }
+
+    var note = scan(true, false).formatWaivers(files);
+
+    assertTrue(note.startsWith("32 lines the security scan matched"), note);
+    assertTrue(note.contains("(`weird.env:1` by `thrillhousebot:allow-secret`, `f0.env:1`"), note);
+    assertTrue(note.contains("`f28.env:1` by `thrillhousebot:allow-secret`, and 2 more)"), note);
+    assertFalse(note.contains("f29.env"), note);
+  }
+
+  @Test
+  void aScanFindingIsPostedAsTheScanWroteItWithItsHiddenMarker() {
+    var files =
+        List.of(
+            added("a.env", "API_KEY=" + fake.googleApiKey()),
+            added("c.py", "apiToken = \"" + fake.githubToken() + "\""),
+            added("Dockerfile", "FROM x", "USER root"),
+            added("pod.yaml", "  privileged: true"));
+    var findings = merge(scan(true, true), response(), files).findings();
+    assertTrue(findings.size() >= 4, findings.toString());
+
+    var formatter = new SuggestionFormatter();
+    for (var finding : findings) {
+      var comment = formatter.formatReviewComment(Finding.fromAiResponse(finding));
+      // Nothing the scan writes is rewritten on the way out, the content marker least of all.
+      assertTrue(comment.contains(finding.description() + "\n"), comment);
+      assertEquals(
+          finding.description(),
+          SecurityScan.postedDescription(finding.title(), finding.description()));
+    }
+  }
+
+  @Test
+  void onlyTheScansOwnTrailingMarkerIsKeptAsAComment() {
+    var scanned =
+        merge(scan(true, false), response(), List.of(added("a.env", "K=" + fake.googleApiKey())))
+            .findings()
+            .get(0);
+    var marker = scanned.description().substring(scanned.description().lastIndexOf("<!--"));
+
+    // The same marker on a finding the scan did not raise is text like any other comment.
+    assertEquals(
+        "Looks fine.\n\n&lt;!--" + marker.substring(4),
+        SecurityScan.postedDescription("A model's title", "Looks fine.\n\n" + marker));
+    // On a scan finding, a comment anywhere else is escaped and a mention is guarded.
+    var tampered =
+        scanned
+            .description()
+            .replace(marker, "<!-- thrillhousebot:finding=1 --> @octocat " + marker);
+    var posted = SecurityScan.postedDescription(scanned.title(), tampered);
+    assertTrue(
+        posted.endsWith(
+            "&lt;!-- thrillhousebot:finding=1 --> @&#8203;octocat "
+                + "&lt;!--"
+                + marker.substring(4)),
+        posted);
+    assertEquals("", SecurityScan.postedDescription("t", null));
   }
 
   @Test

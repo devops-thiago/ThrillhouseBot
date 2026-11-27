@@ -409,7 +409,7 @@ public class PrSummaryGenerator {
     // After the findings sections so the note can refer back to them, and so a reader meets the
     // celebration (or the double-check list) before the caveat about how much to trust it.
     largePrNudge.render(filesChanged, additions, deletions, round).ifPresent(sb::append);
-    appendCiChecks(sb, result);
+    appendMarkedWhenHeld(sb, result, CiSummarySections.CHECKS, ciChecksText(result));
 
     sb.append("---\n");
     sb.append("*Automated review by ThrillhouseBot. Reply with `/review` to re-run.*\n");
@@ -594,7 +594,7 @@ public class PrSummaryGenerator {
       appendKeyFindings(sb, result, carried);
     } else if (hasNoUnresolvedPrevious(result)) {
       if (result.ciHoldsApproval()) {
-        appendCiHold(sb, result);
+        appendMarkedWhenHeld(sb, result, CiSummarySections.HOLD, ciHoldText(result));
       } else if (result.truncated()) {
         sb.append(
             "No new issues found in the reviewed portion of this PR — but the diff was too large to review in full, so this is a partial review.\n\n");
@@ -713,9 +713,23 @@ public class PrSummaryGenerator {
    * the required set was resolved. An unreadable source is NOT a not-green result — it could not be
    * read — so it gets "could not be read" wording, matching {@code
    * VerdictBuilder.checkSummaryForResult} and the "CI Status Unavailable" section rather than
-   * misreporting an unread status as failing. Reached only via {@link
-   * ReviewResult#ciHoldsApproval}, so no offending check implies the hold is an unreadable source.
+   * misreporting an unread status as failing. Both callers, the summary's own render and {@link
+   * CiSummarySections#refresh} for a hold that still stands, pass a result for which {@link
+   * ReviewResult#ciHoldsApproval} is true, so no offending check implies the hold is an unreadable
+   * source.
    */
+  static String ciHoldText(ReviewResult result) {
+    var sb = new StringBuilder();
+    appendCiHold(sb, result);
+    return sb.toString();
+  }
+
+  /** Marks the section when the hold can be released later, so that release can rewrite it. */
+  private static void appendMarkedWhenHeld(
+      StringBuilder sb, ReviewResult result, String section, String text) {
+    sb.append(result.heldOnCiOnly() ? CiSummarySections.wrap(section, text) : text);
+  }
+
   private static void appendCiHold(StringBuilder sb, ReviewResult result) {
     boolean offending = !result.offendingCiChecks().isEmpty();
     boolean truncated = result.truncated();
@@ -739,9 +753,11 @@ public class PrSummaryGenerator {
     }
   }
 
-  private static void appendCiChecks(StringBuilder sb, ReviewResult result) {
+  static String ciChecksText(ReviewResult result) {
+    var sb = new StringBuilder();
     appendOffendingCiChecks(sb, result);
     appendUnreadableCiStatus(sb, result);
+    return sb.toString();
   }
 
   private static void appendOffendingCiChecks(StringBuilder sb, ReviewResult result) {
@@ -761,13 +777,13 @@ public class PrSummaryGenerator {
       String statusEmoji = check.isFailing() ? "❌ Failed" : "⏳ Pending";
       String detail = check.conclusion() != null ? check.conclusion() : "-";
       sb.append("| **")
-          .append(MarkdownSafe.tableCell(check.name()))
+          .append(MarkdownSafe.proseCell(check.name()))
           .append("** | ")
-          .append(MarkdownSafe.tableCell(check.type()))
+          .append(MarkdownSafe.proseCell(check.type()))
           .append(" | ")
           .append(statusEmoji)
           .append(" | ")
-          .append(MarkdownSafe.tableCell(detail))
+          .append(MarkdownSafe.proseCell(detail))
           .append(" |\n");
     }
     sb.append("\n");
@@ -901,7 +917,7 @@ public class PrSummaryGenerator {
     for (String gap : gaps) {
       // One line per gap: a gap's own line break could otherwise end the section early, and the
       // next round reads these bullets back as the gaps it carries (#923).
-      sb.append("- ").append(MarkdownSafe.oneLine(gap)).append("\n");
+      sb.append("- ").append(MarkdownSafe.proseLine(gap)).append("\n");
     }
     for (Finding f : findings) {
       sb.append("- ").append(findingBullet(f)).append("\n");
@@ -922,12 +938,12 @@ public class PrSummaryGenerator {
     for (var criterion : met) {
       var cited =
           criterion.citations().stream()
-              .map(c -> "`" + MarkdownSafe.oneLine(c) + "`")
+              .map(c -> "`" + MarkdownSafe.inlineCode(c) + "`")
               .collect(Collectors.joining(", "));
       sb.append("- Linked issue")
           .append(criterion.issues().isEmpty() ? "" : " " + criterion.issues())
           .append(": ")
-          .append(MarkdownSafe.oneLine(criterion.criterion()))
+          .append(MarkdownSafe.proseLine(criterion.criterion()))
           .append(" — cited: ")
           .append(cited)
           .append("\n");
@@ -1031,7 +1047,7 @@ public class PrSummaryGenerator {
     for (ChangedFile file : walkthroughRows(changedFiles, summaryByPath)) {
       String summary = summaryByPath.getOrDefault(file.path(), "");
       sb.append("| `")
-          .append(MarkdownSafe.tableCell(file.path()))
+          .append(MarkdownSafe.tableCell(MarkdownSafe.inlineCode(file.path())))
           .append("` | ")
           .append(changeTypeLabel(file.changeType()))
           .append(" | ")
@@ -1088,7 +1104,7 @@ public class PrSummaryGenerator {
    */
   private static String summaryCell(ChangedFile file, String summary) {
     if (!summary.isBlank()) {
-      return MarkdownSafe.tableCell(summary.strip());
+      return MarkdownSafe.proseCell(summary.strip());
     }
     return file.pureRename() ? PURE_RENAME_SUMMARY : NO_MODEL_SUMMARY;
   }
@@ -1119,7 +1135,7 @@ public class PrSummaryGenerator {
       case "renamed" -> "Renamed";
       case "copied" -> "Copied";
       case "changed", "modified" -> "Modified";
-      default -> MarkdownSafe.tableCell(status);
+      default -> MarkdownSafe.proseCell(status);
     };
   }
 

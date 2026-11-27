@@ -167,7 +167,7 @@ public class PrDescriptionGenerator extends AbstractPrSuggestionGenerator {
       return null;
     }
     return HEADER
-        + suggestion
+        + MarkdownSafe.prose(suggestion)
         + batchFailureNote(
             drafted.failedBatches(), COMMAND, "the files in them are not described here.")
         + FOOTER

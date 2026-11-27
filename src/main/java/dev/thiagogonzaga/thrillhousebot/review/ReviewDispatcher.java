@@ -38,6 +38,10 @@ import org.slf4j.LoggerFactory;
  * completes. A CI re-evaluation of a held verdict (#825) rides the same per-PR worker, after any
  * review in flight, so it can never race a review of the pull request.
  *
+ * <p>An automatic review also takes one of its repository's slots ({@link AutoReviewSlots}) and
+ * waits on its worker for one while as many run as may, so the pull requests of one repository are
+ * reviewed a few at a time. A manual review takes no slot and never waits.
+ *
  * <p>A manual {@code /review} that arrives while a review is running reads the pull request's head
  * first (#1152). When it is the head under review, the running review already covers it: the
  * command gets a reply and no second run is queued. A moved head, a head the dispatcher cannot
@@ -72,6 +76,7 @@ public final class ReviewDispatcher {
   private final ExecutorService reviewExecutor;
   private final ReviewOrchestrator orchestrator;
   private final AutoReviewRateLimiter autoReviewRateLimiter;
+  private final AutoReviewSlots autoReviewSlots;
   private final ReviewSkipEmitter skipEmitter;
   private final CiHoldRevisit ciHoldRevisit;
   private final RunningReviewCoverage coverage;
@@ -84,6 +89,7 @@ public final class ReviewDispatcher {
       @ReviewExecutor ExecutorService reviewExecutor,
       ReviewOrchestrator orchestrator,
       AutoReviewRateLimiter autoReviewRateLimiter,
+      AutoReviewSlots autoReviewSlots,
       ReviewSkipEmitter skipEmitter,
       CiHoldRevisit ciHoldRevisit,
       RunningReviewCoverage coverage,
@@ -91,6 +97,7 @@ public final class ReviewDispatcher {
     this.reviewExecutor = reviewExecutor;
     this.orchestrator = orchestrator;
     this.autoReviewRateLimiter = autoReviewRateLimiter;
+    this.autoReviewSlots = autoReviewSlots;
     this.skipEmitter = skipEmitter;
     this.ciHoldRevisit = ciHoldRevisit;
     this.coverage = coverage;
@@ -124,6 +131,9 @@ public final class ReviewDispatcher {
       }
       if (result.coalescedCount() > 0) {
         logCoalesced(req, result.coalescedCount());
+        // The pull request's worker may be waiting for a repository slot with the request this
+        // one replaces; it gives the place up, so a manual review is not held behind it.
+        autoReviewSlots.recheckWaiters(req.installationId(), req.repositoryId());
       } else {
         logQueued(req);
       }
@@ -331,17 +341,72 @@ public final class ReviewDispatcher {
     // Re-check after dispatch: a request can pass the controller gate then reach here once the
     // window closed (coalesce or recordCompletion gap).
     var req = batch.request();
-    if (!req.isManualTrigger()
-        && autoReviewRateLimiter.isThrottled(req.owner(), req.repo(), req.prNumber())) {
-      skipEmitter.recordSkip(
-          ReviewSkipReason.RATE_LIMITED,
-          req.installationId(),
-          req.owner(),
-          req.repo(),
-          req.prNumber(),
-          "within the auto-review rate window after dispatch (manual /review bypasses)");
-    } else {
+    if (req.isManualTrigger()) {
       reviewBatch(state, batch, served);
+    } else if (!skippedAsThrottled(req)) {
+      reviewWithinRepositoryLimit(state, batch, served);
+    }
+  }
+
+  private boolean skippedAsThrottled(ReviewOrchestrator.ReviewRequest req) {
+    if (!autoReviewRateLimiter.isThrottled(req.owner(), req.repo(), req.prNumber())) {
+      return false;
+    }
+    skipEmitter.recordSkip(
+        ReviewSkipReason.RATE_LIMITED,
+        req.installationId(),
+        req.owner(),
+        req.repo(),
+        req.prNumber(),
+        "within the auto-review rate window after dispatch (manual /review bypasses)");
+    return true;
+  }
+
+  /**
+   * Runs an automatic review inside its repository's slot limit, waiting for a slot when as many
+   * reviews of the repository run as may. The slot is returned however the review ends. The rate
+   * window is read again once the slot is held, because the wait can outlast another review of the
+   * pull request. A request that arrives for the pull request during the wait replaces this one:
+   * the wait ends and the worker takes the newer request next, at once when it is a manual review.
+   */
+  private void reviewWithinRepositoryLimit(
+      PerPrState state, PerPrState.ReviewBatch batch, PerPrState.Served served) {
+    var req = batch.request();
+    var outcome =
+        autoReviewSlots.acquire(req.installationId(), req.repositoryId(), state::hasQueuedReview);
+    switch (outcome) {
+      case ACQUIRED -> reviewHoldingSlot(state, batch, served);
+      case QUEUE_FULL ->
+          skipEmitter.recordSkip(
+              ReviewSkipReason.REPOSITORY_QUEUE_FULL,
+              req.installationId(),
+              req.owner(),
+              req.repo(),
+              req.prNumber(),
+              "as many automatic reviews of the repository wait as AUTO_REVIEW_MAX_QUEUED_PER_REPO"
+                  + " allows (a later push or a manual /review reviews it)");
+      // Replaced by a newer request for the pull request, which the worker takes next, or
+      // interrupted by a shutdown.
+      default ->
+          log.info(
+              "Not running the review of {}/{} #{} that waited for a review slot: {}",
+              req.owner(),
+              req.repo(),
+              req.prNumber(),
+              outcome);
+    }
+  }
+
+  /** Runs the review whose slot is held, unless the rate window now covers it, then frees it. */
+  private void reviewHoldingSlot(
+      PerPrState state, PerPrState.ReviewBatch batch, PerPrState.Served served) {
+    var req = batch.request();
+    try {
+      if (!skippedAsThrottled(req)) {
+        reviewBatch(state, batch, served);
+      }
+    } finally {
+      autoReviewSlots.release(req.installationId(), req.repositoryId());
     }
   }
 
@@ -574,6 +639,13 @@ public final class ReviewDispatcher {
     String reviewingSha() {
       synchronized (lock) {
         return reviewingSha;
+      }
+    }
+
+    /** Whether a request arrived after the one the worker is serving. */
+    boolean hasQueuedReview() {
+      synchronized (lock) {
+        return latestRequest != null;
       }
     }
 

@@ -50,7 +50,8 @@ public interface ThrillhouseConfig {
 
   /**
    * Dashboard WebSocket keepalive in milliseconds, so reverse proxies do not close idle
-   * connections. {@code 0} or less disables it and stale replay-buffer eviction.
+   * connections. {@code 0} or less disables it and stale replay-buffer eviction; what each open
+   * connection may read is still re-checked every 25 seconds.
    */
   @WithDefault("25000")
   @WithName("websocket-keepalive-ms")
@@ -111,8 +112,8 @@ public interface ThrillhouseConfig {
 
     /**
      * Base URL of the GitHub web UI: {@code https://github.com}, or a GitHub Enterprise Server host
-     * such as {@code https://github.example.com}. Pull request links, the OAuth endpoints and the
-     * App install page follow it.
+     * such as {@code https://github.example.com}. Pull request links, issue URLs read from a pull
+     * request description, the OAuth endpoints and the App install page follow it.
      */
     @WithName("web-url")
     @WithDefault("https://github.com")
@@ -369,9 +370,12 @@ public interface ThrillhouseConfig {
      *
      * <p>Complements {@link #maxAiCalls()}, which bounds how many calls are planned but not what
      * they cost: one call against a large-context model can span two orders of magnitude of spend.
-     * The overrun is bounded by one in-flight call per parallel batch.
+     * The overrun is bounded by one in-flight call per parallel batch. The default leaves room for
+     * a full review at the default budget (six calls of 48,000 input tokens, their answers, the
+     * verifier and a few retries); raise it together with {@code REVIEW_MAX_INPUT_TOKENS} or {@code
+     * REVIEW_MAX_AI_CALLS}.
      */
-    @WithDefault("0")
+    @WithDefault("1000000")
     @WithName("max-tokens-per-review")
     long maxTokensPerReview();
 
@@ -609,16 +613,40 @@ public interface ThrillhouseConfig {
     Duration ackReactionTimeout();
 
     /**
-     * Minimum time between automatic reviews of one PR. Pushes inside the window are skipped, even
-     * on a new head (in memory, per replica). {@code /review} always runs. {@code 0} reviews every
-     * push.
+     * Minimum time between automatic reviews of one PR. Pushes, reopens and repeated
+     * ready-for-review events inside the window are skipped, even on a new head (in memory, per
+     * replica). {@code /review} always runs. {@code 0} reviews every event.
      *
      * <p>A manual {@code /review} never shifts the window. A negative value also disables
-     * throttling.
+     * throttling. The first ready-for-review of a head runs inside the window; a later one of the
+     * same head does not.
      */
-    @WithDefault("0")
+    @WithDefault("1m")
     @WithName("auto-review-min-interval")
     Duration autoReviewMinInterval();
+
+    /**
+     * Most automatic reviews of one repository running at once. A review past it waits for one to
+     * finish. {@code /review} and {@code /summary} never wait and are not counted. {@code 0} means
+     * no limit.
+     *
+     * <p>A negative value is rejected at boot. In memory, per replica.
+     */
+    @WithDefault("4")
+    @WithName("auto-review-max-concurrent-per-repo")
+    int autoReviewMaxConcurrentPerRepo();
+
+    /**
+     * Most automatic reviews of one repository waiting for a slot under {@code
+     * AUTO_REVIEW_MAX_CONCURRENT_PER_REPO}, one per pull request. A review past it is skipped and
+     * counted as {@code REPOSITORY_QUEUE_FULL}; a later push or {@code /review} reviews the pull
+     * request. {@code 0} means no limit.
+     *
+     * <p>A negative value is rejected at boot.
+     */
+    @WithDefault("50")
+    @WithName("auto-review-max-queued-per-repo")
+    int autoReviewMaxQueuedPerRepo();
 
     /**
      * How CI affects approval: {@code strict} holds approval while required CI is pending, failing
@@ -648,6 +676,9 @@ public interface ThrillhouseConfig {
 
     @WithName("ci-context")
     CiContextConfig ciContext();
+
+    @WithName("static-analysis")
+    StaticAnalysisConfig staticAnalysis();
 
     @WithName("ticket-context")
     TicketContextConfig ticketContext();
@@ -828,6 +859,49 @@ public interface ThrillhouseConfig {
      */
     @WithName("max-chars")
     @WithDefault("4000")
+    int maxChars();
+  }
+
+  /**
+   * Opt-in static-analysis context (#34). When {@link #enabled()}, the review prompt carries a
+   * bounded, fenced list of the annotations that completed checks had attached to the files this
+   * pull request changes: Code Scanning alerts (published as annotations of a check run named after
+   * the tool, such as "CodeQL") and linters that annotate. With the CI-failure context (#59) on, a
+   * failing check whose annotations it already reads is left to it; every other one is kept here.
+   * The check list is the one the CI gate already reads, and the existing Checks permission covers
+   * the annotations, so no new permission is needed; the extra cost is one annotations page per
+   * annotated check, at most {@link #MAX_CHECKS} of them. Off by default: it adds prompt tokens,
+   * and a review that starts while CI is still running has nothing to add.
+   */
+  interface StaticAnalysisConfig {
+    /** Lower bound accepted for {@link #maxChars()}: room for a header and one check. */
+    int MIN_MAX_CHARS = 500;
+
+    /** Upper bound accepted for {@link #maxChars()}, so tool output can never rival the diff. */
+    int MAX_MAX_CHARS = 20_000;
+
+    /** Annotated checks whose annotations are read per review: one page, one call each. */
+    int MAX_CHECKS = 5;
+
+    /**
+     * Include the annotations that completed checks attached to the changed files. See <a
+     * href="https://github.com/devops-thiago/ThrillhouseBot#static-analysis-context">Static-analysis
+     * context</a>.
+     *
+     * <p>No static-analysis section is built unless this is {@code true}.
+     */
+    @WithDefault("false")
+    boolean enabled();
+
+    /**
+     * Character cap on the static-analysis section ({@value #MIN_MAX_CHARS}–{@value
+     * #MAX_MAX_CHARS}).
+     *
+     * <p>Applied before fencing. Counted in the planner's shared prompt overhead like every other
+     * non-diff section.
+     */
+    @WithName("max-chars")
+    @WithDefault("3000")
     int maxChars();
   }
 
@@ -1231,9 +1305,10 @@ public interface ThrillhouseConfig {
      * {@code 0} means no limit.
      *
      * <p>#838: a negative value is rejected at boot. A call past the ceiling waits instead of
-     * reaching a provider that refuses requests past its own concurrency limit.
+     * reaching a provider that refuses requests past its own concurrency limit. Set it to the
+     * number of concurrent requests the provider allows when that is lower than the default.
      */
-    @WithDefault("0")
+    @WithDefault("16")
     @WithName("max-concurrent-calls")
     int maxConcurrentCalls();
 

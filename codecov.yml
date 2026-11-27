@@ -25,4 +25,3 @@ ignore:
   - "src/main/java/**/review/ai/DocGenerationResponse.java"
   # REST client interfaces — no implementation to test
   - "src/main/java/**/GitHub*Client.java"
-  - "src/main/java/**/GitHubTokenApi.java"

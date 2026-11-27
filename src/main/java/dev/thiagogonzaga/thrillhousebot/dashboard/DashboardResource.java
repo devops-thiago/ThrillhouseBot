@@ -259,6 +259,7 @@ public class DashboardResource {
     detail.put(FIELD_REPOSITORY, session.getRepository());
     detail.put("prNumber", session.getPrNumber());
     detail.put("prTitle", session.getPrTitle());
+    detail.put("pullRequestUrl", session.getPullRequestUrl());
     detail.put("commitSha", session.getCommitSha());
     detail.put(FIELD_TIMESTAMP, session.getTimestamp());
     detail.put(FIELD_MODEL, session.getModel());
