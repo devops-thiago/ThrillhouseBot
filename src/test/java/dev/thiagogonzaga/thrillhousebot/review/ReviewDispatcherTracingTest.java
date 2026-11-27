@@ -86,6 +86,7 @@ class ReviewDispatcherTracingTest {
             orchestrator,
             mock(AutoReviewRateLimiter.class),
             new AutoReviewSlots(4, 50),
+            new DeferredReviews(),
             mock(ReviewSkipEmitter.class),
             ciHoldRevisit,
             coverage,

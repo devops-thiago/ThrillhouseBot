@@ -440,23 +440,27 @@ the bot bounds them without any setting:
 | Tokens one review may spend | `REVIEW_MAX_TOKENS_PER_REVIEW` | `1000000` | no ceiling |
 | Model calls in flight, whole process | `AI_MAX_CONCURRENT_CALLS` | `16` | no limit |
 
-- **Interval.** For this long after an automatic review of a PR is posted, a
-  push, a reopen or a repeated ready-for-review of that PR is skipped
-  (`reason=RATE_LIMITED`). A skipped event is not reviewed later: the next push
-  after the window, or a `/review`, reviews the PR. That is why the default is
-  short. A longer window saves more model spend and leaves more pushes without
-  a review or a check run on the new head. Marking a draft ready is reviewed
-  inside the window once per head commit, so converting a PR to draft and back
-  does not start another review of the same commit.
+- **Interval.** For this long after an automatic review of a PR is posted, no
+  other automatic review of that PR starts. A push inside the window is not
+  lost: the bot keeps the latest head and reviews it when the window closes, so
+  several pushes in a row cost one review. A reopen or a repeated
+  ready-for-review of the commit that was just reviewed is skipped
+  (`reason=RATE_LIMITED`). A longer window saves more model spend and makes a
+  new head wait longer for its review and check run. Marking a draft ready is
+  reviewed inside the window once per head commit, so converting a PR to draft
+  and back does not start another review of the same commit.
 - **Per repository.** When four automatic reviews of a repository are running,
   the next ones wait for a slot, one per pull request, so a burst (a dependency
   bot opening a dozen pull requests) is reviewed a few at a time and nothing is
-  lost. Only past fifty waiting reviews is a new one skipped
-  (`reason=REPOSITORY_QUEUE_FULL`).
+  lost. Past fifty waiting reviews a new one is set aside and asks for a place
+  again every 30 seconds, for up to an hour. It is skipped
+  (`reason=REPOSITORY_QUEUE_FULL`) only when the queue stayed full that long.
 - **Manual commands.** `/review` and `/summary` need write access, so they
   ignore the interval, take no slot and never wait.
 
 These limits are kept in memory in the one bot process and reset on restart.
+A review still waiting for a window to close or for a place in the queue is
+forgotten by a restart; the next push or a `/review` reviews that PR.
 
 ### Dimension routing
 
@@ -1851,18 +1855,20 @@ reason in the dashboard summary
 5. **Base-branch filters** (`reason=BASE_BRANCH_NOT_ALLOWED` /
    `IGNORED_BASE_BRANCH`): check `WEBHOOK_BASE_BRANCHES` and
    `WEBHOOK_IGNORED_BASE_BRANCHES`.
-6. **Rate window** (`reason=RATE_LIMITED`): an automatic review already ran
-   within `AUTO_REVIEW_MIN_INTERVAL` (default `1m`). The event is not reviewed
-   later; push again or comment `/review`. A second ready-for-review of the same
-   commit inside the window is skipped the same way.
+6. **Rate window** (`reason=RATE_LIMITED`): an automatic review of the same
+   commit already ran within `AUTO_REVIEW_MIN_INTERVAL` (default `1m`), as with
+   a reopen or a second ready-for-review. A push inside the window is not
+   skipped: its review starts when the window closes, and the log says
+   `deferred` until then.
 7. **Redelivery** (`reason=DUPLICATE_DELIVERY`): GitHub redelivered a webhook
    the bot already handled. This is normal.
 8. **Executor saturated** (`reason=DISPATCH_REJECTED`): the review executor
    refused the task (overload or shutdown); redeliver the webhook from GitHub.
 9. **Repository queue full** (`reason=REPOSITORY_QUEUE_FULL`): as many automatic
-   reviews of the repository were already waiting as
-   `AUTO_REVIEW_MAX_QUEUED_PER_REPO` allows. Push again later or comment
-   `/review`. See [Limits on automatic reviews](#limits-on-automatic-reviews).
+   reviews of the repository were waiting as `AUTO_REVIEW_MAX_QUEUED_PER_REPO`
+   allows for a whole hour, so the review that kept asking for a place was given
+   up. Push again later or comment `/review`. See
+   [Limits on automatic reviews](#limits-on-automatic-reviews).
 
 A review that seems slow to start may be waiting for one of the repository's
 `AUTO_REVIEW_MAX_CONCURRENT_PER_REPO` slots.
