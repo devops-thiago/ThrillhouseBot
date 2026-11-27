@@ -85,6 +85,10 @@ cannot resolve its review threads.
   `\n` escapes) and a key without its PEM header and footer. Every key the start-up check accepts
   is now handed to the extension in a form it can read, and a padded `GITHUB_APP_ID` is stripped
   for it as the bot's own signer did.
+- **The summary comment follows a verdict held on CI** (#1462): when CI turns green and the held
+  approval is posted, the summary no longer says it cannot be approved or lists the checks as
+  pending. While the hold stays, its table shows the checks' current state. The Agent next steps
+  section, when on, follows it too. A summary posted before this change is not rewritten.
 
 ### Security
 
