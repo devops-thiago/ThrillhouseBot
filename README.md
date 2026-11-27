@@ -709,11 +709,14 @@ a repository administrator or on the rule's "Restrict who can dismiss pull
 request reviews" list, so GitHub may refuse the dismissal there. The bot then
 logs a warning naming the review, posts its own review as usual, and the old
 approval stays until someone dismisses it. If you see that warning, add the App
-to the rule's list.
+to the rule's list. A dismissal that fails for another reason (a timeout, a
+rate limit, a review GitHub no longer has) is logged with a warning that says
+so, and the bot goes on to its older approvals.
 
 The approval is withdrawn when a review finishes, not when commits are pushed,
 and not at all when no review runs for the new head (a draft, a label or path
-skip, a paused bot, a failed run). Where the bot's approval counts towards a
+skip, a paused bot, a failed run) or when the bot could not list the pull
+request's reviews, which it logs as a warning. Where the bot's approval counts towards a
 required review, also turn on "Dismiss stale pull request approvals when new
 commits are pushed" in the branch protection rule or ruleset, so GitHub drops
 it on the push itself.

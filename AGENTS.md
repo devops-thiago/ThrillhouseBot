@@ -401,8 +401,7 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   `VerdictBuilder.build` and again inside `recheckDeclines`, whether or not the re-check is
   enabled); a verified conversation decline restores it. A `justified` under a number that
   names no listed finding never reaches the verdict or the counts: `ModelStatusScreen` drops it
-  when the review call returns, and with no readable stored round it drops every status
-  (`UnconfirmedDeclineAcrossRoundsTest`). The reply's "no write access" label in
+  when the review call returns (`UnconfirmedDeclineAcrossRoundsTest`). The reply's "no write access" label in
   the prompt is guidance, not the control. `MaintainerReplyService` acknowledges a directive by
   the same permission (`ManualReviewAuthorizer.holdsWriteAccess`), never the allowlist. Do not
   add an association-only path, or a default that treats an unverified author as a writer.
