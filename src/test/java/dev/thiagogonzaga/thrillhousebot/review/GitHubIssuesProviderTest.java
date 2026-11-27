@@ -156,6 +156,37 @@ class GitHubIssuesProviderTest {
     }
 
     @Test
+    void readsIssueUrlsOnTheConfiguredHostOnly() {
+      var body =
+          """
+          Closes https://GHE.example.com/o/r/issues/1
+          Closes http://ghe.example.com/o/r/issues/2
+          Closes https://github.com/o/r/issues/3
+          Closes https://gheXexample.com/o/r/issues/4
+          Closes https://ghe.example.com.evil.test/o/r/issues/5
+          Closes https://sub.ghe.example.com/o/r/issues/6
+          Closes https://evil.test/ghe.example.com/o/r/issues/7
+          Closes https://ghe.example.com/o/other/issues/8
+          Closes #9, closes o/r#10
+          """;
+
+      assertEquals(
+          List.of(1, 2, 9, 10),
+          GitHubIssuesProvider.bodyReferences(body, "o", "r", "https://ghe.example.com"));
+    }
+
+    @Test
+    void keepsAConfiguredPortPartOfTheHost() {
+      var body =
+          "Closes https://ghe.example.com:8443/o/r/issues/1\n"
+              + "Closes https://ghe.example.com/o/r/issues/2";
+
+      assertEquals(
+          List.of(1),
+          GitHubIssuesProvider.bodyReferences(body, "o", "r", "https://ghe.example.com:8443"));
+    }
+
+    @Test
     void ignoresCrossRepositoryReferences() {
       var body = "Closes other/repo#1\nFixes https://github.com/o/other/issues/2\nResolves #3";
       assertEquals(List.of(3), GitHubIssuesProvider.bodyReferences(body, "o", "r"));

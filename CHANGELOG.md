@@ -112,6 +112,10 @@ cannot resolve its review threads.
 - **A refused thread resolve says why** (#1471): GitHub's reason is logged instead of being
   discarded, and a missing permission is named in the reply to a `resolved` directive and to
   `/resolve`, which no longer answers that there is nothing to resolve.
+- **Dashboard links and issue URLs follow `GITHUB_URL`** (#1491): the two pull request links in the
+  dashboard's session history pointed at `github.com` whatever was configured, and a linked issue
+  written as a full URL was only recognised there. The session payloads now carry
+  `pullRequestUrl`, and only issue URLs on the configured web address are read.
 
 ### Security
 
