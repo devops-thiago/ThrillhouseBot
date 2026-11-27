@@ -49,7 +49,7 @@ public class FailFastGitHubCustomizer implements GitHubCustomizer {
     }
   }
 
-  private static void failFast(GitHubBuilder builder) {
+  static void failFast(GitHubBuilder builder) {
     builder
         .withRateLimitHandler(GitHubRateLimitHandler.FAIL)
         .withAbuseLimitHandler(GitHubAbuseLimitHandler.FAIL);

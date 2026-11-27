@@ -381,35 +381,6 @@ class GitHubReadTokenRefreshTest {
   }
 
   @Test
-  void workflowRunsRejectedForTheirCredentialAreRepeatedWithAFreshOne() {
-    var client = mock(GitHubActionsClient.class);
-    doCallRealMethod()
-        .when(client)
-        .listWorkflowRuns(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyInt());
-    var runs = new GitHubActionsClient.WorkflowRuns(0, List.of());
-    when(client.listWorkflowRunsOnce(DEAD, "json", "o", "r", "sha", "completed", 100))
-        .thenThrow(badCredentials());
-    when(client.listWorkflowRunsOnce(FRESH, "json", "o", "r", "sha", "completed", 100))
-        .thenReturn(runs);
-
-    assertSame(runs, client.listWorkflowRuns(DEAD, "json", "o", "r", "sha", "completed", 100));
-  }
-
-  @Test
-  void runArtifactsRejectedForTheirCredentialAreRepeatedWithAFreshOne() {
-    var client = mock(GitHubActionsClient.class);
-    doCallRealMethod()
-        .when(client)
-        .listRunArtifacts(anyString(), anyString(), anyString(), anyString(), anyLong(), anyInt());
-    var artifacts = new GitHubActionsClient.RunArtifacts(0, List.of());
-    when(client.listRunArtifactsOnce(DEAD, "json", "o", "r", 9L, 100)).thenThrow(badCredentials());
-    when(client.listRunArtifactsOnce(FRESH, "json", "o", "r", 9L, 100)).thenReturn(artifacts);
-
-    assertSame(artifacts, client.listRunArtifacts(DEAD, "json", "o", "r", 9L, 100));
-  }
-
-  @Test
   void anArtifactDownloadAnswered401IsRepeatedWithAFreshTokenAndTheDeadResponseClosed() {
     var client = mock(GitHubActionsClient.class);
     doCallRealMethod()

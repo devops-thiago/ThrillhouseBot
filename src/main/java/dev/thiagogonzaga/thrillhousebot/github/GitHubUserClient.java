@@ -26,6 +26,11 @@ import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
  * Calls made with a dashboard user's own GitHub App user access token (#1221), so GitHub answers
  * with what that user can see: the App's installations they can access, and in each one the
  * repositories they can read (any collaborator role, team access or organization base permission).
+ *
+ * <p>These stay on a REST client because of hub4j limitations: it has no method for {@code GET
+ * /user/installations/{installation_id}/repositories}, and it reaches {@code GET
+ * /user/installations} only through {@code getMyself()}, which reads the user first and then each
+ * account again for its type. This goes away once hub4j covers both.
  */
 @RegisterRestClient(configKey = "github-api")
 @RegisterProvider(GitHubErrorLogger.class)

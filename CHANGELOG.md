@@ -58,6 +58,11 @@ cannot resolve its review threads.
   `HTTP_CONNECT_TIMEOUT` and `HTTP_REQUEST_TIMEOUT` (10s each by default) rather than the REST
   client's settings. They go to `GITHUB_API_URL`. hub4j's response logger is capped at `INFO`: below
   that it writes out an answer it cannot parse, which for a token request holds the token.
+- **Workflow run, artifact and installation repository listings go through hub4j** (#1314): the
+  patch coverage lookup and the startup scope backfill make them with the same installation token
+  as before, to `GITHUB_API_URL`. The coverage lookup adds one request, to read the repository.
+  These calls follow `HTTP_CONNECT_TIMEOUT` and `HTTP_REQUEST_TIMEOUT` (10s each by default)
+  rather than the REST client's settings.
 
 ### Fixed
 

@@ -48,7 +48,8 @@ import org.junit.jupiter.api.Test;
  * App authentication through the real extension, with {@code GITHUB_API_URL} naming another address
  * than github.com: the extension picks up the interceptor that lets it read an armorless key and
  * the customizer that routes its application client through {@link GitHubAppConnector}, and every
- * call made as the App goes to that address, path included.
+ * call made as the App, or through {@link GitHubTokenReads} with a caller's token, goes to that
+ * address, path included.
  */
 @QuarkusTest
 @TestProfile(GitHubAppAuthWiringTest.StubGitHubProfile.class)
@@ -58,6 +59,8 @@ class GitHubAppAuthWiringTest {
   private static final String DEBUG_CATEGORY = "org.kohsuke.github";
 
   @Inject GitHubAuthClient authClient;
+
+  @Inject GitHubTokenReads tokenReads;
 
   @ConfigProperty(name = "thrillhousebot.github.api-url")
   String apiUrl;
@@ -106,6 +109,11 @@ class GitHubAppAuthWiringTest {
     var refused =
         assertThrows(ClientWebApplicationException.class, () -> authClient.getAuthHeader(8));
     assertEquals(404, refused.getResponse().getStatus());
+
+    assertEquals(List.of(), tokenReads.installationRepositories("Bearer ghs_scoped"));
+    assertEquals(
+        "GET /api/v3/installation/repositories?per_page=100 Bearer ghs_scoped",
+        GitHubStub.receivedBy(apiUrl.substring(0, apiUrl.length() - API_PATH.length())).getLast());
   }
 
   private static String testKey() {
@@ -119,6 +127,9 @@ class GitHubAppAuthWiringTest {
       var stub =
           GitHubStub.start()
               .on("GET /api/v3/app", json(200, "{\"id\":12345}"))
+              .on(
+                  "GET /api/v3/installation/repositories",
+                  json(200, "{\"total_count\":0,\"repositories\":[]}"))
               .on("GET /api/v3/app/installations", json(200, "[{\"id\":7}]"))
               .on("GET /api/v3/app/installations/7", json(200, "{\"id\":7}"))
               .on(
