@@ -20,15 +20,27 @@ export function releasedVersions(tags) {
   return new Set(tags.map((tag) => RELEASE_TAG.exec(tag)?.[1]).filter(Boolean));
 }
 
-/** Each `## [name]` section of a changelog, keyed by name, with trailing blank lines dropped. */
+const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+
+/**
+ * Each `## [name]` section of a changelog, keyed by name, with trailing blank lines dropped. A
+ * `## [name]` line inside a fenced code block is text of the section around it, not a heading.
+ */
 export function changelogSections(text) {
   const sections = new Map();
   let name = null;
   let lines = [];
+  let fence = null;
   const close = () => { if (name !== null) sections.set(name, lines.join('\n').trimEnd()); };
   for (const line of text.split(/\r?\n/)) {
-    const match = SECTION.exec(line);
-    if (match) { close(); name = match[1]; lines = []; }
+    const marker = FENCE.exec(line)?.[1];
+    if (fence === null) {
+      const match = SECTION.exec(line);
+      if (match) { close(); name = match[1]; lines = []; }
+      if (marker) fence = marker;
+    } else if (marker && marker[0] === fence[0] && marker.length >= fence.length && line.trim() === marker) {
+      fence = null;
+    }
     if (name !== null) lines.push(line);
   }
   close();
@@ -90,8 +102,12 @@ export class Git {
   tags() { return this.run('tag', '--list', 'v*').split('\n').filter(Boolean); }
   mergeBase(base, head) { return this.run('merge-base', base, head).trim(); }
   changes(base, head) {
-    return this.run('diff', '--name-status', '--no-renames', '-z', base, head).split('\0').filter(Boolean)
-      .reduce((out, field, index, fields) => (index % 2 === 0 ? [...out, { status: STATUS[field[0]] ?? field, path: fields[index + 1] }] : out), []);
+    const fields = this.run('diff', '--name-status', '--no-renames', '-z', base, head).split('\0').filter(Boolean);
+    const out = [];
+    for (let index = 0; index + 1 < fields.length; index += 2) {
+      out.push({ status: STATUS[fields[index][0]] ?? fields[index], path: fields[index + 1] });
+    }
+    return out;
   }
   show(commit, path) {
     try { return this.run('show', `${commit}:${path}`); } catch { return null; }

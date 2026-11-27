@@ -32,6 +32,15 @@ test('a changelog splits into its sections without trailing blank lines', () => 
   assert.equal(sections.get('1.1.0'), '## [1.1.0] - 2026-02-01\n\n- Added b.');
 });
 
+test('a section heading inside a fenced code block is text of its section', () => {
+  const text = '## [1.1.0] - 2026-02-01\n\n```md\n## [Unreleased]\n```\n\n- After the example.\n\n~~~~\n```\n## [0.0.1]\n~~~\n~~~~\n\n## [1.0.0] - 2026-01-01\n\n- Added a.\n';
+  const sections = changelogSections(text);
+  assert.deepEqual([...sections.keys()], ['1.1.0', '1.0.0']);
+  assert.ok(sections.get('1.1.0').endsWith('~~~~'));
+  assert.deepEqual(changelogViolations(text, text.replace('- After the example.', '- Edited.'), new Set(['1.1.0', '1.0.0'])),
+    ['CHANGELOG.md: the released section [1.1.0] was changed']);
+});
+
 test('a new release section and unreleased edits pass', () => {
   const head = CHANGELOG.replace('## [Unreleased]\n', '## [Unreleased]\n\n- Fixed c.\n\n## [1.2.0] - 2026-03-01\n\n- Added c.\n');
   assert.deepEqual(changelogViolations(CHANGELOG, head, new Set(['1.0.0', '1.1.0'])), []);
@@ -139,6 +148,26 @@ test('a file name with spaces is read whole', () => {
     const head = r.commit('edit');
     assert.deepEqual(check(new Git(r.dir), base, head),
       ['website/src/content/docs/1.0.0/a b.md: an archived docs file of a released version was modified']);
+  } finally {
+    r.cleanup();
+  }
+});
+
+test('every changed file is listed once, in order, with its status', () => {
+  const r = repo();
+  try {
+    for (let i = 0; i < 5; i++) r.write(`f${i}.txt`, 'x\n');
+    const base = r.commit('base');
+    r.git('tag', 'v1.0.0');
+    r.write('f0.txt', 'y\n');
+    r.git('rm', '-q', 'f1.txt');
+    r.write('f9.txt', 'new\n');
+    const head = r.commit('change');
+    assert.deepEqual(new Git(r.dir).changes(base, head), [
+      { status: 'modified', path: 'f0.txt' },
+      { status: 'deleted', path: 'f1.txt' },
+      { status: 'added', path: 'f9.txt' },
+    ]);
   } finally {
     r.cleanup();
   }

@@ -33,11 +33,16 @@ jobs:
       - name: Fetch the pull request's test merge without checking it out
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
         run: |
+          # The checkout keeps no credential, so the token is passed to these two fetches only.
+          # That keeps them working where the repository is not public.
+          remote="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
           # The release tags decide what is locked, so fetch them explicitly rather than rely on
           # what the checkout brought for a commit ref.
-          git fetch --no-tags --quiet "https://github.com/${GITHUB_REPOSITORY}.git" "+refs/tags/v*:refs/tags/v*"
-          if ! git fetch --no-tags --quiet "https://github.com/${GITHUB_REPOSITORY}.git" "+refs/pull/${PR_NUMBER}/merge:refs/remotes/pull/merge"; then
+          git -c "http.extraheader=${auth}" fetch --no-tags --quiet "$remote" "+refs/tags/v*:refs/tags/v*"
+          if ! git -c "http.extraheader=${auth}" fetch --no-tags --quiet "$remote" "+refs/pull/${PR_NUMBER}/merge:refs/remotes/pull/merge"; then
             echo "::error::GitHub has no test merge for this pull request; resolve its conflicts with the base branch and push again."
             exit 1
           fi
