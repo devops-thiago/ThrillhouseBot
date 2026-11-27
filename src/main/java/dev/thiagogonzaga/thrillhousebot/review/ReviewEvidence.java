@@ -40,7 +40,8 @@ public record ReviewEvidence(
     CitedLocationResolver.Round citedLocations,
     ContextEvidenceResolver.Round contextEvidence,
     List<ReviewLearningService.LearningView> selectedLearnings,
-    LinkedIssueVerdicts criterionVerdicts) {
+    LinkedIssueVerdicts criterionVerdicts,
+    FindingBasis basis) {
 
   public ReviewEvidence {
     selectedLearnings = List.copyOf(Objects.requireNonNullElse(selectedLearnings, List.of()));
@@ -49,12 +50,12 @@ public record ReviewEvidence(
 
   public ReviewEvidence(
       CitedLocationResolver.Round citedLocations, ContextEvidenceResolver.Round contextEvidence) {
-    this(citedLocations, contextEvidence, List.of(), null);
+    this(citedLocations, contextEvidence, List.of(), null, new FindingBasis());
   }
 
   /** Only the active, relevant, capped selection the prompt read may affect a finding. */
   ReviewEvidence withLearnings(List<ReviewLearningService.LearningView> selected) {
-    return new ReviewEvidence(citedLocations, contextEvidence, selected, criterionVerdicts);
+    return new ReviewEvidence(citedLocations, contextEvidence, selected, criterionVerdicts, basis);
   }
 
   /** Attaches nothing at all, for a caller with no repository access and no loaded context. */
@@ -63,7 +64,8 @@ public record ReviewEvidence(
           CitedLocationResolver.disabled(),
           ContextEvidenceResolver.disabled(),
           List.of(),
-          LinkedIssueVerdicts.DISCARD);
+          LinkedIssueVerdicts.DISCARD,
+          FindingBasis.DISCARD);
 
   /**
    * Opens both rounds over one review, on one budget.
@@ -103,6 +105,7 @@ public record ReviewEvidence(
     return new FindingVerificationService.FindingEvidence(
         citedLocations.locate(findings),
         contextEvidence.locate(findings),
-        contextEvidence.failingChecks());
+        contextEvidence.failingChecks(),
+        basis);
   }
 }

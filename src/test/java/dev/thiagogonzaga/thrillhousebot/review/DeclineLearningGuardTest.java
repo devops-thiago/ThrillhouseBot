@@ -80,6 +80,25 @@ class DeclineLearningGuardTest {
     return List.of(learning("a/Dockerfile", TITLE, POLICY));
   }
 
+  @Test
+  void theLearningThatDemotedAFindingIsPartOfItsBasis() {
+    var basis = new FindingBasis();
+
+    var held =
+        DeclineLearningGuard.apply(
+            response(),
+            selected(),
+            (path, nr) -> LINE,
+            ContextEvidenceResolver.disabled(),
+            "",
+            basis);
+
+    var finding = Finding.fromAiResponse(held.findings().getFirst());
+    assertEquals(
+        "**Basis**\n- Learning: L12\n",
+        basis.render(finding, PathScopedInstructions.NONE, CiFailureCitations.NONE));
+  }
+
   @ParameterizedTest
   @ValueSource(
       strings = {"a/Dockerfile", "a/Dockerfile.prod", "a/prod.Dockerfile", "a/Containerfile"})

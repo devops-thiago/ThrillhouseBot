@@ -86,6 +86,16 @@ final class DeclineLearningGuard {
       BiFunction<String, Integer, String> lineText,
       ContextEvidenceResolver.Round context,
       String repoInstructions) {
+    return apply(response, selected, lineText, context, repoInstructions, FindingBasis.DISCARD);
+  }
+
+  static ReviewResponse apply(
+      ReviewResponse response,
+      List<ReviewLearningService.LearningView> selected,
+      BiFunction<String, Integer, String> lineText,
+      ContextEvidenceResolver.Round context,
+      String repoInstructions,
+      FindingBasis basis) {
     if (selected.isEmpty() || response.findings().isEmpty()) return response;
     var kept = new ArrayList<ReviewResponse.Finding>(response.findings().size());
     var changed = false;
@@ -99,6 +109,7 @@ final class DeclineLearningGuard {
                 + learning.id()
                 + " accepts this Dockerfile image-digest policy; verify whether it still applies.";
         var description = (Objects.toString(finding.description(), "") + "\n\n" + note).strip();
+        basis.shapedByLearning(finding, learning.id());
         kept.add(
             new ReviewResponse.Finding(
                 finding.risk(),
