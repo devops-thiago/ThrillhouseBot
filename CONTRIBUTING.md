@@ -72,7 +72,9 @@ touches `pom.xml`, `src/main/**`, the native integration tests or
 binary. To build a
 throwaway test image for a branch or pull request without touching `latest`, run
 the Docker test image workflow (`.github/workflows/docker-test-image.yml`) from
-the Actions tab.
+the Actions tab. It builds same-repository pull requests only, compiles them in
+jobs that cannot write to the registry, and saves no build cache from a pull
+request.
 
 CI enforces this bar:
 
@@ -125,8 +127,10 @@ reason on the pull request.
 Other review bots, such as Cursor Bugbot, may comment on a pull request. They
 are not a merge requirement.
 
-The static gate stays separate from the bot. Linter output is not fed into the
-review prompt ([#34](https://github.com/devops-thiago/ThrillhouseBot/issues/34)).
+The static gate stays separate from the bot. Linter output reaches the review
+prompt only through the opt-in static-analysis context
+([#34](https://github.com/devops-thiago/ThrillhouseBot/issues/34)), and only as
+context: the static checks stay required either way.
 
 ### When the gates disagree
 

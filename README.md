@@ -914,8 +914,9 @@ lines a pull request adds, for leaked credentials and risky
 infrastructure-as-code settings. It is a fixed list of regular expressions: no
 model call, no extra dependency, and the same input always gives the same
 findings. Both halves are off by default, because each adds findings that can
-request changes. General linter integration is tracked separately in
-[#34](https://github.com/devops-thiago/ThrillhouseBot/issues/34).
+request changes. Linter and Code Scanning annotations are a separate opt-in,
+the [static-analysis context](#static-analysis-context)
+([#34](https://github.com/devops-thiago/ThrillhouseBot/issues/34)).
 
 Secret rules (high confidence):
 
@@ -1122,6 +1123,41 @@ has failed by then is added before the summary is rendered: the overview's sente
 and the open findings that cite it, and a finding that cites it is raised from
 low to medium confidence. A CI failure after the review is posted does not start
 a new one; comment `/review` to get a review whose findings see it.
+
+### Static-analysis context
+
+`REVIEW_STATIC_ANALYSIS_ENABLED=true` gives the review the annotations that
+completed checks attached to the files the PR changes. GitHub publishes Code
+Scanning alerts on a pull request as annotations of a check run named after the
+tool (such as "CodeQL"). That check passes unless an alert reaches its failure
+threshold, so the CI-failure context, which reads only failing checks, usually
+never sees them. Linters that annotate (ESLint, Checkstyle, reviewdog and the
+like) are covered the same way. With `REVIEW_CI_CONTEXT_ENABLED` on, a failing
+check run whose annotations the CI-failure section already reads (one of the
+five it describes in full) is not repeated here; every other failing run, and
+all of them with that context off, is kept.
+
+The checks come from the CI gate's own read (with `REVIEW_CI_GATING=off` that
+read is still made for this, and never holds approval). For up to five completed
+checks that report annotations, other apps before GitHub Actions jobs (a passing
+job often carries only the runner's notices), one page of annotations is read.
+Only those on a reviewable changed file are kept, up to ten per check, failures
+first, less an Actions job's runner notices on the workflow, so an alert on a
+file the PR does not touch never reaches the prompt.
+`REVIEW_STATIC_ANALYSIS_MAX_CHARS` caps the section (500 to 20000, default
+3000). The extra cost is one annotations request per annotated check (at most
+five), and the `Checks: Read` permission the app already has covers it: no new
+permission.
+
+Tool output can quote the PR's code, so it is handled like check output: control
+and bidi characters are stripped, each field is clipped, and the list sits
+inside the untrusted-data fence. The model is told to use an annotation only to
+find a defect the changed code itself shows, to argue the finding from that
+code (naming the tool as attribution at most, never one that is not in the
+list), and not to repeat a style remark the tool already reports. Only the review call gets the section, and the
+audit pass does not see it, so a finding raised from it stands on the diff. A
+review that starts before the analysis finishes sees nothing from it; comment
+`/review` once the checks are done.
 
 ### Linked-issue context
 
@@ -1854,23 +1890,45 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 ## Verifying a release
 
 Release images and binary tarballs are signed with cosign (keyless, through
-Sigstore) and carry build-provenance attestations. To check a release:
+Sigstore) and carry build-provenance attestations. To check a release, name the
+workflow and the tag that must have produced it. A check that accepts anything
+signed from the repository would also accept an artifact signed by another
+workflow or from another branch.
 
 ```bash
-# Signature
+# Signature: signed by the release workflow, for this tag
 cosign verify \
-  --certificate-identity-regexp='https://github.com/devops-thiago/ThrillhouseBot.*' \
+  --certificate-identity-regexp='^https://github\.com/devops-thiago/ThrillhouseBot/\.github/workflows/release\.yml@refs/(tags/v0\.9\.3|heads/main)$' \
   --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
   ghcr.io/devops-thiago/thrillhousebot:v0.9.3
 
 # Provenance (image)
 gh attestation verify oci://ghcr.io/devops-thiago/thrillhousebot:v0.9.3 \
-  --repo devops-thiago/ThrillhouseBot
+  --repo devops-thiago/ThrillhouseBot \
+  --signer-workflow devops-thiago/ThrillhouseBot/.github/workflows/release.yml \
+  --source-ref refs/tags/v0.9.3
 
 # Provenance (a downloaded binary)
 gh attestation verify thrillhousebot-v0.9.3-linux-amd64.tar.gz \
-  --repo devops-thiago/ThrillhouseBot
+  --repo devops-thiago/ThrillhouseBot \
+  --signer-workflow devops-thiago/ThrillhouseBot/.github/workflows/release.yml \
+  --source-ref refs/tags/v0.9.3
 ```
+
+Put the version you are checking in all three places it appears in each command.
+The pattern is anchored with `^` and `$` and its dots are escaped, because cosign
+matches it anywhere in the identity otherwise. A release is signed from its tag.
+One that a maintainer ran again by hand is signed from `main` as well, which is
+why the cosign pattern accepts `heads/main`; for such a release, the `gh`
+commands pass with `--source-ref refs/heads/main`.
+
+To deploy exactly what you verified, pull by the digest `cosign verify` prints
+(`ghcr.io/devops-thiago/thrillhousebot@sha256:…`), not by the tag.
+
+From the release after v0.9.3 on, the release workflow publishes an image only
+when it carries provenance showing that CI built it on `main` from the tagged
+commit, and only for a signed tag on `main`;
+[docs/RELEASING.md](docs/RELEASING.md) describes the checks.
 
 ## Operations
 

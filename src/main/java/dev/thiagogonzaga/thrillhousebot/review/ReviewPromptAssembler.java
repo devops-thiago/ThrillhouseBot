@@ -81,17 +81,20 @@ public class ReviewPromptAssembler {
   /**
    * The opt-in, per-review sections the orchestrator resolves before assembly, each the unfenced
    * text its resolver built or blank when there is none: the CI-failure list (#59, {@link
-   * CiFailureContextResolver}), the linked issues (#58, {@link TicketContextResolver}) and the
+   * CiFailureContextResolver}), the static-analysis annotations (#34, {@link
+   * StaticAnalysisContextResolver}), the linked issues (#58, {@link TicketContextResolver}) and the
    * learnings (#38, {@link ReviewLearnings#promptSection}). One record rather than an overload per
    * section, so a new section is one component and every caller is visible to the compiler.
    */
-  record TrailingContext(String ciFailures, String linkedIssues, String learnings) {
+  record TrailingContext(
+      String ciFailures, String staticAnalysis, String linkedIssues, String learnings) {
 
     /** No opt-in section: the review as it is with every feature off. */
-    static final TrailingContext NONE = new TrailingContext("", "", "");
+    static final TrailingContext NONE = new TrailingContext("", "", "", "");
 
     TrailingContext {
       ciFailures = ciFailures == null ? "" : ciFailures;
+      staticAnalysis = staticAnalysis == null ? "" : staticAnalysis;
       linkedIssues = linkedIssues == null ? "" : linkedIssues;
       learnings = learnings == null ? "" : learnings;
     }
@@ -107,17 +110,17 @@ public class ReviewPromptAssembler {
   }
 
   /**
-   * Assembles the prompt inputs with the opt-in sections in {@code extra}. All three ride the
-   * review call's trailing guidance, so every batch carries them and the planner counts them in the
-   * shared overhead with the rest of that slot; the linked issues also ride the summary call's
-   * guidance (with a different request), counted in its clamp, and when they are present the
-   * bug-fix efficacy section drops its own copy of the linked issues' text.
+   * Assembles the prompt inputs with the opt-in sections in {@code extra}. All four ride the review
+   * call's trailing guidance, so every batch carries them and the planner counts them in the shared
+   * overhead with the rest of that slot; the linked issues also ride the summary call's guidance
+   * (with a different request), counted in its clamp, and when they are present the bug-fix
+   * efficacy section drops its own copy of the linked issues' text.
    *
-   * <p>Order in the review call's slot, fixed and pinned by a test: CI failures, then linked
-   * issues, then learnings, then the repository instructions. Evidence about this commit comes
-   * first, then what the change is meant to do, then the repository's standing maintainer guidance
-   * — learnings next to the instructions they refine. Each section is fenced separately with its
-   * own request above its fence, so none can read as part of another.
+   * <p>Order in the review call's slot, fixed and pinned by a test: CI failures, then static
+   * analysis, then linked issues, then learnings, then the repository instructions. Evidence about
+   * this commit comes first, then what the change is meant to do, then the repository's standing
+   * maintainer guidance — learnings next to the instructions they refine. Each section is fenced
+   * separately with its own request above its fence, so none can read as part of another.
    */
   AiReviewService.PromptInputs assemble(
       ReviewContextLoader.ReviewContext ctx,
@@ -153,7 +156,9 @@ public class ReviewPromptAssembler {
                         combineSections(
                             patchCoverageSection(ctx.patchCoverage()),
                             combineSections(
-                                ciFailuresSection(ciFailures),
+                                combineSections(
+                                    ciFailuresSection(ciFailures),
+                                    staticAnalysisSection(extra.staticAnalysis())),
                                 combineSections(
                                     linkedIssuesSection(
                                         TicketContextPrompts.REVIEW_REQUEST, linkedIssues),
@@ -287,6 +292,22 @@ public class ReviewPromptAssembler {
     return PrReviewPrompts.CI_FAILURES_SUMMARY_REQUEST
         + "\n\n"
         + PromptTemplateEscaper.fence(ciFailures);
+  }
+
+  /**
+   * The static-analysis guidance plus the list itself (#34) — empty when the feature is off, no
+   * completed check annotated a changed file, or the list could not be built. The annotations are
+   * written by tools run on code the pull request controls, so the list is fenced and framed as
+   * data like the other untrusted slots, and the guidance travels with it or not at all. The review
+   * call alone gets it: the summary call raises no finding.
+   */
+  static String staticAnalysisSection(String staticAnalysis) {
+    if (staticAnalysis == null || staticAnalysis.isBlank()) {
+      return "";
+    }
+    return PrReviewPrompts.STATIC_ANALYSIS_REQUEST
+        + "\n\n"
+        + PromptTemplateEscaper.fence(staticAnalysis);
   }
 
   /**

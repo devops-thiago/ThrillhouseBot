@@ -66,6 +66,23 @@ same diff.
   evidence reports are uploaded; a missing base or incomplete proof fails.
 - `scripts/dco/` is code-owner protected like the workflow that delegates to it.
 
+## Workflow and release checks
+
+- `scripts/workflows/policy.test.mjs` holds the workflows to their rules: actions pinned to one
+  full commit SHA each, no Maven cache restored through a prefix every job shares, no cache saved
+  from a pull request (CI and the test-image workflow), the test-image job with registry access
+  running no build, `docs.yml` building only its own ref, and the release workflow working by
+  digest inside the `release` environment. Change the workflow and the rule together, and say
+  why in the pull request.
+- `scripts/release/check-tag.mjs` decides whether a tag may be released: `vX.Y.Z`, a signed
+  annotated tag from an account in `RELEASE_TAG_SIGNERS`, on `main`, matching `pom.xml`. The
+  release workflow runs the copy on `main`, never the tag's, and its `verify` job builds
+  nothing from the tagged tree. Every check fails closed.
+- Both suites run with `node --test` in the `frontend` CI job. `docs/RELEASING.md` lists the
+  repository settings the release checks assume.
+- A job that runs a pull request's build holds a read-only token and no registry login; it hands
+  results on as artifacts. Pass workflow inputs through `env:` and validate them in the script.
+
 ## Package map
 
 | Package | Owns |
@@ -90,6 +107,7 @@ same diff.
 | Load diff, every earlier round (from the stored `ReviewSession.aiResponseJson`), threads and conversation, instructions, labels, project stack, config-key and patch-coverage context | `review/ReviewContextLoader` (with `PatchCoverageResolver`, `ConfigKeyContextResolver`, `BugFixContextResolver`, `SupersededFindingsCarryover`) |
 | Previous-findings prompt section: the numbered effective round, then the unnumbered "still open from earlier rounds" and "answered in earlier rounds" sections, then the older rounds' open findings a `resolved` could stand for (file changed, change unknown, or a named file changed), numbered on after the effective round's (#1319, #1316) | `review/FollowUpAnalyzer.buildPreviousFindingsContext` (with `effectivePreviousRoundIndex`, `openEarlierRoundFindings`), `FollowUpAnalyzer.priorListing` / `formatEarlierListed` (`review/PriorListing`), joined in `ReviewContextLoader.load` |
 | Early CI reading and the opt-in CI-failure section | `review/CiStatusEvaluator`, `review/CiFailureContextResolver`; TAP `TODO` and `SKIP` directives are expected outcomes, excluded both when collecting failed tests and when reading them back via `CiFailureCitations` (#1110). When the early reading counted a pending check or saw no check besides the bot's own (`CiFailures.reported`), the summary's citations are read from a section refreshed after the model call (`ReviewOrchestrator.refreshCiFailures` → `CiStatusEvaluator.checkRunFailures`, or the gate's own re-read, then `CiFailureContextResolver.refresh`, #1092), and `FindingVerificationService.floorCiCitedConfidence` lifts a low-confidence finding citing it, the round persisted again (`floorOnRefreshedCi`); the review and verifier calls keep the review-start section |
+| Opt-in static-analysis section (#34): the annotations that completed check runs (a Code Scanning check such as "CodeQL", linters) attached to reviewable changed files, less an Actions job's runner notices, from the same early CI reading (`CiFailures.annotated`); one annotations page for at most `StaticAnalysisConfig.MAX_CHECKS` checks, other apps before GitHub Actions jobs; a failing run is left out only when the CI-failure section reads its annotations (matched by check-run id); review call only, no verifier evidence, so a finding raised from it stands on the diff | `review/CiStatusEvaluator`, `review/StaticAnalysisContextResolver`, `ReviewPromptAssembler.staticAnalysisSection` |
 | Opt-in review learnings: recall before the call (ranked, capped section and typed selection) | `review/ReviewLearnings.recall` (reads `ReviewLearningService.listActive` once) |
 | Opt-in linked-issue context: resolve the PR's linked issues, read them, extract acceptance criteria, sanitize and cap | `review/TicketContextResolver.resolve` over an `review/IssueTrackerProvider` (`review/GitHubIssuesProvider.linkedTickets`: PR-body closing keywords, then `closingIssuesReferences`, then optionally the branch name), called from `ReviewOrchestrator` and handed to `ReviewPromptAssembler.assemble(ctx, req, ciFailures, linkedIssues)` |
 | Fence untrusted input, build review and summary guidance, pick the system prompt | `review/ReviewPromptAssembler` (with `PromptSections`, `PromptTemplateEscaper`, `ReviewDimensionRouter`) |
@@ -613,11 +631,11 @@ Two patterns. Pick the first unless the section must sit somewhere else in the u
 1. **Trailing-guidance slot (the default).** Review-only guidance and data ride
    `PromptInputs.repoInstructions`, which `ReviewPromptAssembler.assemble` builds with
    `combineSections` (mock fidelity, bug-fix efficacy with linked issue text, config-key context,
-   heuristic failure modes, patch coverage, then CI failures, linked issues and learnings in that
-   fixed order, then repo instructions). The three opt-in sections arrive together as one
-   `ReviewPromptAssembler.TrailingContext` passed to `assemble(ctx, req, extra)`; add a component
-   there rather than another overload. Add a static `…Section` method that returns `""` when there
-   is no data and emits the guidance constant only together with its fenced data (see
+   heuristic failure modes, patch coverage, then CI failures, static analysis, linked issues and
+   learnings in that fixed order, then repo instructions). The four opt-in sections arrive together
+   as one `ReviewPromptAssembler.TrailingContext` passed to `assemble(ctx, req, extra)`; add a
+   component there rather than another overload. Add a static `…Section` method that returns `""`
+   when there is no data and emits the guidance constant only together with its fenced data (see
    `patchCoverageSection`, `ciFailuresSection`, `learningsSection`). Every batch carries the slot,
    and `DiffBudgetPlanner.plan` already counts it as shared overhead
    (`DiffBudgetPlannerTest.ciFailuresLinkedIssuesAndLearningsTogetherAreAllChargedToTheSharedOverhead`).
@@ -706,9 +724,10 @@ live `fence(...)` (#604).
 
 - **Fence all model-visible external text.** That covers the diff, PR title and body, base
   comparison, project stack, changed tests, previous findings, linked issue text, CI output,
-  coverage data, config-key snippets, and maintainer-authored instructions (global and
-  path-scoped). Use `PromptTemplateEscaper.fence`, which wraps text in per-call CSPRNG fence
-  lines and passes it byte-exact, and give it a heading in the prompt that calls it untrusted data.
+  static-analysis annotations, coverage data, config-key snippets, and maintainer-authored
+  instructions (global and path-scoped). Use `PromptTemplateEscaper.fence`, which wraps text in
+  per-call CSPRNG fence lines and passes it byte-exact, and give it a heading in the prompt that
+  calls it untrusted data.
   `escape` / `neutralizeMarkers` only rewrite legacy markers. They are not an injection defense.
 - **Linked issues are read, never written, and their text is untrusted.** An
   `IssueTrackerProvider` only reads: no comment, label or state change on the issue, ever

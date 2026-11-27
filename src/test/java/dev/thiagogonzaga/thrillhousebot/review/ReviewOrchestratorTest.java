@@ -364,6 +364,7 @@ class ReviewOrchestratorTest {
         reviewExecutor,
         notifier,
         ciFailureContext,
+        staticAnalysis,
         ticketContext,
         learnings,
         findingStates);
@@ -375,6 +376,10 @@ class ReviewOrchestratorTest {
   /** The CI-failure context the orchestrator is built with; off unless a test switches it on. */
   private CiFailureContextResolver ciFailureContext =
       new CiFailureContextResolver(null, null, null, false, false, 4000);
+
+  /** The static-analysis context the orchestrator is built with; off unless a test turns it on. */
+  private StaticAnalysisContextResolver staticAnalysis =
+      new StaticAnalysisContextResolver(null, false, false, 3000);
 
   /** The linked-issue context the orchestrator is built with; off unless a test switches it on. */
   private TicketContextResolver ticketContext =
@@ -1999,6 +2004,72 @@ class ReviewOrchestratorTest {
       assertFalse(
           inputs.summaryInstructions().contains("Linked Issue"), inputs.summaryInstructions());
       assertTrue(seen.isEmpty(), "a disabled feature never asks the provider");
+    }
+
+    /** #34: a passing CodeQL check at the head with one alert on the changed file. */
+    private void stubAnnotatedPassingCheckAtHead() {
+      when(checkRunClient.getAllCheckRuns(any(), any(), any(), any(), any()))
+          .thenReturn(
+              List.of(
+                  new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+                      88L,
+                      "CodeQL",
+                      "completed",
+                      "success",
+                      new GitHubCheckRunClient.CheckRunsResponse.CheckRun.App(
+                          2L, "github-advanced-security", "GitHub Advanced Security"),
+                      new GitHubCheckRunClient.CheckRunsResponse.CheckRun.CheckRunOutput(
+                          "1 new alert", "", 1))));
+      when(checkRunClient.listAnnotations(any(), any(), any(), any(), eq(88L), anyInt()))
+          .thenReturn(
+              List.of(
+                  new GitHubCheckRunClient.Annotation(
+                      "src/main/java/Foo.java",
+                      3,
+                      "failure",
+                      "SQL injection",
+                      "This query depends on a user-provided value.")));
+    }
+
+    private static final GitHubPullRequestClient.FileDiff FOO =
+        new GitHubPullRequestClient.FileDiff(
+            "src/main/java/Foo.java", "modified", 1, 0, 1, "@@\n+class Foo {}\n");
+
+    @Test
+    void anAnnotatedPassingCheckReachesTheReviewPromptFencedWhenStaticAnalysisIsOn() {
+      staticAnalysis = new StaticAnalysisContextResolver(checkRunClient, true, false, 3000);
+      orchestrator = newOrchestrator();
+      stubAnnotatedPassingCheckAtHead();
+
+      var inputs = capturePromptInputs(FOO);
+
+      var guidance = inputs.repoInstructions();
+      assertTrue(guidance.contains(PrReviewPrompts.STATIC_ANALYSIS_REQUEST), guidance);
+      assertTrue(guidance.contains("### CodeQL (conclusion: success)"), guidance);
+      assertTrue(
+          guidance.contains("src/main/java/Foo.java:3 [failure] SQL injection: This query"),
+          guidance);
+      assertTrue(
+          guidance.indexOf(PromptTemplateEscaper.fencePrefix()) < guidance.indexOf("### CodeQL"),
+          "the tool output sits inside the untrusted-data fence");
+      assertFalse(
+          guidance.contains("CI Failures on This Commit"),
+          "a passing check is not a CI failure, and the CI-failure context is off");
+      assertFalse(inputs.summaryInstructions().contains("Static Analysis"));
+      // The annotated checks come from the gate's own CI read, not a second fetch.
+      verify(checkRunClient, times(1)).getAllCheckRuns(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void anAnnotatedPassingCheckStaysOutOfTheReviewPromptWhenStaticAnalysisIsOff() {
+      stubAnnotatedPassingCheckAtHead();
+
+      var guidance = capturePromptInputs(FOO).repoInstructions();
+
+      assertFalse(guidance.contains("Static Analysis on This Commit"), guidance);
+      assertFalse(guidance.contains("SQL injection"), guidance);
+      verify(checkRunClient, never())
+          .listAnnotations(any(), any(), any(), any(), anyLong(), anyInt());
     }
 
     @Test

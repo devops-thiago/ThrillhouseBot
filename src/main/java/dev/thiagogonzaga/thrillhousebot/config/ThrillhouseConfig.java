@@ -677,6 +677,9 @@ public interface ThrillhouseConfig {
     @WithName("ci-context")
     CiContextConfig ciContext();
 
+    @WithName("static-analysis")
+    StaticAnalysisConfig staticAnalysis();
+
     @WithName("ticket-context")
     TicketContextConfig ticketContext();
 
@@ -856,6 +859,49 @@ public interface ThrillhouseConfig {
      */
     @WithName("max-chars")
     @WithDefault("4000")
+    int maxChars();
+  }
+
+  /**
+   * Opt-in static-analysis context (#34). When {@link #enabled()}, the review prompt carries a
+   * bounded, fenced list of the annotations that completed checks had attached to the files this
+   * pull request changes: Code Scanning alerts (published as annotations of a check run named after
+   * the tool, such as "CodeQL") and linters that annotate. With the CI-failure context (#59) on, a
+   * failing check whose annotations it already reads is left to it; every other one is kept here.
+   * The check list is the one the CI gate already reads, and the existing Checks permission covers
+   * the annotations, so no new permission is needed; the extra cost is one annotations page per
+   * annotated check, at most {@link #MAX_CHECKS} of them. Off by default: it adds prompt tokens,
+   * and a review that starts while CI is still running has nothing to add.
+   */
+  interface StaticAnalysisConfig {
+    /** Lower bound accepted for {@link #maxChars()}: room for a header and one check. */
+    int MIN_MAX_CHARS = 500;
+
+    /** Upper bound accepted for {@link #maxChars()}, so tool output can never rival the diff. */
+    int MAX_MAX_CHARS = 20_000;
+
+    /** Annotated checks whose annotations are read per review: one page, one call each. */
+    int MAX_CHECKS = 5;
+
+    /**
+     * Include the annotations that completed checks attached to the changed files. See <a
+     * href="https://github.com/devops-thiago/ThrillhouseBot#static-analysis-context">Static-analysis
+     * context</a>.
+     *
+     * <p>No static-analysis section is built unless this is {@code true}.
+     */
+    @WithDefault("false")
+    boolean enabled();
+
+    /**
+     * Character cap on the static-analysis section ({@value #MIN_MAX_CHARS}–{@value
+     * #MAX_MAX_CHARS}).
+     *
+     * <p>Applied before fencing. Counted in the planner's shared prompt overhead like every other
+     * non-diff section.
+     */
+    @WithName("max-chars")
+    @WithDefault("3000")
     int maxChars();
   }
 

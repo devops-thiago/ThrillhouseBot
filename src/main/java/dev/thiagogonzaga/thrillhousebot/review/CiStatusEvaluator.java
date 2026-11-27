@@ -58,8 +58,9 @@ public class CiStatusEvaluator {
 
   private final CiGatingMode ciGating;
 
-  // Whether CI is read for the opt-in CI-failure review context (#59) even when the gate itself is
-  // off; with the gate on, the checks it reads already carry everything the context needs.
+  // Whether CI is read for an opt-in review context — the CI-failure context (#59) or the
+  // static-analysis context (#34) — even when the gate itself is off; with the gate on, the checks
+  // it reads already carry everything either context needs.
   private final boolean readForContext;
 
   @Inject
@@ -71,7 +72,7 @@ public class CiStatusEvaluator {
         checkRunClient,
         botIdentity,
         CiGatingMode.parse(config.review().ciGating()),
-        config.review().ciContext().enabled());
+        config.review().ciContext().enabled() || config.review().staticAnalysis().enabled());
   }
 
   /** Visible for tests; defaults to fail-closed {@link CiGatingMode#STRICT}. */
@@ -239,18 +240,35 @@ public class CiStatusEvaluator {
       int annotationsCount) {}
 
   /**
+   * A check run that had completed and attached annotations when CI was read, passing or not — the
+   * raw material of the opt-in static-analysis review context (#34): a Code Scanning check (named
+   * after its tool, such as "CodeQL") or a linter that annotates. {@code appSlug} names the check
+   * run's app ({@code github-actions} for an Actions job). Its name and conclusion are written by
+   * the checked code's own tooling and are untrusted.
+   */
+  record AnnotatedCheck(String name, String conclusion, long checkRunId, String appSlug) {}
+
+  /**
    * The failing and still-pending checks one CI read saw, required or not, the bot's own excluded,
    * deduplicated by name across the Check Runs and Commit Status APIs. Unlike the offending list,
    * this is not filtered to the required contexts: an optional lint job that fails still explains a
    * defect. {@code reported} counts the checks the read saw in any state, passing ones included, so
    * a read made before GitHub created any check is told apart from one that saw them all finish
-   * (#1092).
+   * (#1092). {@code annotated} lists the check runs that had completed with annotations, failed
+   * ones included, in the order the read saw them (#34).
    */
-  record CiFailures(List<FailedCheck> failed, int pending, int reported) {
+  record CiFailures(
+      List<FailedCheck> failed, int pending, int reported, List<AnnotatedCheck> annotated) {
     static final CiFailures NONE = new CiFailures(List.of(), 0, 0);
 
     CiFailures {
       failed = List.copyOf(failed);
+      annotated = List.copyOf(annotated);
+    }
+
+    /** A reading that saw no annotated check. */
+    CiFailures(List<FailedCheck> failed, int pending, int reported) {
+      this(failed, pending, reported, List.of());
     }
 
     /** Failures and pending checks with nothing else known to have reported. */
@@ -298,7 +316,8 @@ public class CiStatusEvaluator {
             offending,
             new LinkedHashMap<>(),
             new HashSet<>(),
-            new HashSet<>());
+            new HashSet<>(),
+            new LinkedHashMap<>());
     var checkRunsReadable =
         collectReadable(
             () -> checkRunClient.getAllCheckRuns(auth, ACCEPT, owner, repo, commitSha),
@@ -340,7 +359,8 @@ public class CiStatusEvaluator {
             new ArrayList<>(),
             new LinkedHashMap<>(),
             new HashSet<>(),
-            new HashSet<>());
+            new HashSet<>(),
+            new LinkedHashMap<>());
     var readable =
         collectReadable(
             () -> checkRunClient.getAllCheckRuns(auth, ACCEPT, owner, repo, commitSha),
@@ -379,7 +399,8 @@ public class CiStatusEvaluator {
       List<ReviewResult.CiCheck> offending,
       Map<String, FailedCheck> failed,
       Set<String> pending,
-      Set<String> reported) {
+      Set<String> reported,
+      Map<Long, AnnotatedCheck> annotated) {
 
     /**
      * Records a non-bot check for the review context, required or not: its failure detail the first
@@ -398,11 +419,30 @@ public class CiStatusEvaluator {
       }
     }
 
+    /**
+     * Records a non-bot, completed check run that reports annotations, once per run: two runs that
+     * share a name (a job of that name in two workflows) are both kept (#34).
+     */
+    void noteAnnotated(GitHubCheckRunClient.CheckRunsResponse.CheckRun run) {
+      var output = run.output();
+      if (run.name() == null || output == null || output.annotationsCount() <= 0) {
+        return;
+      }
+      annotated.putIfAbsent(
+          run.id(),
+          new AnnotatedCheck(
+              run.name(), run.conclusion(), run.id(), run.app() == null ? null : run.app().slug()));
+    }
+
     /** The context snapshot; a name that failed in one source is not also counted pending. */
     CiFailures failures() {
       var stillPending = new HashSet<>(pending);
       stillPending.removeAll(failed.keySet());
-      return new CiFailures(List.copyOf(failed.values()), stillPending.size(), reported.size());
+      return new CiFailures(
+          List.copyOf(failed.values()),
+          stillPending.size(),
+          reported.size(),
+          List.copyOf(annotated.values()));
     }
   }
 
@@ -412,6 +452,9 @@ public class CiStatusEvaluator {
     var ciStatus = classifyCheckRun(run.status(), run.conclusion());
     if (!isBotCheck) {
       tracker.noteForContext(run.name(), ciStatus, () -> failedCheck(run));
+      if (!CI_PENDING.equals(ciStatus)) {
+        tracker.noteAnnotated(run);
+      }
     }
     addOffending(run.name(), isBotCheck, ciStatus, "check-run", run.conclusion(), tracker);
   }

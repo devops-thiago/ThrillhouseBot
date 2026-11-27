@@ -720,12 +720,77 @@ class CiStatusEvaluatorTest {
       var ciContext =
           mock(dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.CiContextConfig.class);
       when(review.ciContext()).thenReturn(ciContext);
+      var staticAnalysis =
+          mock(
+              dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.StaticAnalysisConfig.class);
+      when(review.staticAnalysis()).thenReturn(staticAnalysis);
 
       var fromConfig = new CiStatusEvaluator(checkRunClient, new BotIdentity(Set.of()), config);
       var result = fromConfig.evaluateCiChecks("auth", "owner", "repo", "sha", List.of("build"));
 
       assertTrue(result.offendingChecks().isEmpty());
       verify(checkRunClient, never()).getAllCheckRuns(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void configConstructorReadsCiForTheCiFailureContextWithTheGateOff() {
+      var config = mock(dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.class);
+      var review =
+          mock(dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.ReviewConfig.class);
+      when(config.review()).thenReturn(review);
+      when(review.ciGating()).thenReturn("off");
+      var ciContext =
+          mock(dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.CiContextConfig.class);
+      when(review.ciContext()).thenReturn(ciContext);
+      when(ciContext.enabled()).thenReturn(true);
+      var build =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+              5L, "build", "completed", "failure", null, null);
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(1, List.of(build)));
+
+      var fromConfig = new CiStatusEvaluator(checkRunClient, new BotIdentity(Set.of()), config);
+      var result = fromConfig.evaluateCiChecks("auth", "owner", "repo", "sha", List.of("build"));
+
+      assertTrue(result.offendingChecks().isEmpty());
+      assertEquals(
+          List.of("build"), result.failures().failed().stream().map(f -> f.name()).toList());
+    }
+
+    @Test
+    void configConstructorReadsCiForTheStaticAnalysisContextWithTheGateOff() {
+      var config = mock(dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.class);
+      var review =
+          mock(dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.ReviewConfig.class);
+      when(config.review()).thenReturn(review);
+      when(review.ciGating()).thenReturn("off");
+      var ciContext =
+          mock(dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.CiContextConfig.class);
+      when(review.ciContext()).thenReturn(ciContext);
+      var staticAnalysis =
+          mock(
+              dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.StaticAnalysisConfig.class);
+      when(review.staticAnalysis()).thenReturn(staticAnalysis);
+      when(staticAnalysis.enabled()).thenReturn(true);
+      var codeql =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+              7L,
+              "CodeQL",
+              "completed",
+              "success",
+              null,
+              new GitHubCheckRunClient.CheckRunsResponse.CheckRun.CheckRunOutput(
+                  "1 alert", "s", 1));
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(1, List.of(codeql)));
+
+      var fromConfig = new CiStatusEvaluator(checkRunClient, new BotIdentity(Set.of()), config);
+      var result = fromConfig.evaluateCiChecks("auth", "owner", "repo", "sha", List.of("build"));
+
+      assertTrue(result.offendingChecks().isEmpty());
+      assertEquals(
+          List.of(new CiStatusEvaluator.AnnotatedCheck("CodeQL", "success", 7L, null)),
+          result.failures().annotated());
     }
 
     @Test
@@ -832,6 +897,44 @@ class CiStatusEvaluatorTest {
       assertNull(failed.get(0).summary());
       assertEquals(0, failed.get(0).annotationsCount());
       assertEquals("timed_out", failed.get(0).conclusion());
+    }
+
+    @Test
+    void capturesCompletedCheckRunsWithAnnotationsButNotTheBotsOwnPendingOrUnannotatedOnes() {
+      var unannotated =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+              9L,
+              "format",
+              "completed",
+              "success",
+              null,
+              new GitHubCheckRunClient.CheckRunsResponse.CheckRun.CheckRunOutput("ok", "", 0));
+      stubCi(
+          List.of(
+              run(1L, "CodeQL", "completed", "success", "github-advanced-security", "1 alert"),
+              run(2L, "lint", "completed", "neutral", "github-actions", "3 warnings"),
+              run(3L, "docs", "completed", "success", "github-actions", null),
+              run(4L, "build", "completed", "failure", "github-actions", "boom"),
+              run(5L, "e2e", "in_progress", null, "github-actions", "running"),
+              run(6L, CheckRunManager.CHECK_NAME, "completed", "success", "thrillhousebot", "ok"),
+              run(7L, "CodeQL", "completed", "success", "github-advanced-security", "again"),
+              run(8L, null, "completed", "success", "github-actions", "nameless"),
+              unannotated),
+          List.of());
+
+      var annotated = evaluator.evaluate("auth", "owner", "repo", "sha", "main").failures();
+
+      assertEquals(
+          List.of(
+              new CiStatusEvaluator.AnnotatedCheck(
+                  "CodeQL", "success", 1L, "github-advanced-security"),
+              new CiStatusEvaluator.AnnotatedCheck("lint", "neutral", 2L, "github-actions"),
+              new CiStatusEvaluator.AnnotatedCheck("build", "failure", 4L, "github-actions"),
+              // A second run of the same name is its own check run, kept by id.
+              new CiStatusEvaluator.AnnotatedCheck(
+                  "CodeQL", "success", 7L, "github-advanced-security")),
+          annotated.annotated());
+      assertEquals(List.of("build"), annotated.failed().stream().map(f -> f.name()).toList());
     }
 
     @Test

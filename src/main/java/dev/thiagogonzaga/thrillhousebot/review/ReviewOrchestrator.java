@@ -95,6 +95,7 @@ public class ReviewOrchestrator {
 
   private final CiStatusEvaluator ciStatusEvaluator;
   private final CiFailureContextResolver ciFailureContext;
+  private final StaticAnalysisContextResolver staticAnalysis;
   private final TicketContextResolver ticketContext;
   private final ReviewLearnings learnings;
 
@@ -259,6 +260,7 @@ public class ReviewOrchestrator {
       @ReviewExecutor ExecutorService reviewExecutor,
       ReviewNotifier notifier,
       CiFailureContextResolver ciFailureContext,
+      StaticAnalysisContextResolver staticAnalysis,
       TicketContextResolver ticketContext,
       ReviewLearnings learnings,
       FindingStates findingStates) {
@@ -268,6 +270,7 @@ public class ReviewOrchestrator {
     this.sessionPersistence = sessionPersistence;
     this.ciStatusEvaluator = ciStatusEvaluator;
     this.ciFailureContext = ciFailureContext;
+    this.staticAnalysis = staticAnalysis;
     this.ticketContext = ticketContext;
     this.learnings = learnings;
     this.checkRunManager = checkRunManager;
@@ -364,21 +367,33 @@ public class ReviewOrchestrator {
           checkRunManager.createCheckRun(
               auth, req.owner(), req.repo(), req.commitSha(), sessionUrl(session));
       final var ciReq = req;
-      // With the CI-failure context on (#59) the early CI reading feeds the prompt, so it starts
-      // alongside the context load and is joined before the prompt is assembled; its failing
-      // checks are the ones the gate reads, not a second fetch. Off, the reading keeps its place
-      // beside the model call, so the gate reads CI as late as it did before.
-      var ciFuture = ciFailureContext.enabled() ? startCiEvaluation(auth, ciReq) : null;
+      // With the CI-failure context (#59) or the static-analysis context (#34) on, the early CI
+      // reading feeds the prompt, so it starts alongside the context load and is joined before the
+      // prompt is assembled; its checks are the ones the gate reads, not a second fetch. With both
+      // off, the reading keeps its place beside the model call, so the gate reads CI as late as it
+      // did before.
+      var ciFuture =
+          ciFailureContext.enabled() || staticAnalysis.enabled()
+              ? startCiEvaluation(auth, ciReq)
+              : null;
       broadcastPhase(session, SessionEventBroadcaster.SessionEvent.Phase.CONTEXT);
       var ctx = contextLoader.load(auth, req, session);
       var priorReviews = ctx.priorReviews();
       var previousFindings = ctx.previousFindingsList();
       var inlineComments = ctx.inlineComments();
       var lineResolver = ctx.lineResolver();
+      var earlyReading = ciFuture == null ? null : ciFuture.join();
       var ciFailures =
-          ciFuture == null
+          earlyReading == null
               ? ""
-              : ciFailureContext.resolve(auth, req.owner(), req.repo(), ciFuture.join());
+              : ciFailureContext.resolve(auth, req.owner(), req.repo(), earlyReading);
+      // #34: the annotations completed checks attached to the changed files; "" when the feature
+      // is off or there are none.
+      var staticFindings =
+          earlyReading == null
+              ? ""
+              : staticAnalysis.resolve(
+                  auth, req.owner(), req.repo(), earlyReading, ctx.reviewableFiles());
       // #58: the linked issues' text, read-only and best-effort; "" when the feature is off.
       var linkedIssues =
           ticketContext.resolve(
@@ -400,7 +415,7 @@ public class ReviewOrchestrator {
                   ctx,
                   req,
                   new ReviewPromptAssembler.TrailingContext(
-                      ciFailures, linkedIssues, learned.section())));
+                      ciFailures, staticFindings, linkedIssues, learned.section())));
       var plan = budgetPlanner.plan(ctx.reviewableFiles(), promptInputs);
 
       if (ciFuture == null) {
