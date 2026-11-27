@@ -616,9 +616,9 @@ class ReviewPublisherTest {
 
     publisher.publishSummary("auth", "o", "r", 1, firstReview, false);
     var open =
-        publisher.openFindings(
+        ManifestThreads.openFindings(
             firstReview,
-            new ReviewPublisher.PostedThreads(
+            new ManifestThreads.PostedThreads(
                 Set.of(SuggestionFormatter.findingKey("src/A.java", 12, "NPE"))));
 
     var posted = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);

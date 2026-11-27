@@ -32,17 +32,14 @@ import jakarta.inject.Inject;
 import jakarta.ws.rs.WebApplicationException;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Predicate;
-import java.util.stream.Collectors;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 /**
@@ -221,7 +218,8 @@ public class ReviewPublisher {
     }
     var scrubbed = PromptLabelScrubber.scrub(result);
     var state = PrSummaryGenerator.currentState(scrubbed);
-    var manifestLine = FindingsManifest.render(state, threadRule(scrubbed, summary.lineResolver()));
+    var manifestLine =
+        FindingsManifest.render(state, announcedThreads(scrubbed, summary.lineResolver()));
     var agentEnabled = agentNextStepsEnabled();
     var prTextLine = prText == null ? "" : DescriptionGapCarryover.prTextMarker(prText) + "\n";
     var headLine = agentEnabled ? AgentNextSteps.headMarker(commitSha) : "";
@@ -298,78 +296,10 @@ public class ReviewPublisher {
         .reduce((first, second) -> second);
   }
 
-  /**
-   * The open set the summary comment's manifest lists for {@code result} (#1433), over the same
-   * scrubbed findings, so its keys match the comment's. {@code posted} is what {@link #postReview}
-   * returned for the round, so {@code thread} says which threads the review opened.
-   */
-  OpenFindings openFindings(ReviewResult result, PostedThreads posted) {
-    var scrubbed = PromptLabelScrubber.scrub(result);
-    return FindingsManifest.collect(
-        PrSummaryGenerator.currentState(scrubbed), postedRule(scrubbed, posted));
-  }
-
-  /**
-   * The round's findings whose thread reached the pull request, by {@link #manifestKey}: what
-   * {@link #postReview} opened, as opposed to what {@link #threadRule} announced before it ran.
-   */
-  record PostedThreads(Set<String> keys) {
-
-    /** A round that opened no thread. */
-    static final PostedThreads NONE = new PostedThreads(Set.of());
-
-    PostedThreads {
-      keys = Set.copyOf(keys);
-    }
-
-    private static PostedThreads of(List<Finding> threaded) {
-      return new PostedThreads(
-          threaded.stream().map(ReviewPublisher::manifestKey).collect(Collectors.toSet()));
-    }
-  }
-
-  /**
-   * Which manifest entries {@link #postReview} is set to open an inline thread for (#1433): of the
-   * round's own findings, in the order they are posted, those that post inline on a changed file
-   * ({@link DiffLineResolver#isChangedFile}), up to {@code maxReviewComments}, the same rules
-   * {@link #postInlineComments} applies. Entries are matched by {@link
-   * SuggestionFormatter#findingKey}, so a re-raised finding the summary lists at an earlier
-   * severity still matches. An entry carried from an earlier round, which this round does not post,
-   * keeps {@link Finding#postsInline}. The summary is written before the review, so this is what
-   * the round expects: it cannot know which posts GitHub will refuse, nor that a refusal frees a
-   * cap slot for a finding it put past the cap. {@link #correctManifest} rewrites the line from
-   * {@link #postedRule} once the review has posted and the two disagree.
-   */
-  private Predicate<Finding> threadRule(ReviewResult round, DiffLineResolver lineResolver) {
-    if (lineResolver == null) {
-      return Finding::postsInline;
-    }
-    var threadKeys = new HashSet<String>();
-    var slots = config.review().maxReviewComments();
-    for (var finding : round.findings()) {
-      if (slots > 0 && finding.postsInline() && lineResolver.isChangedFile(finding.file())) {
-        threadKeys.add(manifestKey(finding));
-        slots--;
-      }
-    }
-    return roundRule(round, threadKeys);
-  }
-
-  /**
-   * {@link #threadRule} after the review posted: a finding of the round has a thread when one
-   * landed for it. A carried entry still keeps {@link Finding#postsInline}.
-   */
-  private static Predicate<Finding> postedRule(ReviewResult round, PostedThreads posted) {
-    return roundRule(round, posted.keys());
-  }
-
-  private static Predicate<Finding> roundRule(ReviewResult round, Set<String> threadKeys) {
-    var roundKeys =
-        round.findings().stream().map(ReviewPublisher::manifestKey).collect(Collectors.toSet());
-    return finding -> {
-      var key = manifestKey(finding);
-      return roundKeys.contains(key) ? threadKeys.contains(key) : finding.postsInline();
-    };
+  /** {@link ManifestThreads#announced} under this deployment's inline comment cap. */
+  private Predicate<Finding> announcedThreads(ReviewResult round, DiffLineResolver lineResolver) {
+    return ManifestThreads.announced(
+        round, lineResolver, () -> config.review().maxReviewComments());
   }
 
   /**
@@ -380,10 +310,11 @@ public class ReviewPublisher {
    * newer run's, or one whose publish failed) is left alone, and a failed read or edit is logged
    * and costs the review nothing.
    */
-  private void correctManifest(PostReviewRequest post, ReviewResult result, PostedThreads posted) {
+  private void correctManifest(
+      PostReviewRequest post, ReviewResult result, ManifestThreads.PostedThreads posted) {
     var state = PrSummaryGenerator.currentState(result);
-    var announced = FindingsManifest.render(state, threadRule(result, post.lineResolver()));
-    var opened = FindingsManifest.render(state, postedRule(result, posted));
+    var announced = FindingsManifest.render(state, announcedThreads(result, post.lineResolver()));
+    var opened = FindingsManifest.render(state, ManifestThreads.posted(result, posted));
     if (announced.equals(opened)) {
       return;
     }
@@ -408,10 +339,6 @@ public class ReviewPublisher {
           post.repo(),
           post.prNumber());
     }
-  }
-
-  private static String manifestKey(Finding finding) {
-    return SuggestionFormatter.findingKey(finding.file(), finding.line(), finding.title());
   }
 
   /**
@@ -700,7 +627,7 @@ public class ReviewPublisher {
    * {@code summaryPosted} to {@code false}, so no review-suppressing skip can fire, and carries no
    * previous round, so nothing is named as closed.
    */
-  PostedThreads postReview(
+  ManifestThreads.PostedThreads postReview(
       String auth,
       String owner,
       String repo,
@@ -723,8 +650,8 @@ public class ReviewPublisher {
    * budget is why. The ceiling is {@code thrillhousebot.github.write-retry-budget}; zero turns it
    * off.
    */
-  PostedThreads postReview(PostReviewRequest post) {
-    var posted = new AtomicReference<>(PostedThreads.NONE);
+  ManifestThreads.PostedThreads postReview(PostReviewRequest post) {
+    var posted = new AtomicReference<>(ManifestThreads.PostedThreads.NONE);
     GitHubWriteBudget.within(
         post.owner() + "/" + post.repo() + " #" + post.prNumber(),
         config.github().writeRetryBudget(),
@@ -732,7 +659,7 @@ public class ReviewPublisher {
     return posted.get();
   }
 
-  private PostedThreads publishReview(PostReviewRequest post) {
+  private ManifestThreads.PostedThreads publishReview(PostReviewRequest post) {
     var auth = post.auth();
     var owner = post.owner();
     var repo = post.repo();
@@ -766,17 +693,17 @@ public class ReviewPublisher {
             "Skipping the no-issues review for %s/%s #%d — summary-only re-run on a head the"
                 + " bot already approved",
             owner, repo, prNumber);
-        return PostedThreads.NONE;
+        return ManifestThreads.PostedThreads.NONE;
       }
       postNoIssuesReview(post);
-      return PostedThreads.NONE;
+      return ManifestThreads.PostedThreads.NONE;
     }
 
     if (config.review().batchedInlineReviewEnabled()
         && hasInlinePostCandidates(result, lineResolver)) {
       // #1434: GitHub keeps one pending review per user, so a thread reply posted while this one
       // is open could land in it; MaintainerReplyService waits on this hold before replying.
-      PostedThreads posted;
+      ManifestThreads.PostedThreads posted;
       try (var _ = pendingReviewGuard.hold(owner, repo, prNumber)) {
         posted =
             publishFindings(
@@ -796,7 +723,7 @@ public class ReviewPublisher {
    * pull request: none when a batched review could not be submitted, since its threads went with
    * it.
    */
-  private PostedThreads publishFindings(
+  private ManifestThreads.PostedThreads publishFindings(
       PostReviewRequest post, ReviewResult result, Optional<PendingReview> pending) {
     var auth = post.auth();
     var owner = post.owner();
@@ -835,7 +762,7 @@ public class ReviewPublisher {
               String.join("\n\n", listingBodyParts(List.of(), inline, result, post)),
               event,
               List.of()));
-      return PostedThreads.NONE;
+      return ManifestThreads.PostedThreads.NONE;
     }
 
     var bodyParts = new ArrayList<String>();
@@ -855,7 +782,9 @@ public class ReviewPublisher {
               post,
               pending.get(),
               new BatchedSubmit(batchedReviewSubmitBody(bodyParts, event), event, inline, result));
-      return submitted ? PostedThreads.of(inline.threaded()) : PostedThreads.NONE;
+      return submitted
+          ? ManifestThreads.PostedThreads.of(inline.threaded())
+          : ManifestThreads.PostedThreads.NONE;
     }
     if (!bodyParts.isEmpty()) {
       createReviewWithFallback(
@@ -866,7 +795,7 @@ public class ReviewPublisher {
           new GitHubReviewClient.CreateReviewRequest(
               commitSha, String.join("\n\n", bodyParts), event, List.of()));
     }
-    return PostedThreads.of(inline.threaded());
+    return ManifestThreads.PostedThreads.of(inline.threaded());
   }
 
   /**

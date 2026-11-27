@@ -225,7 +225,7 @@ class FindingsManifestThreadTest {
         .thenThrow(new WebApplicationException(422));
   }
 
-  private ReviewPublisher.PostedThreads post(ReviewResult result, DiffLineResolver resolver) {
+  private ManifestThreads.PostedThreads post(ReviewResult result, DiffLineResolver resolver) {
     return publisher.postReview(
         new ReviewPublisher.PostReviewRequest(
             "auth", "o", "r", 1, "sha", result, resolver, true, List.of()));
@@ -258,7 +258,7 @@ class FindingsManifestThreadTest {
         "only the manifest line changes");
     assertEquals(
         Map.of(2, false, 4, true, 5, true),
-        threadsIn(publisher.openFindings(result, posted).entries(), false));
+        threadsIn(ManifestThreads.openFindings(result, posted).entries(), false));
   }
 
   @Test
@@ -273,7 +273,7 @@ class FindingsManifestThreadTest {
     verify(commentClient, never()).updateComment(any(), any(), any(), any(), anyLong(), any());
     assertEquals(
         Map.of(2, true, 4, true, 5, false),
-        threadsIn(publisher.openFindings(result, posted).entries(), false));
+        threadsIn(ManifestThreads.openFindings(result, posted).entries(), false));
   }
 
   @Test
@@ -315,7 +315,7 @@ class FindingsManifestThreadTest {
     verify(commentClient).createComment(any(), any(), any(), any(), anyInt(), any());
     assertEquals(
         Map.of(2, false, 4, true, 5, true),
-        threadsIn(publisher.openFindings(result, posted).entries(), false));
+        threadsIn(ManifestThreads.openFindings(result, posted).entries(), false));
   }
 
   @Test
@@ -337,6 +337,6 @@ class FindingsManifestThreadTest {
     assertEquals(Map.of(2, false, 4, false, 5, false), threadsIn(editedSummary(), true));
     assertEquals(
         Map.of(2, false, 4, false, 5, false),
-        threadsIn(publisher.openFindings(result, posted).entries(), false));
+        threadsIn(ManifestThreads.openFindings(result, posted).entries(), false));
   }
 }
