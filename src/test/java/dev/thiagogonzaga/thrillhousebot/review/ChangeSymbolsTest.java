@@ -241,9 +241,9 @@ class ChangeSymbolsTest {
   }
 
   @Test
-  void anAddedLineStartingWithTwoPlusSignsIsReadInsideAHunk() {
-    // #1396: "+++retries;" is the added line "++retries;", not a file header, once a hunk opened.
-    var changed =
+  void anAddedLineStartingWithTwoPlusSignsIsInsideTheFunctionItsHunkNames() {
+    // "+++retries;" is the added line "++retries;", not a file header, once a hunk opened.
+    var patch =
         """
         --- a/Mailer.java
         +++ b/Mailer.java
@@ -251,7 +251,13 @@ class ChangeSymbolsTest {
              deliver(to);
         +++retries;
         """;
-    var declared =
+
+    assertEquals(List.of("send"), ChangeSymbols.changedNames(patch));
+  }
+
+  @Test
+  void aCommentOpenedOnAnAddedLineStartingWithTwoPlusSignsHidesItsBody() {
+    var patch =
         """
         @@ -1,2 +1,5 @@
         +++count; /* a comment that
@@ -260,8 +266,7 @@ class ChangeSymbolsTest {
         +def real():
         """;
 
-    assertEquals(List.of("send"), ChangeSymbols.changedNames(changed));
-    assertEquals(List.of("real"), ChangeSymbols.declaredNames(declared));
+    assertEquals(List.of("real"), ChangeSymbols.declaredNames(patch));
   }
 
   @Test
