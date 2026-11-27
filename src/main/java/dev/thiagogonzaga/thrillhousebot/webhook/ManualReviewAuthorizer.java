@@ -93,7 +93,18 @@ public class ManualReviewAuthorizer {
     if (isAllowlisted(login)) {
       return true;
     }
-    if (!mayHoldWriteAccess(authorAssociation)) {
+    return holdsWriteAccess(owner, repo, installationId, login, authorAssociation);
+  }
+
+  /**
+   * Returns {@code true} only if {@code login} holds write access to {@code owner/repo}, confirmed
+   * by the collaborator-permission call. The manual-trigger allowlist is not consulted: it lets a
+   * login spend the review budget, and it does not let that login close or decline a finding.
+   * {@code authorAssociation} only spares the call for a commenter who cannot hold write access.
+   */
+  public boolean holdsWriteAccess(
+      String owner, String repo, long installationId, String login, String authorAssociation) {
+    if (login == null || login.isBlank() || !mayHoldWriteAccess(authorAssociation)) {
       return false;
     }
     return hasWriteAccess(owner, repo, installationId, login);

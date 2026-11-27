@@ -320,7 +320,8 @@ class DeclinedScanFindingAcrossRoundsTest {
         List.of(),
         SupersededFindingsCarryover.Carried.NONE,
         "",
-        true);
+        true,
+        KnownWriters.ALL);
   }
 
   private static FileDiff added(String name, String... lines) {

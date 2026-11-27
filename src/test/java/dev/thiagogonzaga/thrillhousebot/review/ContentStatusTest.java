@@ -198,7 +198,7 @@ class ContentStatusTest {
 
     var listing =
         FollowUpAnalyzer.priorListing(
-            List.of(effective, older), () -> diff, List.of(root, reply), BOT);
+            List.of(effective, older), () -> diff, List.of(root, reply), BOT, KnownWriters.ALL);
 
     assertEquals(List.of(ELSEWHERE, GUARD), listing.findings());
     assertEquals(List.of(0, 1), listing.rounds());
@@ -209,7 +209,8 @@ class ContentStatusTest {
     assertEquals("", FollowUpAnalyzer.formatEarlierListed(PriorListing.of(List.of(GUARD))));
     assertEquals(
         0,
-        FollowUpAnalyzer.priorListing((List<ReviewResponse>) null, () -> diff, List.of(), BOT)
+        FollowUpAnalyzer.priorListing(
+                (List<ReviewResponse>) null, () -> diff, List.of(), BOT, KnownWriters.ALL)
             .findings()
             .size());
   }
@@ -290,7 +291,15 @@ class ContentStatusTest {
     var older = new ReviewResponse(List.of(GUARD), List.of(), null);
     var effective = new ReviewResponse(List.of(ELSEWHERE), List.of(), null);
     return analyzer.heldPreviousFindings(
-        List.of(effective, older), statuses, List.of(), List.of(), diff, BOT, Map.of());
+        List.of(effective, older),
+        statuses,
+        List.of(),
+        List.of(),
+        diff,
+        BOT,
+        KnownWriters.ALL,
+        Map.of(),
+        null);
   }
 
   @Test
@@ -498,7 +507,15 @@ class ContentStatusTest {
     var held =
         analyzer
             .heldPreviousFindings(
-                priors, List.of(unresolved(1)), List.of(), List.of(), diff, BOT, Map.of())
+                priors,
+                List.of(unresolved(1)),
+                List.of(),
+                List.of(),
+                diff,
+                BOT,
+                KnownWriters.ALL,
+                Map.of(),
+                null)
             .stream()
             .map(hold -> FollowUpAnalyzer.carriedByReplacement(hold, replaced, Map.of()))
             .filter(java.util.Objects::nonNull)

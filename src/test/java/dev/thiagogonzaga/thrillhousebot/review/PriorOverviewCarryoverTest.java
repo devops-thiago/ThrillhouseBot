@@ -84,7 +84,8 @@ class PriorOverviewCarryoverTest {
         List.of(),
         SupersededFindingsCarryover.Carried.NONE,
         "",
-        headUnchanged);
+        headUnchanged,
+        KnownWriters.ALL);
   }
 
   private static ReviewResponse round(ReviewResponse.Summary summary) {

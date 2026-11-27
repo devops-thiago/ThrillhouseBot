@@ -346,6 +346,21 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   its finding and the root of its own thread, found by marker and content
   (`ReviewResult.EarlierRound`), which `ReviewPublisher.resolveAddressedThreads` resolves and
   `FollowUpAnalyzer.survivingEarlierRoundDeclines` offers to the learnings capture (#958).
+- **Only a verified writer's comment changes a finding's status.** `VerifiedWritersResolver` asks
+  GitHub for the collaborator permission of each distinct comment author whose
+  `author_association` could hold write access, once per review in `ReviewContextLoader.load`
+  (where the installation is known), and the answer travels as `ReviewContext.verifiedWriters`.
+  Every reply, clear and decline check in `FollowUpAnalyzer` reads `VerifiedWriters.isWriter`
+  (`hasHumanReply`, `humanReplies`, `threadDeclineSources`, `clearedOnOwnThread`,
+  `isMaintainerConversationComment`); the association alone grants nothing, since a `MEMBER` or
+  `COLLABORATOR` can hold read or triage access only. A failed or impossible lookup leaves the
+  author out, so the finding stays open. A model `justified` with no verified reply on the
+  finding's thread goes back to `unresolved` (`withoutUnconfirmedDeclines`, run first in
+  `VerdictBuilder.build` and again inside `recheckDeclines`, whether or not the re-check is
+  enabled); a verified conversation decline restores it. The reply's "no write access" label in
+  the prompt is guidance, not the control. `MaintainerReplyService` acknowledges a directive by
+  the same permission (`ManualReviewAuthorizer.holdsWriteAccess`), never the allowlist. Do not
+  add an association-only path, or a default that treats an unverified author as a writer.
 - **Every finding carried in gets a status, and an earlier round's close is recorded once**
   (#957, #959, #1066). `backstopEntry` gives each cluster one entry: a hold, `resolved` for a
   maintainer's clear (a conversation directive, or `@thrillhousebot resolved` replied on its own

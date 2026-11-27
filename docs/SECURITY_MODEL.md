@@ -60,7 +60,8 @@ Attackers considered:
   description, comments and any text the bot reads from the PR. They may try
   to inject instructions into the model prompt, make the bot leak data, approve
   a bad change, or run up the model bill.
-- A commenter without write access who tries to trigger paid reviews.
+- A commenter without write access who tries to trigger paid reviews, or to
+  get a finding closed or declined so that the bot approves.
 - A model endpoint that returns malformed, oversized or hostile output.
 - A web visitor trying to reach the dashboard or ride on a signed-in session.
 
@@ -105,6 +106,17 @@ rejects its token.
 Organization membership is granted only on GitHub's explicit answer. Optional context and outgoing
 notifications are off until enabled, and a manual `/review` needs write access
 to the repository (`webhook/ManualReviewAuthorizer`).
+
+Closing a finding is a maintainer's decision. A reply on a finding's thread and
+an `@thrillhousebot resolved` or `declined` directive count only when GitHub's
+collaborator-permission answer for the author is write, maintain or admin
+(`review/VerifiedWritersResolver`, asked once per author per review). The
+comment's `author_association` is a first check that spares the call and never
+grants anything: an organization member or invited collaborator with read or
+triage access is not a maintainer. A finding the model reports as declined
+stays open unless such a reply or directive is behind it, whatever any other
+reply on the thread says. When the permission cannot be read, nobody is
+confirmed and the finding stays open.
 
 ### Complete mediation
 

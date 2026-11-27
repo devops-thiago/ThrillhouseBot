@@ -66,6 +66,20 @@ cannot resolve its review threads.
 
 ### Security
 
+- **Only someone with write access can get a finding closed or declined.** A reply on a finding's
+  thread was shown to the model whoever wrote it, and a finding the model then reported as
+  declined (`justified`) no longer held the approval, so a reply from the pull request's author
+  could close a finding and let the bot approve. Separately, the `resolved` and `declined`
+  directives and maintainer replies were accepted on the comment's `author_association` alone, so
+  an organization member or invited collaborator with read or triage access could close or decline
+  a finding. Each follow-up review now asks GitHub for the collaborator permission of the people
+  who replied or wrote a directive, once per person, and only write, maintain or admin counts. A
+  finding reported as declined stays open unless such a reply is on its thread or such a person's
+  `declined` directive names it, and the review body says "Decline not accepted, finding kept
+  open" with how to keep the decline. Other replies reach the model marked "no write access,
+  context only". When the permission cannot be read, nobody is confirmed for that review and
+  findings stay open until the next one. The bot's reply to a directive uses the same check. No new
+  GitHub App permission is needed.
 - **The native image moves to the 2026-11-25 UBI9 micro base**, which ships `pcre2` 10.40-7.el9_8
   (RHSA-2026:81532) with the fixes for CVE-2026-89161, CVE-2026-86145 and CVE-2026-103111, so their
   `.trivyignore` entries are removed. CVE-2026-84782 (`libssl3`, DTLS only) stays ignored for the

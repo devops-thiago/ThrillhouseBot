@@ -230,8 +230,8 @@ public class MaintainerReplyService {
    * (#1066): it closes the finding that thread belongs to, so the thread is resolved here and the
    * reply is a deterministic acknowledgement, never a generated answer that could claim a
    * resolution that did not happen. The review applies the same directive to the finding's status
-   * ({@code FollowUpAnalyzer.clearNamedInConversation}), by the same two rules: a write-capable
-   * author, and a naming that names no other finding ({@link
+   * ({@code FollowUpAnalyzer.clearNamedInConversation}), by the same two rules: an author with
+   * confirmed write access, and a naming that names no other finding ({@link
    * FollowUpAnalyzer#threadDirectiveNamesItsFinding}).
    *
    * @param botRoot the thread's root comment when it is the bot's, else {@code null}
@@ -239,7 +239,7 @@ public class MaintainerReplyService {
   private void clearFromThread(
       String auth, ReplyTask task, GitHubReviewClient.PullRequestComment botRoot) {
     String ack;
-    if (!FollowUpAnalyzer.mayHoldWriteAccess(task.authorAssociation())) {
+    if (!holdsWriteAccess(task)) {
       ack = clearDirectiveUnauthorizedAck(botIdentity);
     } else if (botRoot == null) {
       ack = THREAD_CLEAR_NOT_A_FINDING_ACK;
@@ -397,12 +397,12 @@ public class MaintainerReplyService {
   /**
    * Acknowledgement for a directive whose author the clearing path will not honour. Reaching this
    * method already means the commenter is authorized to address the bot, but {@link
-   * ManualReviewAuthorizer} admits a login on the manual-trigger allowlist whatever its {@code
-   * author_association}, while the clear itself requires a write-capable one ({@link
-   * FollowUpAnalyzer#mayHoldWriteAccess}) — the README says the allowlist "does not extend" to the
-   * directive. Without this branch such a commenter was told the next review would close what they
-   * named, and then nothing was cleared. Like the no-locator case the outcome is knowable from the
-   * comment alone, so the reply states it rather than leaving it to be discovered.
+   * ManualReviewAuthorizer} admits a login on the manual-trigger allowlist whatever its access,
+   * while the clear itself requires confirmed write access ({@link #holdsWriteAccess}) — the README
+   * says the allowlist "does not extend" to the directive. Without this branch such a commenter was
+   * told the next review would close what they named, and then nothing was cleared. Like the
+   * no-locator case the outcome is knowable from the comment alone, so the reply states it rather
+   * than leaving it to be discovered.
    */
   static String clearDirectiveUnauthorizedAck(BotIdentity botIdentity) {
     return "Clearing a finding takes write access on this repository, so nothing will be cleared"
@@ -481,13 +481,29 @@ public class MaintainerReplyService {
   }
 
   /**
+   * Whether the commenter holds write access to the repository, by the collaborator-permission
+   * answer: the rule the review itself applies to a clear or decline directive ({@link
+   * VerifiedWriters}). An acknowledgement decided by the comment's association alone promised a
+   * closure to an organization member or invited collaborator with read access, which the review
+   * then refused.
+   */
+  private boolean holdsWriteAccess(ReplyTask task) {
+    return authorizer.holdsWriteAccess(
+        task.owner(),
+        task.repo(),
+        task.installationId(),
+        task.commenterLogin(),
+        task.authorAssociation());
+  }
+
+  /**
    * Posts the deterministic acknowledgement for a clear or decline directive. The four outcomes are
    * decided by the same two facts for both verbs — whether the author can be honoured at all
-   * ({@link FollowUpAnalyzer#mayHoldWriteAccess}) and what, if anything, the comment names — and
-   * only the prose differs, so one decision serves both (#709).
+   * ({@link #holdsWriteAccess}) and what, if anything, the comment names — and only the prose
+   * differs, so one decision serves both (#709).
    */
   private void acknowledgeDirective(String auth, ReplyTask task, boolean clear) {
-    boolean mayAct = FollowUpAnalyzer.mayHoldWriteAccess(task.authorAssociation());
+    boolean mayAct = holdsWriteAccess(task);
     boolean named = FollowUpAnalyzer.namesALocator(task.question());
     String ack;
     if (!mayAct) {

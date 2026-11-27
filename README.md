@@ -127,8 +127,11 @@ command word gets a written answer instead.
 repository, or a login listed in
 `THRILLHOUSEBOT_REVIEW_MANUAL_TRIGGER_ALLOWED_LOGINS`, because the commands spend
 the operator's AI budget. The `resolved` and `declined` directives always need
-write access, judged by the comment's GitHub `author_association` (`OWNER`,
-`MEMBER` or `COLLABORATOR`); the allowlist does not extend to them.
+write access, confirmed with GitHub's collaborator-permission answer for the
+comment's author (write, maintain or admin); the allowlist does not extend to
+them. The comment's `author_association` is only a first check: an organization
+`MEMBER` or an invited `COLLABORATOR` who has read or triage access cannot close
+or decline a finding.
 
 **Directives.** `@thrillhousebot resolved` and `@thrillhousebot declined` are
 not slash commands. They have no `/` form and are applied by the next review,
@@ -709,7 +712,21 @@ each earlier file summary and the diagram that its answer leaves out.
 ### Re-checking declines
 
 When a maintainer replies to a finding to decline it, the next review records
-the finding justified. A decline is a claim, though, and a correct finding
+the finding justified. Only someone with write access to the repository can
+decline a finding. Each review asks GitHub for the permission of the people who
+replied or wrote a directive, once per person, and counts a reply as a
+maintainer's only when the answer is write, maintain or admin. A reply from
+anyone else, such as a pull request author without write access, is shown to
+the model marked "no write access, context only" and declines nothing: if a
+review still reports such a finding justified, the bot keeps it open and the
+review body says
+"Decline not accepted, finding kept open: …" with the two ways to keep the
+decline (a reply on the thread from someone with write access, or their
+`@thrillhousebot declined` comment). When GitHub cannot be asked, or the call
+fails, nobody is confirmed for that review, so findings stay open and the next
+review asks again.
+
+A decline is a claim, though, and a correct finding
 can be closed by a wrong rebuttal that names the very mechanism making the bug
 real ("it only runs after the webhook is acked, so there's no race", on an
 executor that starts a thread per event).
@@ -789,9 +806,12 @@ strict, and an ambiguous comment leaves the finding held:
   clears nothing. The path is written from the repository root and matched
   whole, so `Widget.java:42` never closes `Widget.java:4`. The locator and title
   may be in backticks.
-- **Hold write access.** The comment's `author_association` must be `OWNER`,
-  `MEMBER` or `COLLABORATOR`. Comments from fork authors, drive-by commenters
-  and the bot itself are ignored.
+- **Hold write access.** The review confirms the author's permission on the
+  repository with GitHub (write, maintain or admin). An `author_association` of
+  `OWNER`, `MEMBER` or `COLLABORATOR` is needed first but is not enough: a
+  member or collaborator with read or triage access clears nothing. Comments
+  from fork authors, drive-by commenters and the bot itself are ignored, and so
+  is every directive in a review that could not reach GitHub for the answer.
 - **Quoted text never counts.** Blockquotes and fenced code are dropped before
   matching, so a *Quote reply* of the summary names nothing.
 

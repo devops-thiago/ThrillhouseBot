@@ -103,7 +103,8 @@ class GapLeftByFixTest {
     var resolved = status("resolved", priorKey);
     var response = new ReviewResponse(List.of(gap), List.of(resolved), null);
 
-    var kept = analyzer.dropRepliedDuplicates(response, json(roundOne), threads, BOT);
+    var kept =
+        analyzer.dropRepliedDuplicates(response, json(roundOne), threads, BOT, KnownWriters.ALL);
     var guarded =
         FollowUpAnalyzer.withoutOpenThreadDuplicates(
             kept,
@@ -124,7 +125,7 @@ class GapLeftByFixTest {
 
     assertTrue(
         analyzer
-            .dropRepliedDuplicates(response, json(roundOne), threads, BOT)
+            .dropRepliedDuplicates(response, json(roundOne), threads, BOT, KnownWriters.ALL)
             .findings()
             .isEmpty());
   }
@@ -135,7 +136,7 @@ class GapLeftByFixTest {
 
     assertTrue(
         analyzer
-            .dropRepliedDuplicates(response, json(roundOne), threads, BOT)
+            .dropRepliedDuplicates(response, json(roundOne), threads, BOT, KnownWriters.ALL)
             .findings()
             .isEmpty());
   }
@@ -146,7 +147,7 @@ class GapLeftByFixTest {
 
     assertTrue(
         analyzer
-            .dropRepliedDuplicates(response, json(roundOne), threads, BOT)
+            .dropRepliedDuplicates(response, json(roundOne), threads, BOT, KnownWriters.ALL)
             .findings()
             .isEmpty());
   }
@@ -159,7 +160,7 @@ class GapLeftByFixTest {
 
     assertTrue(
         analyzer
-            .dropRepliedDuplicates(response, json(roundOne), threads, BOT)
+            .dropRepliedDuplicates(response, json(roundOne), threads, BOT, KnownWriters.ALL)
             .findings()
             .isEmpty());
   }
@@ -198,7 +199,9 @@ class GapLeftByFixTest {
 
     assertEquals(
         List.of(gap),
-        analyzer.dropRepliedDuplicates(response, json(roundOne), threads, BOT).findings());
+        analyzer
+            .dropRepliedDuplicates(response, json(roundOne), threads, BOT, KnownWriters.ALL)
+            .findings());
   }
 
   private static ReviewResponse.PreviousFindingStatus status(String status, String key) {

@@ -300,7 +300,8 @@ class RedactedSecretAcrossRoundsTest {
         List.of(),
         SupersededFindingsCarryover.Carried.NONE,
         "",
-        headUnchanged);
+        headUnchanged,
+        KnownWriters.ALL);
   }
 
   private static FileDiff added(String... lines) {

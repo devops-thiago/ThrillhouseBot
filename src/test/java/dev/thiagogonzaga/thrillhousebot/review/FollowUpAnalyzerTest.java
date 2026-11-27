@@ -58,8 +58,8 @@ class FollowUpAnalyzerTest {
 
   private static GitHubReviewClient.PullRequestComment comment(
       long id, Long inReplyTo, String path, String body, String author) {
-    // Default replies to a write-capable association so existing maintainer-reply fixtures still
-    // clear holds after the author-association gate (F1). Non-privileged replies use the overload.
+    // Default replies to a write-capable association, which with a login in KnownWriters makes
+    // the reply a maintainer's. Non-privileged replies use the overload, or a login outside it.
     return comment(id, inReplyTo, path, body, author, "MEMBER");
   }
 
@@ -77,7 +77,9 @@ class FollowUpAnalyzerTest {
             comment(101L, 100L, "src/A.java", "Fixed in abc123", "maintainer"),
             comment(102L, 100L, "src/A.java", "Confirmed", BOT));
 
-    var context = analyzer.buildPreviousFindingsContext(PREVIOUS_JSON, List.of(), comments, BOT_ID);
+    var context =
+        analyzer.buildPreviousFindingsContext(
+            PREVIOUS_JSON, List.of(), comments, BOT_ID, KnownWriters.ALL);
 
     assertTrue(context.contains("Thread replies:"));
     assertTrue(context.contains("- @maintainer: Fixed in abc123"));
@@ -88,7 +90,9 @@ class FollowUpAnalyzerTest {
   void contextShouldOmitRepliesSectionWhenThreadHasNone() {
     var comments = List.of(comment(100L, null, "src/A.java", "**CRITICAL — SQL injection**", BOT));
 
-    var context = analyzer.buildPreviousFindingsContext(PREVIOUS_JSON, List.of(), comments, BOT_ID);
+    var context =
+        analyzer.buildPreviousFindingsContext(
+            PREVIOUS_JSON, List.of(), comments, BOT_ID, KnownWriters.ALL);
 
     assertFalse(context.contains("Thread replies:"));
   }
@@ -102,7 +106,9 @@ class FollowUpAnalyzerTest {
             comment(300L, null, "src/A.java", "unrelated comment", BOT),
             comment(301L, 300L, "src/A.java", "reply to unrelated", "maintainer"));
 
-    var context = analyzer.buildPreviousFindingsContext(PREVIOUS_JSON, List.of(), comments, BOT_ID);
+    var context =
+        analyzer.buildPreviousFindingsContext(
+            PREVIOUS_JSON, List.of(), comments, BOT_ID, KnownWriters.ALL);
 
     assertFalse(context.contains("Thread replies:"));
   }
@@ -127,9 +133,13 @@ class FollowUpAnalyzerTest {
             new GitHubReviewClient.PullRequestComment(
                 101L, 100L, "src/A.java", "anonymous reply", null));
 
-    var context = analyzer.buildPreviousFindingsContext(json, List.of(), comments, BOT_ID);
+    var context =
+        analyzer.buildPreviousFindingsContext(json, List.of(), comments, BOT_ID, KnownWriters.ALL);
 
-    assertTrue(context.contains("- @unknown: anonymous reply"));
+    // A reply with no author cannot be a maintainer's, so it is listed as context only.
+    assertTrue(
+        context.contains(
+            "- @unknown" + FollowUpAnalyzer.NO_WRITE_ACCESS_LABEL + ": anonymous reply"));
   }
 
   @Test
@@ -228,7 +238,9 @@ class FollowUpAnalyzerTest {
             List.of(),
             null);
 
-    assertSame(withFinding, analyzer.dropRepliedDuplicates(withFinding, null, comments, BOT_ID));
+    assertSame(
+        withFinding,
+        analyzer.dropRepliedDuplicates(withFinding, null, comments, BOT_ID, KnownWriters.ALL));
   }
 
   @Test
@@ -267,7 +279,9 @@ class FollowUpAnalyzerTest {
             List.of(),
             null);
 
-    var result = analyzer.dropRepliedDuplicates(reRaised, List.of(PREVIOUS_JSON), comments, BOT_ID);
+    var result =
+        analyzer.dropRepliedDuplicates(
+            reRaised, List.of(PREVIOUS_JSON), comments, BOT_ID, KnownWriters.ALL);
 
     assertTrue(result.findings().isEmpty());
   }
@@ -310,7 +324,9 @@ class FollowUpAnalyzerTest {
             List.of(),
             null);
 
-    var result = analyzer.dropRepliedDuplicates(paraphrased, List.of(priorJson), comments, BOT_ID);
+    var result =
+        analyzer.dropRepliedDuplicates(
+            paraphrased, List.of(priorJson), comments, BOT_ID, KnownWriters.ALL);
 
     assertTrue(result.findings().isEmpty());
   }
@@ -353,7 +369,9 @@ class FollowUpAnalyzerTest {
             null);
 
     assertSame(
-        distinct, analyzer.dropRepliedDuplicates(distinct, List.of(priorJson), comments, BOT_ID));
+        distinct,
+        analyzer.dropRepliedDuplicates(
+            distinct, List.of(priorJson), comments, BOT_ID, KnownWriters.ALL));
   }
 
   @Test
@@ -386,7 +404,9 @@ class FollowUpAnalyzerTest {
             null);
 
     assertSame(
-        distinct, analyzer.dropRepliedDuplicates(distinct, List.of(priorJson), comments, BOT_ID));
+        distinct,
+        analyzer.dropRepliedDuplicates(
+            distinct, List.of(priorJson), comments, BOT_ID, KnownWriters.ALL));
   }
 
   @Test
@@ -446,7 +466,9 @@ class FollowUpAnalyzerTest {
             List.of(),
             null);
 
-    var result = analyzer.dropRepliedDuplicates(reRaised, List.of(PREVIOUS_JSON), comments, BOT_ID);
+    var result =
+        analyzer.dropRepliedDuplicates(
+            reRaised, List.of(PREVIOUS_JSON), comments, BOT_ID, KnownWriters.ALL);
 
     assertTrue(result.findings().isEmpty());
   }
@@ -477,7 +499,9 @@ class FollowUpAnalyzerTest {
             List.of(),
             new ReviewResponse.Summary(2, 0, 1, 1, 0, "assessment", "purpose", List.of()));
 
-    var result = analyzer.dropRepliedDuplicates(reRaised, List.of(PREVIOUS_JSON), comments, BOT_ID);
+    var result =
+        analyzer.dropRepliedDuplicates(
+            reRaised, List.of(PREVIOUS_JSON), comments, BOT_ID, KnownWriters.ALL);
 
     assertEquals(1, result.findings().size());
     assertEquals("Genuinely new bug", result.findings().get(0).title());
@@ -503,7 +527,8 @@ class FollowUpAnalyzerTest {
 
     assertSame(
         reRaised,
-        analyzer.dropRepliedDuplicates(reRaised, List.of(PREVIOUS_JSON), comments, BOT_ID));
+        analyzer.dropRepliedDuplicates(
+            reRaised, List.of(PREVIOUS_JSON), comments, BOT_ID, KnownWriters.ALL));
   }
 
   @Test
@@ -524,7 +549,8 @@ class FollowUpAnalyzerTest {
 
     assertSame(
         reRaised,
-        analyzer.dropRepliedDuplicates(reRaised, List.of(PREVIOUS_JSON), comments, BOT_ID));
+        analyzer.dropRepliedDuplicates(
+            reRaised, List.of(PREVIOUS_JSON), comments, BOT_ID, KnownWriters.ALL));
   }
 
   @Test
@@ -549,7 +575,8 @@ class FollowUpAnalyzerTest {
             null);
 
     var result =
-        analyzer.dropRepliedDuplicates(escalated, List.of(PREVIOUS_JSON), comments, BOT_ID);
+        analyzer.dropRepliedDuplicates(
+            escalated, List.of(PREVIOUS_JSON), comments, BOT_ID, KnownWriters.ALL);
 
     assertTrue(result.findings().isEmpty());
   }
@@ -574,7 +601,7 @@ class FollowUpAnalyzerTest {
 
     var result =
         analyzer.dropRepliedDuplicates(
-            reRaised, List.of(latestRoundJson, PREVIOUS_JSON), comments, BOT_ID);
+            reRaised, List.of(latestRoundJson, PREVIOUS_JSON), comments, BOT_ID, KnownWriters.ALL);
 
     assertTrue(result.findings().isEmpty());
   }
@@ -603,7 +630,12 @@ class FollowUpAnalyzerTest {
 
     var context =
         analyzer.buildPreviousFindingsContext(
-            PREVIOUS_JSON, List.of(), comments, List.of(olderJson, olderJson), BOT_ID);
+            PREVIOUS_JSON,
+            List.of(),
+            comments,
+            List.of(olderJson, olderJson),
+            BOT_ID,
+            KnownWriters.ALL);
 
     assertTrue(context.contains("Answered in earlier rounds"));
     assertTrue(context.contains("src/C.java:7 — Scan does not gate"));
@@ -617,12 +649,13 @@ class FollowUpAnalyzerTest {
   void contextWithoutOlderRoundsHasNoAnsweredSection() {
     var context =
         analyzer.buildPreviousFindingsContext(
-            PREVIOUS_JSON, List.of(), List.of(), List.of(), BOT_ID);
+            PREVIOUS_JSON, List.of(), List.of(), List.of(), BOT_ID, KnownWriters.ALL);
 
     assertFalse(context.contains("Answered in earlier rounds"));
 
     var nullOlder =
-        analyzer.buildPreviousFindingsContext(PREVIOUS_JSON, List.of(), List.of(), null, BOT_ID);
+        analyzer.buildPreviousFindingsContext(
+            PREVIOUS_JSON, List.of(), List.of(), null, BOT_ID, KnownWriters.ALL);
     assertFalse(nullOlder.contains("Answered in earlier rounds"));
   }
 
@@ -642,7 +675,7 @@ class FollowUpAnalyzerTest {
 
     var context =
         analyzer.buildPreviousFindingsContext(
-            null, List.of(), comments, List.of(olderJson), BOT_ID);
+            null, List.of(), comments, List.of(olderJson), BOT_ID, KnownWriters.ALL);
 
     assertTrue(context.contains("Answered in earlier rounds"));
     assertTrue(context.contains("src/C.java:7 — Scan does not gate"));
@@ -664,7 +697,7 @@ class FollowUpAnalyzerTest {
 
     var context =
         analyzer.buildPreviousFindingsContext(
-            PREVIOUS_JSON, List.of(), comments, List.of(olderJson), BOT_ID);
+            PREVIOUS_JSON, List.of(), comments, List.of(olderJson), BOT_ID, KnownWriters.ALL);
 
     assertFalse(context.contains("Answered in earlier rounds"));
   }
@@ -685,7 +718,8 @@ class FollowUpAnalyzerTest {
 
     assertSame(
         fileless,
-        analyzer.dropRepliedDuplicates(fileless, List.of(PREVIOUS_JSON), comments, BOT_ID));
+        analyzer.dropRepliedDuplicates(
+            fileless, List.of(PREVIOUS_JSON), comments, BOT_ID, KnownWriters.ALL));
   }
 
   @Test
@@ -708,7 +742,8 @@ class FollowUpAnalyzerTest {
 
     assertSame(
         different,
-        analyzer.dropRepliedDuplicates(different, List.of(PREVIOUS_JSON), comments, BOT_ID));
+        analyzer.dropRepliedDuplicates(
+            different, List.of(PREVIOUS_JSON), comments, BOT_ID, KnownWriters.ALL));
   }
 
   @Test
@@ -731,7 +766,8 @@ class FollowUpAnalyzerTest {
 
     assertSame(
         response,
-        analyzer.dropRepliedDuplicates(response, List.of(PREVIOUS_JSON), comments, BOT_ID));
+        analyzer.dropRepliedDuplicates(
+            response, List.of(PREVIOUS_JSON), comments, BOT_ID, KnownWriters.ALL));
   }
 
   @Test
@@ -743,12 +779,15 @@ class FollowUpAnalyzerTest {
 
     assertSame(
         noFindings,
-        analyzer.dropRepliedDuplicates(noFindings, List.of(PREVIOUS_JSON), comments, BOT_ID));
+        analyzer.dropRepliedDuplicates(
+            noFindings, List.of(PREVIOUS_JSON), comments, BOT_ID, KnownWriters.ALL));
     assertSame(
         withFinding,
-        analyzer.dropRepliedDuplicates(withFinding, List.of(PREVIOUS_JSON), List.of(), BOT_ID));
+        analyzer.dropRepliedDuplicates(
+            withFinding, List.of(PREVIOUS_JSON), List.of(), BOT_ID, KnownWriters.ALL));
     assertSame(
-        withFinding, analyzer.dropRepliedDuplicates(withFinding, List.of(), comments, BOT_ID));
+        withFinding,
+        analyzer.dropRepliedDuplicates(withFinding, List.of(), comments, BOT_ID, KnownWriters.ALL));
   }
 
   @Test
@@ -854,7 +893,7 @@ class FollowUpAnalyzerTest {
 
     var ctx =
         analyzer.buildPreviousFindingsContext(
-            previous, true, List.of(), List.of(), List.of(), BOT_ID);
+            previous, true, List.of(), List.of(), List.of(), BOT_ID, KnownWriters.ALL);
     assertTrue(ctx.contains("src/A.java"));
     assertTrue(ctx.contains("src/B.java"));
 
@@ -862,7 +901,13 @@ class FollowUpAnalyzerTest {
     assertEquals(
         "",
         analyzer.buildPreviousFindingsContext(
-            (List<ReviewResponse.Finding>) null, false, List.of(), List.of(), List.of(), BOT_ID));
+            (List<ReviewResponse.Finding>) null,
+            false,
+            List.of(),
+            List.of(),
+            List.of(),
+            BOT_ID,
+            KnownWriters.ALL));
 
     // Older rounds with no maintainer reply contribute nothing to the answered-earlier section.
     var older =
@@ -872,23 +917,35 @@ class FollowUpAnalyzerTest {
                     + "\"title\":\"Old\",\"description\":\"d\",\"suggestion_old\":\"o\","
                     + "\"suggestion_new\":\"n\"}],\"previous_findings_status\":[],\"summary\":null}"));
     var withOlder =
-        analyzer.buildPreviousFindingsContext(previous, true, List.of(), List.of(), older, BOT_ID);
+        analyzer.buildPreviousFindingsContext(
+            previous, true, List.of(), List.of(), older, BOT_ID, KnownWriters.ALL);
     assertTrue(withOlder.contains("src/A.java"));
     assertFalse(withOlder.contains("Answered in earlier rounds"));
     assertTrue(
         analyzer
-            .buildPreviousFindingsContext(previous, true, List.of(), List.of(), null, BOT_ID)
+            .buildPreviousFindingsContext(
+                previous, true, List.of(), List.of(), null, BOT_ID, KnownWriters.ALL)
             .contains("src/A.java"));
 
     assertTrue(
         analyzer
             .unreportedUnresolvedStatusesFromParsed(
-                null, List.of(), List.of(), new DiffLineResolver(Map.of()), BOT_ID)
+                null,
+                List.of(),
+                List.of(),
+                new DiffLineResolver(Map.of()),
+                BOT_ID,
+                KnownWriters.ALL)
             .isEmpty());
     assertTrue(
         analyzer
             .unreportedUnresolvedStatusesFromParsed(
-                List.of(), List.of(), List.of(), new DiffLineResolver(Map.of()), BOT_ID)
+                List.of(),
+                List.of(),
+                List.of(),
+                new DiffLineResolver(Map.of()),
+                BOT_ID,
+                KnownWriters.ALL)
             .isEmpty());
   }
 
@@ -1234,7 +1291,15 @@ class FollowUpAnalyzerTest {
 
     var context =
         analyzer.buildPreviousFindingsContext(
-            previous, true, List.of(), List.of(), List.of(), BOT_ID, Set.of(2));
+            previous,
+            true,
+            List.of(),
+            List.of(),
+            List.of(),
+            BOT_ID,
+            KnownWriters.ALL,
+            Set.of(2),
+            List.of());
 
     assertTrue(context.contains(listed(1, "CRITICAL", "src/A.java", 10, "First")), context);
     assertFalse(context.contains("Second"), context);
@@ -1319,7 +1384,7 @@ class FollowUpAnalyzerTest {
 
     var held =
         analyzer.unreportedUnresolvedStatuses(
-            List.of(PREVIOUS_JSON), List.of(), List.of(), resolver, BOT_ID);
+            List.of(PREVIOUS_JSON), List.of(), List.of(), resolver, BOT_ID, KnownWriters.ALL);
 
     assertEquals(List.of(1, 2), heldIds(held));
     assertTrue(held.stream().allMatch(s -> "unresolved".equals(s.status())));
@@ -1338,7 +1403,8 @@ class FollowUpAnalyzerTest {
                     new ReviewResponse.PreviousFindingStatus(2, "justified", "intentional")),
                 List.of(),
                 resolver,
-                BOT_ID)
+                BOT_ID,
+                KnownWriters.ALL)
             .isEmpty());
 
     var held =
@@ -1347,7 +1413,8 @@ class FollowUpAnalyzerTest {
             List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still")),
             List.of(),
             resolver,
-            BOT_ID);
+            BOT_ID,
+            KnownWriters.ALL);
     assertEquals(List.of(2), heldIds(held));
   }
 
@@ -1364,7 +1431,8 @@ class FollowUpAnalyzerTest {
                   new ReviewResponse.PreviousFindingStatus(2, "resolved", "fixed")),
               List.of(),
               resolver,
-              BOT_ID);
+              BOT_ID,
+              KnownWriters.ALL);
       assertEquals(
           List.of(1), heldIds(held), "status \"" + junk + "\" must not suppress the backstop");
     }
@@ -1383,7 +1451,8 @@ class FollowUpAnalyzerTest {
                     new ReviewResponse.PreviousFindingStatus(2, "Justified", "intentional")),
                 List.of(),
                 resolver,
-                BOT_ID)
+                BOT_ID,
+                KnownWriters.ALL)
             .isEmpty());
   }
 
@@ -1397,7 +1466,7 @@ class FollowUpAnalyzerTest {
 
     var held =
         analyzer.unreportedUnresolvedStatuses(
-            List.of(PREVIOUS_JSON), List.of(), comments, resolver, BOT_ID);
+            List.of(PREVIOUS_JSON), List.of(), comments, resolver, BOT_ID, KnownWriters.ALL);
 
     assertEquals(List.of(2), heldIds(held));
   }
@@ -1414,7 +1483,7 @@ class FollowUpAnalyzerTest {
 
     var held =
         analyzer.unreportedUnresolvedStatuses(
-            List.of(PREVIOUS_JSON), List.of(), comments, resolver, BOT_ID);
+            List.of(PREVIOUS_JSON), List.of(), comments, resolver, BOT_ID, KnownWriters.ALL);
 
     assertEquals(List.of(1, 2), heldIds(held));
   }
@@ -1431,7 +1500,7 @@ class FollowUpAnalyzerTest {
 
     var held =
         analyzer.unreportedUnresolvedStatuses(
-            List.of(PREVIOUS_JSON), List.of(), comments, resolver, BOT_ID);
+            List.of(PREVIOUS_JSON), List.of(), comments, resolver, BOT_ID, KnownWriters.ALL);
 
     assertEquals(List.of(1, 2), heldIds(held));
   }
@@ -1457,7 +1526,8 @@ class FollowUpAnalyzerTest {
             comment(101L, 100L, "src/A.java", "intentional, won't fix", "maintainer"));
 
     var held =
-        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), comments, resolver, BOT_ID);
+        analyzer.unreportedUnresolvedStatuses(
+            List.of(json), List.of(), comments, resolver, BOT_ID, KnownWriters.ALL);
 
     assertTrue(
         held.isEmpty(),
@@ -1573,7 +1643,8 @@ class FollowUpAnalyzerTest {
     var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
 
     var held =
-        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), comments, resolver, BOT_ID);
+        analyzer.unreportedUnresolvedStatuses(
+            List.of(json), List.of(), comments, resolver, BOT_ID, KnownWriters.ALL);
 
     assertEquals(List.of(1), heldIds(held));
   }
@@ -1607,7 +1678,8 @@ class FollowUpAnalyzerTest {
             comment(201L, 200L, "src/A.java", "intentional", "maintainer"));
 
     var held =
-        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), comments, resolver, BOT_ID);
+        analyzer.unreportedUnresolvedStatuses(
+            List.of(json), List.of(), comments, resolver, BOT_ID, KnownWriters.ALL);
 
     assertEquals(List.of(1), heldIds(held));
   }
@@ -1633,7 +1705,8 @@ class FollowUpAnalyzerTest {
             comment(101L, 100L, "src/A.java", "tracking this", BOT));
 
     var held =
-        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), comments, resolver, BOT_ID);
+        analyzer.unreportedUnresolvedStatuses(
+            List.of(json), List.of(), comments, resolver, BOT_ID, KnownWriters.ALL);
 
     assertEquals(List.of(1), heldIds(held));
   }
@@ -1651,7 +1724,7 @@ class FollowUpAnalyzerTest {
 
     var held =
         analyzer.unreportedUnresolvedStatuses(
-            List.of(json), List.of(), List.of(), resolver, BOT_ID);
+            List.of(json), List.of(), List.of(), resolver, BOT_ID, KnownWriters.ALL);
 
     assertEquals(List.of(1), heldIds(held));
   }
@@ -1662,7 +1735,7 @@ class FollowUpAnalyzerTest {
 
     var held =
         analyzer.unreportedUnresolvedStatuses(
-            List.of(PREVIOUS_JSON), List.of(), List.of(), resolver, BOT_ID);
+            List.of(PREVIOUS_JSON), List.of(), List.of(), resolver, BOT_ID, KnownWriters.ALL);
 
     assertEquals(List.of(1), heldIds(held));
   }
@@ -1685,7 +1758,13 @@ class FollowUpAnalyzerTest {
 
     var held =
         analyzer.unreportedUnresolvedStatusesFromParsed(
-            List.of(round), List.of(), List.of(), resolver, BOT_ID, renameTargets);
+            List.of(round),
+            List.of(),
+            List.of(),
+            resolver,
+            BOT_ID,
+            KnownWriters.ALL,
+            renameTargets);
 
     assertEquals(List.of(1), heldIds(held));
   }
@@ -1707,7 +1786,13 @@ class FollowUpAnalyzerTest {
 
     var held =
         analyzer.unreportedUnresolvedStatusesFromParsed(
-            List.of(round), List.of(), List.of(), resolver, BOT_ID, renameTargets);
+            List.of(round),
+            List.of(),
+            List.of(),
+            resolver,
+            BOT_ID,
+            KnownWriters.ALL,
+            renameTargets);
 
     assertEquals(List.of(1), heldIds(held));
   }
@@ -1733,26 +1818,29 @@ class FollowUpAnalyzerTest {
 
     assertTrue(
         analyzer
-            .unreportedUnresolvedStatuses(null, List.of(), List.of(), resolver, BOT_ID)
-            .isEmpty());
-    assertTrue(
-        analyzer
-            .unreportedUnresolvedStatuses(List.of(), List.of(), List.of(), resolver, BOT_ID)
+            .unreportedUnresolvedStatuses(
+                null, List.of(), List.of(), resolver, BOT_ID, KnownWriters.ALL)
             .isEmpty());
     assertTrue(
         analyzer
             .unreportedUnresolvedStatuses(
-                List.of("not json"), List.of(), List.of(), resolver, BOT_ID)
+                List.of(), List.of(), List.of(), resolver, BOT_ID, KnownWriters.ALL)
             .isEmpty());
     assertTrue(
         analyzer
             .unreportedUnresolvedStatuses(
-                List.of(PREVIOUS_JSON), List.of(), List.of(), null, BOT_ID)
+                List.of("not json"), List.of(), List.of(), resolver, BOT_ID, KnownWriters.ALL)
+            .isEmpty());
+    assertTrue(
+        analyzer
+            .unreportedUnresolvedStatuses(
+                List.of(PREVIOUS_JSON), List.of(), List.of(), null, BOT_ID, KnownWriters.ALL)
             .isEmpty());
     assertEquals(
         2,
         analyzer
-            .unreportedUnresolvedStatuses(List.of(PREVIOUS_JSON), null, List.of(), resolver, BOT_ID)
+            .unreportedUnresolvedStatuses(
+                List.of(PREVIOUS_JSON), null, List.of(), resolver, BOT_ID, KnownWriters.ALL)
             .size());
   }
 
@@ -1767,7 +1855,8 @@ class FollowUpAnalyzerTest {
             List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed B")),
             List.of(),
             resolver,
-            BOT_ID);
+            BOT_ID,
+            KnownWriters.ALL);
 
     assertEquals(1, held.size());
     assertTrue(held.stream().allMatch(s -> "unresolved".equals(s.status())));
@@ -1780,7 +1869,9 @@ class FollowUpAnalyzerTest {
             roundJson("src/B.java", 5, "B finding", "resolved"), roundJson("src/A.java", 10, "A"));
     var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
 
-    var held = analyzer.unreportedUnresolvedStatuses(prior, List.of(), List.of(), resolver, BOT_ID);
+    var held =
+        analyzer.unreportedUnresolvedStatuses(
+            prior, List.of(), List.of(), resolver, BOT_ID, KnownWriters.ALL);
 
     assertEquals(1, held.size());
   }
@@ -1813,7 +1904,12 @@ class FollowUpAnalyzerTest {
 
     var held =
         analyzer.unreportedUnresolvedStatuses(
-            List.of(round3, round2, round1), List.of(), List.of(), resolver, BOT_ID);
+            List.of(round3, round2, round1),
+            List.of(),
+            List.of(),
+            resolver,
+            BOT_ID,
+            KnownWriters.ALL);
 
     assertEquals(1, held.size());
   }
@@ -1825,7 +1921,9 @@ class FollowUpAnalyzerTest {
             roundJson("src/B.java", 5, "B finding", "justified"), roundJson("src/A.java", 10, "A"));
     var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
 
-    var held = analyzer.unreportedUnresolvedStatuses(prior, List.of(), List.of(), resolver, BOT_ID);
+    var held =
+        analyzer.unreportedUnresolvedStatuses(
+            prior, List.of(), List.of(), resolver, BOT_ID, KnownWriters.ALL);
 
     assertEquals(1, held.size());
   }
@@ -1844,7 +1942,8 @@ class FollowUpAnalyzerTest {
             List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed B")),
             List.of(),
             resolver,
-            BOT_ID);
+            BOT_ID,
+            KnownWriters.ALL);
 
     assertEquals(1, held.size());
   }
@@ -1854,7 +1953,9 @@ class FollowUpAnalyzerTest {
     var prior = List.of(roundJson("src/A.java", 10, "A"), roundJson("src/A.java", 10, "A"));
     var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
 
-    var held = analyzer.unreportedUnresolvedStatuses(prior, List.of(), List.of(), resolver, BOT_ID);
+    var held =
+        analyzer.unreportedUnresolvedStatuses(
+            prior, List.of(), List.of(), resolver, BOT_ID, KnownWriters.ALL);
 
     assertEquals(1, held.size());
   }
@@ -1874,7 +1975,7 @@ class FollowUpAnalyzerTest {
 
     var held =
         analyzer.unreportedUnresolvedStatuses(
-            List.of(json), List.of(), List.of(), resolver, BOT_ID);
+            List.of(json), List.of(), List.of(), resolver, BOT_ID, KnownWriters.ALL);
 
     assertEquals(2, held.size());
   }
@@ -1904,7 +2005,12 @@ class FollowUpAnalyzerTest {
   void unreportedUnresolvedShouldHoldDistinctFindingsSharingAnAnchorAtDifferentLines() {
     var held =
         analyzer.unreportedUnresolvedStatuses(
-            List.of(SHARED_ANCHOR_PAIR_JSON), List.of(), List.of(), sharedAnchorResolver(), BOT_ID);
+            List.of(SHARED_ANCHOR_PAIR_JSON),
+            List.of(),
+            List.of(),
+            sharedAnchorResolver(),
+            BOT_ID,
+            KnownWriters.ALL);
 
     assertEquals(List.of(1, 2), heldIds(held));
     assertTrue(held.stream().allMatch(s -> "unresolved".equals(s.status())));
@@ -1918,7 +2024,8 @@ class FollowUpAnalyzerTest {
             List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed #1")),
             List.of(),
             sharedAnchorResolver(),
-            BOT_ID);
+            BOT_ID,
+            KnownWriters.ALL);
 
     assertEquals(List.of(2), heldIds(held));
   }
@@ -1947,7 +2054,7 @@ class FollowUpAnalyzerTest {
 
     var held =
         analyzer.unreportedUnresolvedStatuses(
-            List.of(round2, round1), List.of(), List.of(), resolver, BOT_ID);
+            List.of(round2, round1), List.of(), List.of(), resolver, BOT_ID, KnownWriters.ALL);
 
     assertEquals(1, held.size());
   }
@@ -1962,7 +2069,8 @@ class FollowUpAnalyzerTest {
             List.of(new ReviewResponse.PreviousFindingStatus(1, "pending", "in progress")),
             List.of(),
             resolver,
-            BOT_ID);
+            BOT_ID,
+            KnownWriters.ALL);
 
     assertEquals(List.of(1, 2), heldIds(held));
   }
@@ -1989,7 +2097,8 @@ class FollowUpAnalyzerTest {
                 new ReviewResponse.PreviousFindingStatus(99, "resolved", "out of range")),
             List.of(),
             resolver,
-            BOT_ID);
+            BOT_ID,
+            KnownWriters.ALL);
 
     assertEquals(2, held.size());
     assertTrue(held.stream().allMatch(s -> "unresolved".equals(s.status())));
@@ -2020,7 +2129,7 @@ class FollowUpAnalyzerTest {
             .isPresent()); // old line drifted out of range
     var held =
         analyzer.unreportedUnresolvedStatuses(
-            List.of(json), List.of(), List.of(), resolver, BOT_ID);
+            List.of(json), List.of(), List.of(), resolver, BOT_ID, KnownWriters.ALL);
 
     assertEquals(List.of(1), heldIds(held));
   }
@@ -2055,7 +2164,7 @@ class FollowUpAnalyzerTest {
             .isPresent()); // raw proxy would over-block here
     var held =
         analyzer.unreportedUnresolvedStatuses(
-            List.of(json), List.of(), List.of(), resolver, BOT_ID);
+            List.of(json), List.of(), List.of(), resolver, BOT_ID, KnownWriters.ALL);
 
     assertTrue(held.isEmpty());
   }
@@ -2087,14 +2196,14 @@ class FollowUpAnalyzerTest {
 
     var held =
         analyzer.unreportedUnresolvedStatuses(
-            List.of(json), List.of(), List.of(), resolver, BOT_ID);
+            List.of(json), List.of(), List.of(), resolver, BOT_ID, KnownWriters.ALL);
 
     assertEquals(List.of(1), heldIds(held));
   }
 
   @Test
   void buildPreviousFindingsContextShouldReturnEmptyForNull() {
-    assertEquals("", analyzer.buildPreviousFindingsContext(null, BOT_ID));
+    assertEquals("", analyzer.buildPreviousFindingsContext(null, BOT_ID, KnownWriters.ALL));
   }
 
   @Test
@@ -2104,12 +2213,12 @@ class FollowUpAnalyzerTest {
             new GitHubReviewClient.ReviewResponse(
                 1L, null, "COMMENTED", "abc", new GitHubReviewClient.ReviewResponse.User(BOT)));
 
-    assertEquals("", analyzer.buildPreviousFindingsContext(reviews, BOT_ID));
+    assertEquals("", analyzer.buildPreviousFindingsContext(reviews, BOT_ID, KnownWriters.ALL));
   }
 
   @Test
   void buildPreviousFindingsContextShouldReturnEmptyForEmptyList() {
-    assertEquals("", analyzer.buildPreviousFindingsContext(List.of(), BOT_ID));
+    assertEquals("", analyzer.buildPreviousFindingsContext(List.of(), BOT_ID, KnownWriters.ALL));
   }
 
   @Test
@@ -2123,7 +2232,7 @@ class FollowUpAnalyzerTest {
                 "abc",
                 new GitHubReviewClient.ReviewResponse.User("other-user")));
 
-    assertEquals("", analyzer.buildPreviousFindingsContext(reviews, BOT_ID));
+    assertEquals("", analyzer.buildPreviousFindingsContext(reviews, BOT_ID, KnownWriters.ALL));
   }
 
   @Test
@@ -2143,7 +2252,7 @@ class FollowUpAnalyzerTest {
                 "def",
                 new GitHubReviewClient.ReviewResponse.User(BOT)));
 
-    var context = analyzer.buildPreviousFindingsContext(reviews, BOT_ID);
+    var context = analyzer.buildPreviousFindingsContext(reviews, BOT_ID, KnownWriters.ALL);
 
     assertTrue(context.contains("second review body"));
     assertFalse(context.contains("first review"));
@@ -2161,7 +2270,7 @@ class FollowUpAnalyzerTest {
         ], "previous_findings_status": [], "summary": null}
         """;
 
-    var context = analyzer.buildPreviousFindingsContext(json, List.of(), BOT_ID);
+    var context = analyzer.buildPreviousFindingsContext(json, List.of(), BOT_ID, KnownWriters.ALL);
 
     assertTrue(context.contains(listed(1, "HIGH", "src/A.java", 10, "SQL injection")));
     assertTrue(context.contains("Concatenated query"));
@@ -2199,7 +2308,7 @@ class FollowUpAnalyzerTest {
         ], "previous_findings_status": [], "summary": null}
         """;
 
-    var context = analyzer.buildPreviousFindingsContext(json, List.of(), BOT_ID);
+    var context = analyzer.buildPreviousFindingsContext(json, List.of(), BOT_ID, KnownWriters.ALL);
 
     assertTrue(context.contains(listed(1, "UNKNOWN", "src/C.java", 3, "Mystery issue")));
     assertEquals(1, context.lines().count());
@@ -2217,9 +2326,13 @@ class FollowUpAnalyzerTest {
                 new GitHubReviewClient.ReviewResponse.User(BOT)));
 
     assertTrue(
-        analyzer.buildPreviousFindingsContext(null, reviews, BOT_ID).contains("body findings"));
+        analyzer
+            .buildPreviousFindingsContext(null, reviews, BOT_ID, KnownWriters.ALL)
+            .contains("body findings"));
     assertTrue(
-        analyzer.buildPreviousFindingsContext("  ", reviews, BOT_ID).contains("body findings"));
+        analyzer
+            .buildPreviousFindingsContext("  ", reviews, BOT_ID, KnownWriters.ALL)
+            .contains("body findings"));
   }
 
   @Test
@@ -2233,7 +2346,8 @@ class FollowUpAnalyzerTest {
                 "abc",
                 new GitHubReviewClient.ReviewResponse.User(BOT)));
 
-    var context = analyzer.buildPreviousFindingsContext("{not json", reviews, BOT_ID);
+    var context =
+        analyzer.buildPreviousFindingsContext("{not json", reviews, BOT_ID, KnownWriters.ALL);
 
     assertTrue(context.contains("body findings"));
   }
@@ -2245,7 +2359,8 @@ class FollowUpAnalyzerTest {
         {"findings": [], "previous_findings_status": [], "summary": null}
         """;
 
-    assertEquals("", analyzer.buildPreviousFindingsContext(json, List.of(), BOT_ID));
+    assertEquals(
+        "", analyzer.buildPreviousFindingsContext(json, List.of(), BOT_ID, KnownWriters.ALL));
   }
 
   private static List<GitHubReviewClient.ReviewResponse> botReviews(String body) {
@@ -2272,11 +2387,11 @@ class FollowUpAnalyzerTest {
 
     assertEquals(
         "",
-        analyzer.buildPreviousFindingsContext(zeroFindingRound, reviews, BOT_ID),
+        analyzer.buildPreviousFindingsContext(zeroFindingRound, reviews, BOT_ID, KnownWriters.ALL),
         "a persisted round that legitimately found nothing must render no previous findings");
     assertEquals(
         "",
-        analyzer.buildPreviousFindingsContext(null, reviews, BOT_ID),
+        analyzer.buildPreviousFindingsContext(null, reviews, BOT_ID, KnownWriters.ALL),
         "the review-body fallback must discard a body the bot wrote about its own verdict");
   }
 
@@ -2289,31 +2404,33 @@ class FollowUpAnalyzerTest {
     assertEquals(
         "",
         analyzer.buildPreviousFindingsContext(
-            botReviews(PrSummaryGenerator.ZERO_ISSUES_MESSAGE), BOT_ID));
+            botReviews(PrSummaryGenerator.ZERO_ISSUES_MESSAGE), BOT_ID, KnownWriters.ALL));
     assertEquals(
         "",
         analyzer.buildPreviousFindingsContext(
             botReviews(ReviewResult.NO_ISSUES_CI_PENDING_LEAD_IN + "\n- Check **build** is failed"),
-            BOT_ID));
+            BOT_ID,
+            KnownWriters.ALL));
     assertEquals(
         "",
         analyzer.buildPreviousFindingsContext(
-            botReviews(ReviewResult.NO_ISSUES_CI_UNREADABLE_LEAD_IN), BOT_ID));
+            botReviews(ReviewResult.NO_ISSUES_CI_UNREADABLE_LEAD_IN), BOT_ID, KnownWriters.ALL));
     assertEquals(
         "",
         analyzer.buildPreviousFindingsContext(
-            botReviews(ReviewResult.truncationNotice(3)), BOT_ID));
-    assertEquals("", analyzer.buildPreviousFindingsContext(botReviews("   \n\n"), BOT_ID));
+            botReviews(ReviewResult.truncationNotice(3)), BOT_ID, KnownWriters.ALL));
+    assertEquals(
+        "", analyzer.buildPreviousFindingsContext(botReviews("   \n\n"), BOT_ID, KnownWriters.ALL));
     assertEquals(
         "1. [HIGH] src/A.java:10 — Unsafe regex",
         analyzer.buildPreviousFindingsContext(
-            botReviews("1. [HIGH] src/A.java:10 — Unsafe regex"), BOT_ID),
+            botReviews("1. [HIGH] src/A.java:10 — Unsafe regex"), BOT_ID, KnownWriters.ALL),
         "a legacy body carrying real findings is still the only context such a session has");
 
     var humanEcho = "No new issues in this revision, but the null check on line 12 is still wrong.";
     assertEquals(
         humanEcho,
-        analyzer.buildPreviousFindingsContext(botReviews(humanEcho), BOT_ID),
+        analyzer.buildPreviousFindingsContext(botReviews(humanEcho), BOT_ID, KnownWriters.ALL),
         "a body that only opens like the generated sentence carries a real finding and is kept");
   }
 
@@ -2474,7 +2591,7 @@ class FollowUpAnalyzerTest {
 
     var held =
         analyzer.unreportedUnresolvedStatuses(
-            List.of(round2, round1), List.of(), List.of(), resolver, BOT_ID);
+            List.of(round2, round1), List.of(), List.of(), resolver, BOT_ID, KnownWriters.ALL);
 
     assertEquals(1, held.size());
     assertEquals("unresolved", held.get(0).status());
@@ -2511,7 +2628,7 @@ class FollowUpAnalyzerTest {
 
     var held =
         analyzer.unreportedUnresolvedStatuses(
-            List.of(round2, round1), List.of(), comments, resolver, BOT_ID);
+            List.of(round2, round1), List.of(), comments, resolver, BOT_ID, KnownWriters.ALL);
 
     assertTrue(held.isEmpty());
   }
@@ -2575,7 +2692,13 @@ class FollowUpAnalyzerTest {
 
     var rechecked =
         analyzer.recheckDeclines(
-            RACE_PREVIOUS, justified(), comments, List.of(), BOT_ID, () -> DISPATCHING_DIFF);
+            RACE_PREVIOUS,
+            justified(),
+            comments,
+            List.of(),
+            BOT_ID,
+            KnownWriters.ALL,
+            () -> DISPATCHING_DIFF);
 
     assertEquals(1, rechecked.size());
     assertEquals(
@@ -2592,9 +2715,9 @@ class FollowUpAnalyzerTest {
 
   @Test
   void recheckShouldIgnoreARebuttalFromANonWriteAuthor() {
-    // The contradicting rebuttal text is supplied by a fork-PR author (author_association
-    // CONTRIBUTOR), not a maintainer. It must not drive the decline override — with no maintainer
-    // reply, the "exactly one reply" leg fails and the status is left untouched (F1).
+    // The only reply is a fork-PR author's (author_association CONTRIBUTOR), not a maintainer's.
+    // Its text must not drive the decline override, and it must not close the finding either:
+    // the model read it as a decline, but nobody with write access declined anything.
     var comments =
         List.of(
             comment(700L, null, PAUSE_FILE, "**MEDIUM — " + RACE_TITLE + "**", BOT),
@@ -2609,12 +2732,22 @@ class FollowUpAnalyzerTest {
 
     var rechecked =
         analyzer.recheckDeclines(
-            RACE_PREVIOUS, justified(), comments, List.of(), BOT_ID, () -> DISPATCHING_DIFF);
+            RACE_PREVIOUS,
+            justified(),
+            comments,
+            List.of(),
+            BOT_ID,
+            KnownWriters.ALL,
+            () -> DISPATCHING_DIFF);
 
     assertEquals(
-        "justified",
+        "unresolved",
         rechecked.get(0).status(),
-        "a rebuttal from an author without write access must not drive the override");
+        "a reply from an author without write access must not close the finding");
+    assertEquals(
+        RebuttalContradiction.unconfirmedDeclineNote(RACE_PREVIOUS.get(0), BOT_ID),
+        rechecked.get(0).note(),
+        "and its text is not weighed as a maintainer's rebuttal");
   }
 
   @Test
@@ -2624,7 +2757,13 @@ class FollowUpAnalyzerTest {
 
     var rechecked =
         analyzer.recheckDeclines(
-            RACE_PREVIOUS, justified(), comments, List.of(), BOT_ID, () -> DISPATCHING_DIFF);
+            RACE_PREVIOUS,
+            justified(),
+            comments,
+            List.of(),
+            BOT_ID,
+            KnownWriters.ALL,
+            () -> DISPATCHING_DIFF);
 
     assertEquals(
         "justified",
@@ -2642,7 +2781,13 @@ class FollowUpAnalyzerTest {
 
     var rechecked =
         analyzer.recheckDeclines(
-            RACE_PREVIOUS, justified(), comments, List.of(), BOT_ID, () -> DISPATCHING_DIFF);
+            RACE_PREVIOUS,
+            justified(),
+            comments,
+            List.of(),
+            BOT_ID,
+            KnownWriters.ALL,
+            () -> DISPATCHING_DIFF);
 
     assertEquals(
         "justified",
@@ -2660,7 +2805,13 @@ class FollowUpAnalyzerTest {
 
     var rechecked =
         disabled.recheckDeclines(
-            RACE_PREVIOUS, justified(), comments, List.of(), BOT_ID, () -> DISPATCHING_DIFF);
+            RACE_PREVIOUS,
+            justified(),
+            comments,
+            List.of(),
+            BOT_ID,
+            KnownWriters.ALL,
+            () -> DISPATCHING_DIFF);
 
     assertEquals("justified", rechecked.get(0).status());
   }
@@ -2678,23 +2829,36 @@ class FollowUpAnalyzerTest {
     // reply lead-in, so the review body explains why the reply did not settle it (#963).
     var kept =
         analyzer.recheckDeclines(
-            RACE_PREVIOUS, unresolved, comments, List.of(), BOT_ID, () -> DISPATCHING_DIFF);
+            RACE_PREVIOUS,
+            unresolved,
+            comments,
+            List.of(),
+            BOT_ID,
+            KnownWriters.ALL,
+            () -> DISPATCHING_DIFF);
     assertEquals(1, kept.size());
     assertEquals("unresolved", kept.get(0).status());
     assertEquals(RebuttalContradiction.unsettledReplyNote("still there", true), kept.get(0).note());
-    // No thread to read the rebuttal from.
+    // No thread at all: nobody with write access declined it, so it does not stand.
     assertEquals(
-        "justified",
+        "unresolved",
         analyzer
             .recheckDeclines(
-                RACE_PREVIOUS, justified(), List.of(), List.of(), BOT_ID, () -> DISPATCHING_DIFF)
+                RACE_PREVIOUS,
+                justified(),
+                List.of(),
+                List.of(),
+                BOT_ID,
+                KnownWriters.ALL,
+                () -> DISPATCHING_DIFF)
             .get(0)
             .status());
     // No reviewed code to check the rebuttal against.
     assertEquals(
         "justified",
         analyzer
-            .recheckDeclines(RACE_PREVIOUS, justified(), comments, List.of(), BOT_ID, () -> "")
+            .recheckDeclines(
+                RACE_PREVIOUS, justified(), comments, List.of(), BOT_ID, KnownWriters.ALL, () -> "")
             .get(0)
             .status());
     // Status id outside the prior round.
@@ -2703,9 +2867,18 @@ class FollowUpAnalyzerTest {
     assertEquals(
         outOfRange,
         analyzer.recheckDeclines(
-            RACE_PREVIOUS, outOfRange, comments, List.of(), BOT_ID, () -> DISPATCHING_DIFF));
+            RACE_PREVIOUS,
+            outOfRange,
+            comments,
+            List.of(),
+            BOT_ID,
+            KnownWriters.ALL,
+            () -> DISPATCHING_DIFF));
     assertTrue(
-        analyzer.recheckDeclines(RACE_PREVIOUS, null, comments, List.of(), BOT_ID, null).isEmpty());
+        analyzer
+            .recheckDeclines(
+                RACE_PREVIOUS, null, comments, List.of(), BOT_ID, KnownWriters.ALL, null)
+            .isEmpty());
   }
 
   /**
@@ -2722,8 +2895,6 @@ class FollowUpAnalyzerTest {
             "no statuses at all", RACE_PREVIOUS, List.of(), thread, supplier(DISPATCHING_DIFF)),
         arguments("no prior round", null, justified(), thread, supplier(DISPATCHING_DIFF)),
         arguments("empty prior round", List.of(), justified(), thread, supplier(DISPATCHING_DIFF)),
-        arguments(
-            "no inline comments", RACE_PREVIOUS, justified(), null, supplier(DISPATCHING_DIFF)),
         arguments("no code supplier", RACE_PREVIOUS, justified(), thread, null),
         arguments("supplier yields null", RACE_PREVIOUS, justified(), thread, supplier(null)),
         arguments("supplier yields blank", RACE_PREVIOUS, justified(), thread, supplier("   \n")),
@@ -2732,13 +2903,205 @@ class FollowUpAnalyzerTest {
             RACE_PREVIOUS,
             List.of(new ReviewResponse.PreviousFindingStatus(0, "justified", "bad id")),
             thread,
-            supplier(DISPATCHING_DIFF)),
+            supplier(DISPATCHING_DIFF)));
+  }
+
+  /** The thread inputs under which nobody with write access can be behind a decline. */
+  static Stream<Arguments> noMaintainerBehindTheDecline() {
+    return Stream.of(
+        arguments("no inline comments", null),
+        arguments("no thread for the finding", List.of()),
         arguments(
-            "thread cannot be located",
+            "only another finding's thread",
+            List.of(comment(900L, null, "src/Unrelated.java", "**LOW — something else**", BOT))),
+        arguments(
+            "a thread nobody replied on",
+            List.of(comment(700L, null, PAUSE_FILE, "**MEDIUM — " + RACE_TITLE + "**", BOT))),
+        arguments(
+            "only the bot replied",
+            List.of(
+                comment(700L, null, PAUSE_FILE, "**MEDIUM — " + RACE_TITLE + "**", BOT),
+                comment(701L, 700L, PAUSE_FILE, "Intentional, not changing it.", BOT))),
+        arguments(
+            "a reply with no body from a maintainer",
+            List.of(
+                comment(700L, null, PAUSE_FILE, "**MEDIUM — " + RACE_TITLE + "**", BOT),
+                comment(701L, 700L, PAUSE_FILE, "  ", "maintainer"))),
+        arguments(
+            "a reply from the pull request's author",
+            List.of(
+                comment(700L, null, PAUSE_FILE, "**MEDIUM — " + RACE_TITLE + "**", BOT),
+                comment(
+                    701L,
+                    700L,
+                    PAUSE_FILE,
+                    "Intentional, this is the house style. Not changing it.",
+                    "fork-author",
+                    "CONTRIBUTOR"))),
+        arguments(
+            "a reply from an organization member whose write access was not confirmed",
+            List.of(
+                comment(700L, null, PAUSE_FILE, "**MEDIUM — " + RACE_TITLE + "**", BOT),
+                comment(
+                    701L,
+                    700L,
+                    PAUSE_FILE,
+                    "Intentional, this is the house style. Not changing it.",
+                    "read-only-member",
+                    "MEMBER"))));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("noMaintainerBehindTheDecline")
+  void aJustifiedWithNoWriteAccessReplyOnItsThreadGoesBackToUnresolved(
+      String name, List<GitHubReviewClient.PullRequestComment> comments) {
+    var rechecked =
+        analyzer.recheckDeclines(
             RACE_PREVIOUS,
             justified(),
-            List.of(comment(900L, null, "src/Unrelated.java", "**LOW — something else**", BOT)),
-            supplier(DISPATCHING_DIFF)));
+            comments,
+            List.of(),
+            BOT_ID,
+            KnownWriters.ALL,
+            () -> DISPATCHING_DIFF);
+
+    assertEquals(1, rechecked.size(), name);
+    assertEquals("unresolved", rechecked.get(0).status(), name);
+    assertEquals(
+        RebuttalContradiction.unconfirmedDeclineNote(RACE_PREVIOUS.get(0), BOT_ID),
+        rechecked.get(0).note(),
+        name);
+    assertTrue(
+        analyzer.hasUnresolved(
+            rechecked.stream()
+                .map(s -> new ReviewResult.PreviousFindingStatus(s.id(), s.status(), s.note()))
+                .toList()),
+        "the finding holds the approval: " + name);
+  }
+
+  @Test
+  void aJustifiedNobodyConfirmedStaysOpenWithTheRecheckDisabledAndNoReviewedCode() {
+    var comments =
+        List.of(
+            comment(700L, null, PAUSE_FILE, "**MEDIUM — " + RACE_TITLE + "**", BOT),
+            comment(701L, 700L, PAUSE_FILE, "Won't fix, by design.", "fork-author", "CONTRIBUTOR"));
+    var recheckOff = new FollowUpAnalyzer(new ObjectMapper(), false);
+
+    for (Supplier<String> code : List.<Supplier<String>>of(() -> DISPATCHING_DIFF, () -> "")) {
+      assertEquals(
+          "unresolved",
+          recheckOff
+              .recheckDeclines(
+                  RACE_PREVIOUS, justified(), comments, List.of(), BOT_ID, KnownWriters.ALL, code)
+              .get(0)
+              .status(),
+          "who declined is asked whether or not the reason is re-checked");
+    }
+    assertEquals(
+        "unresolved",
+        recheckOff
+            .recheckDeclines(
+                RACE_PREVIOUS, justified(), comments, List.of(), BOT_ID, KnownWriters.ALL, null)
+            .get(0)
+            .status());
+  }
+
+  @Test
+  void aJustifiedStandsOnceAConfirmedWriterRepliesOnTheThread() {
+    var comments =
+        List.of(
+            comment(700L, null, PAUSE_FILE, "**MEDIUM — " + RACE_TITLE + "**", BOT),
+            comment(701L, 700L, PAUSE_FILE, "Won't fix, by design.", "fork-author", "CONTRIBUTOR"),
+            comment(702L, 700L, PAUSE_FILE, "Agreed, accepted risk.", "maintainer", "MEMBER"));
+
+    assertEquals(
+        justified(),
+        analyzer.recheckDeclines(
+            RACE_PREVIOUS,
+            justified(),
+            comments,
+            List.of(),
+            BOT_ID,
+            KnownWriters.ALL,
+            () -> DISPATCHING_DIFF));
+    // The same thread, in a review that could confirm nobody: the member's reply counts for
+    // nothing either, and the finding stays open.
+    assertEquals(
+        "unresolved",
+        analyzer
+            .recheckDeclines(
+                RACE_PREVIOUS,
+                justified(),
+                comments,
+                List.of(),
+                BOT_ID,
+                VerifiedWriters.none(),
+                () -> DISPATCHING_DIFF)
+            .get(0)
+            .status());
+  }
+
+  @Test
+  void aJustifiedNobodyRepliedToStandsOnlyThroughAConfirmedWritersConversationDecline() {
+    var forkReply =
+        List.of(
+            comment(700L, null, PAUSE_FILE, "**MEDIUM — " + RACE_TITLE + "**", BOT),
+            comment(701L, 700L, PAUSE_FILE, "Won't fix, by design.", "fork-author", "CONTRIBUTOR"));
+    var decline = DECLINES_RACE + "\n\nAccepted risk for this release.";
+
+    var byMaintainer =
+        analyzer.recheckDeclines(
+            RACE_PREVIOUS,
+            justified(),
+            forkReply,
+            List.of(declines(901L, decline)),
+            BOT_ID,
+            KnownWriters.ALL,
+            () -> DISPATCHING_DIFF);
+    assertEquals("justified", byMaintainer.get(0).status());
+    assertEquals(FollowUpAnalyzer.conversationDeclinedNote(BOT_ID), byMaintainer.get(0).note());
+
+    var byUnconfirmedMember =
+        analyzer.recheckDeclines(
+            RACE_PREVIOUS,
+            justified(),
+            forkReply,
+            List.of(
+                new GitHubCommentClient.IssueComment(
+                    901L,
+                    decline,
+                    new GitHubReviewClient.ReviewResponse.User("read-only-member"),
+                    "MEMBER")),
+            BOT_ID,
+            KnownWriters.ALL,
+            () -> DISPATCHING_DIFF);
+    assertEquals("unresolved", byUnconfirmedMember.get(0).status());
+  }
+
+  @Test
+  void aStatusThatNamesNoFindingOfThePreviousRoundIsLeftAsReported() {
+    var statuses =
+        List.of(
+            new ReviewResponse.PreviousFindingStatus(0, "justified", "below the round"),
+            new ReviewResponse.PreviousFindingStatus(9, "justified", "past the round"),
+            new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed"));
+
+    assertEquals(
+        statuses,
+        FollowUpAnalyzer.withoutUnconfirmedDeclines(
+            RACE_PREVIOUS, statuses, List.of(), BOT_ID, VerifiedWriters.none()),
+        "an id outside the round names nothing, and a resolved is not a decline");
+    var noDecline = unresolvedRace();
+    assertSame(
+        noDecline,
+        FollowUpAnalyzer.withoutUnconfirmedDeclines(
+            RACE_PREVIOUS, noDecline, List.of(), BOT_ID, VerifiedWriters.none()));
+    var reported = justified();
+    assertSame(
+        reported,
+        FollowUpAnalyzer.withoutUnconfirmedDeclines(
+            null, reported, List.of(), BOT_ID, VerifiedWriters.none()),
+        "no stored round to map ids onto");
   }
 
   private static Supplier<String> supplier(String value) {
@@ -2755,7 +3118,8 @@ class FollowUpAnalyzerTest {
       Supplier<String> code) {
     assertEquals(
         statuses,
-        analyzer.recheckDeclines(previous, statuses, comments, List.of(), BOT_ID, code),
+        analyzer.recheckDeclines(
+            previous, statuses, comments, List.of(), BOT_ID, KnownWriters.ALL, code),
         "the decline must survive untouched when the re-check has nothing to verify: " + name);
   }
 
@@ -2777,7 +3141,13 @@ class FollowUpAnalyzerTest {
 
     var rechecked =
         analyzer.recheckDeclines(
-            twoFindings, mixed, comments, List.of(), BOT_ID, () -> DISPATCHING_DIFF);
+            twoFindings,
+            mixed,
+            comments,
+            List.of(),
+            BOT_ID,
+            KnownWriters.ALL,
+            () -> DISPATCHING_DIFF);
 
     assertEquals("unresolved", rechecked.get(0).status());
     assertEquals(
@@ -2811,7 +3181,13 @@ class FollowUpAnalyzerTest {
 
     var rechecked =
         analyzer.recheckDeclines(
-            RACE_PREVIOUS, justified(), comments, List.of(), BOT_ID, () -> DISPATCHING_DIFF);
+            RACE_PREVIOUS,
+            justified(),
+            comments,
+            List.of(),
+            BOT_ID,
+            KnownWriters.ALL,
+            () -> DISPATCHING_DIFF);
 
     assertEquals(
         "unresolved",
@@ -2837,7 +3213,13 @@ class FollowUpAnalyzerTest {
         "justified",
         configured
             .recheckDeclines(
-                RACE_PREVIOUS, justified(), comments, List.of(), BOT_ID, () -> DISPATCHING_DIFF)
+                RACE_PREVIOUS,
+                justified(),
+                comments,
+                List.of(),
+                BOT_ID,
+                KnownWriters.ALL,
+                () -> DISPATCHING_DIFF)
             .get(0)
             .status(),
         "the injected constructor must honour thrillhousebot.review.decline-recheck-enabled");
@@ -2885,7 +3267,13 @@ class FollowUpAnalyzerTest {
   private List<ReviewResponse.PreviousFindingStatus> conversationRecheck(
       List<GitHubCommentClient.IssueComment> conversation) {
     return analyzer.recheckDeclines(
-        RACE_PREVIOUS, unresolvedRace(), List.of(), conversation, BOT_ID, () -> DISPATCHING_DIFF);
+        RACE_PREVIOUS,
+        unresolvedRace(),
+        List.of(),
+        conversation,
+        BOT_ID,
+        KnownWriters.ALL,
+        () -> DISPATCHING_DIFF);
   }
 
   @Test
@@ -2951,6 +3339,7 @@ class FollowUpAnalyzerTest {
             List.of(),
             declinesRace(ASYNC_AFTER_ACK),
             BOT_ID,
+            KnownWriters.ALL,
             () -> DISPATCHING_DIFF);
 
     assertEquals("justified", rechecked.get(0).status());
@@ -2973,6 +3362,7 @@ class FollowUpAnalyzerTest {
             List.of(),
             declinesRace(ASYNC_AFTER_ACK),
             BOT_ID,
+            KnownWriters.ALL,
             code);
 
     assertEquals("justified", rechecked.get(0).status(), name);
@@ -3019,6 +3409,7 @@ class FollowUpAnalyzerTest {
             List.of(),
             directiveOnly,
             BOT_ID,
+            KnownWriters.ALL,
             () -> DISPATCHING_DIFF);
 
     assertEquals("justified", rechecked.get(0).status());
@@ -3225,7 +3616,7 @@ class FollowUpAnalyzerTest {
 
     var rechecked =
         analyzer.recheckDeclines(
-            previous, statuses, List.of(), both, BOT_ID, () -> DISPATCHING_DIFF);
+            previous, statuses, List.of(), both, BOT_ID, KnownWriters.ALL, () -> DISPATCHING_DIFF);
 
     assertEquals("unresolved", rechecked.get(0).status(), "the first reason is contradicted");
     assertEquals(
@@ -3330,7 +3721,6 @@ class FollowUpAnalyzerTest {
   /** Inputs with nothing to apply a conversation decline to; each hands the statuses back as-is. */
   static Stream<Arguments> conversationDeclineNoOpInputs() {
     var declined = declinesRace(ASYNC_AFTER_ACK);
-    var justified = justified();
     var noFile =
         List.of(new ReviewResponse.Finding("medium", "low", null, 60, RACE_TITLE, "d", null, null));
     var noContent =
@@ -3339,7 +3729,6 @@ class FollowUpAnalyzerTest {
         arguments("no prior round", null, unresolvedRace(), declined),
         arguments("no conversation", RACE_PREVIOUS, unresolvedRace(), null),
         arguments("empty conversation", RACE_PREVIOUS, unresolvedRace(), List.of()),
-        arguments("status already settled", RACE_PREVIOUS, justified, declined),
         arguments(
             "id below the prior round",
             RACE_PREVIOUS,
@@ -3365,7 +3754,13 @@ class FollowUpAnalyzerTest {
     assertEquals(
         statuses,
         analyzer.recheckDeclines(
-            previous, statuses, List.of(), conversation, BOT_ID, () -> DISPATCHING_DIFF),
+            previous,
+            statuses,
+            List.of(),
+            conversation,
+            BOT_ID,
+            KnownWriters.ALL,
+            () -> DISPATCHING_DIFF),
         name);
   }
 
@@ -3403,6 +3798,7 @@ class FollowUpAnalyzerTest {
             raceThread(ASYNC_AFTER_ACK),
             conversation,
             BOT_ID,
+            KnownWriters.ALL,
             () -> DISPATCHING_DIFF);
 
     assertEquals("unresolved", rechecked.get(0).status(), "the thread decline is overturned");
@@ -3441,7 +3837,13 @@ class FollowUpAnalyzerTest {
 
     var rechecked =
         analyzer.recheckDeclines(
-            previous, statuses, List.of(), conversation, BOT_ID, () -> DISPATCHING_DIFF);
+            previous,
+            statuses,
+            List.of(),
+            conversation,
+            BOT_ID,
+            KnownWriters.ALL,
+            () -> DISPATCHING_DIFF);
 
     assertEquals(
         "unresolved",
@@ -3472,6 +3874,7 @@ class FollowUpAnalyzerTest {
             raceThread(ASYNC_AFTER_ACK),
             conversation,
             BOT_ID,
+            KnownWriters.ALL,
             () -> DISPATCHING_DIFF);
 
     assertEquals(
@@ -3554,7 +3957,7 @@ class FollowUpAnalyzerTest {
         conversation,
         resolver,
         BOT_ID,
-        Map.of());
+        KnownWriters.ALL);
   }
 
   @Test
@@ -3957,7 +4360,7 @@ class FollowUpAnalyzerTest {
             List.of(maintainerSays(body)),
             resolver,
             BOT_ID,
-            Map.of());
+            KnownWriters.ALL);
 
     assertEquals(cleared ? List.of() : List.of(1), heldIds(held), name);
   }
@@ -3980,7 +4383,7 @@ class FollowUpAnalyzerTest {
         List.of(maintainerSays(body)),
         resolver,
         BOT_ID,
-        Map.of());
+        KnownWriters.ALL);
   }
 
   @Test
@@ -4061,7 +4464,8 @@ class FollowUpAnalyzerTest {
             previousFindings(),
             bothUnresolved(),
             List.of(maintainerSays(CLEARS_FINDING_ONE)),
-            BOT_ID);
+            BOT_ID,
+            KnownWriters.ALL);
 
     assertEquals(
         List.of("resolved", "unresolved"),
@@ -4081,7 +4485,11 @@ class FollowUpAnalyzerTest {
     assertEquals(
         statuses,
         analyzer.clearNamedInConversation(
-            previousFindings(), statuses, List.of(maintainerSays(CLEARS_FINDING_ONE)), BOT_ID),
+            previousFindings(),
+            statuses,
+            List.of(maintainerSays(CLEARS_FINDING_ONE)),
+            BOT_ID,
+            KnownWriters.ALL),
         "only an in-range unresolved status may be rewritten by a conversation clear");
   }
 
@@ -4090,21 +4498,29 @@ class FollowUpAnalyzerTest {
     var statuses = bothUnresolved();
     var conversation = List.of(maintainerSays(CLEARS_FINDING_ONE));
 
-    assertEquals(List.of(), analyzer.clearNamedInConversation(null, null, conversation, BOT_ID));
     assertEquals(
         List.of(),
-        analyzer.clearNamedInConversation(previousFindings(), List.of(), conversation, BOT_ID));
+        analyzer.clearNamedInConversation(null, null, conversation, BOT_ID, KnownWriters.ALL));
+    assertEquals(
+        List.of(),
+        analyzer.clearNamedInConversation(
+            previousFindings(), List.of(), conversation, BOT_ID, KnownWriters.ALL));
     assertSame(
         statuses,
-        analyzer.clearNamedInConversation(null, statuses, conversation, BOT_ID),
+        analyzer.clearNamedInConversation(null, statuses, conversation, BOT_ID, KnownWriters.ALL),
         "no prior round means no finding to name");
     assertSame(
-        statuses, analyzer.clearNamedInConversation(List.of(), statuses, conversation, BOT_ID));
-    assertSame(
-        statuses, analyzer.clearNamedInConversation(previousFindings(), statuses, null, BOT_ID));
+        statuses,
+        analyzer.clearNamedInConversation(
+            List.of(), statuses, conversation, BOT_ID, KnownWriters.ALL));
     assertSame(
         statuses,
-        analyzer.clearNamedInConversation(previousFindings(), statuses, List.of(), BOT_ID));
+        analyzer.clearNamedInConversation(
+            previousFindings(), statuses, null, BOT_ID, KnownWriters.ALL));
+    assertSame(
+        statuses,
+        analyzer.clearNamedInConversation(
+            previousFindings(), statuses, List.of(), BOT_ID, KnownWriters.ALL));
   }
 
   @Test
@@ -4120,7 +4536,8 @@ class FollowUpAnalyzerTest {
             analyzer.parseResponse(json).findings(),
             statuses,
             List.of(maintainerSays("@thrillhousebot resolved null:10 — SQL injection")),
-            BOT_ID),
+            BOT_ID,
+            KnownWriters.ALL),
         "a finding that cannot be placed in a file cannot be named by a locator");
   }
 
@@ -4411,7 +4828,8 @@ class FollowUpAnalyzerTest {
                     "CHANGES_REQUESTED",
                     "sha",
                     new GitHubReviewClient.ReviewResponse.User(BOT))),
-            BOT_ID);
+            BOT_ID,
+            KnownWriters.ALL);
 
     assertFalse(
         context.contains("Missing null check"),
@@ -4551,7 +4969,7 @@ class FollowUpAnalyzerTest {
 
     var pruned =
         FollowUpAnalyzer.withoutPreviouslyLitigated(
-            current, twiceLitigatedRounds(), List.of(), bothCleared(), BOT_ID);
+            current, twiceLitigatedRounds(), List.of(), bothCleared(), BOT_ID, KnownWriters.ALL);
 
     assertEquals(List.of("Unrelated, on an anchor nobody litigated"), titlesOf(pruned));
     assertEquals(
@@ -4584,7 +5002,8 @@ class FollowUpAnalyzerTest {
             twiceLitigatedRounds(),
             List.of(),
             List.of(declinesLitigated(LITIGATED_ONE, 901L), declinesLitigated(LITIGATED_TWO, 902L)),
-            BOT_ID);
+            BOT_ID,
+            KnownWriters.ALL);
 
     assertEquals(List.of(), titlesOf(pruned));
   }
@@ -4605,7 +5024,8 @@ class FollowUpAnalyzerTest {
             twiceLitigatedRounds(),
             replies,
             List.of(),
-            BOT_ID);
+            BOT_ID,
+            KnownWriters.ALL);
 
     assertEquals(List.of(), titlesOf(pruned));
   }
@@ -4618,7 +5038,12 @@ class FollowUpAnalyzerTest {
 
     var pruned =
         FollowUpAnalyzer.withoutPreviouslyLitigated(
-            withCurrent(confident), twiceLitigatedRounds(), List.of(), bothCleared(), BOT_ID);
+            withCurrent(confident),
+            twiceLitigatedRounds(),
+            List.of(),
+            bothCleared(),
+            BOT_ID,
+            KnownWriters.ALL);
 
     assertEquals(List.of("The floor is dropped outright"), titlesOf(pruned));
   }
@@ -4632,7 +5057,8 @@ class FollowUpAnalyzerTest {
             twiceLitigatedRounds(),
             List.of(),
             List.of(clears(LITIGATED_ONE, 901L)),
-            BOT_ID);
+            BOT_ID,
+            KnownWriters.ALL);
 
     assertEquals(List.of("A second hypothesis on the same lines"), titlesOf(pruned));
   }
@@ -4648,7 +5074,8 @@ class FollowUpAnalyzerTest {
             List.of(roundOf(repeated), roundOf(LITIGATED_ONE)),
             List.of(),
             List.of(clears(LITIGATED_ONE, 901L), clears(repeated, 902L)),
-            BOT_ID);
+            BOT_ID,
+            KnownWriters.ALL);
 
     assertEquals(List.of("A second hypothesis on the same lines"), titlesOf(pruned));
   }
@@ -4663,7 +5090,8 @@ class FollowUpAnalyzerTest {
             twiceLitigatedRounds(),
             List.of(),
             bothCleared(),
-            BOT_ID);
+            BOT_ID,
+            KnownWriters.ALL);
 
     assertEquals(
         List.of("Same lines, another file", "Same file, far from the litigated lines"),
@@ -4677,7 +5105,7 @@ class FollowUpAnalyzerTest {
     assertSame(
         untouched,
         FollowUpAnalyzer.withoutPreviouslyLitigated(
-            untouched, twiceLitigatedRounds(), List.of(), List.of(), BOT_ID),
+            untouched, twiceLitigatedRounds(), List.of(), List.of(), BOT_ID, KnownWriters.ALL),
         "no maintainer acted, so nothing has been litigated");
   }
 
@@ -4687,13 +5115,13 @@ class FollowUpAnalyzerTest {
     assertSame(
         empty,
         FollowUpAnalyzer.withoutPreviouslyLitigated(
-            empty, twiceLitigatedRounds(), List.of(), bothCleared(), BOT_ID));
+            empty, twiceLitigatedRounds(), List.of(), bothCleared(), BOT_ID, KnownWriters.ALL));
 
     var firstRound = withCurrent(speculative("src/A.java", 12, "A first hypothesis"));
     assertSame(
         firstRound,
         FollowUpAnalyzer.withoutPreviouslyLitigated(
-            firstRound, List.of(), List.of(), bothCleared(), BOT_ID));
+            firstRound, List.of(), List.of(), bothCleared(), BOT_ID, KnownWriters.ALL));
   }
 
   private static ReviewResponse.Finding openFinding(int line, String title, String description) {
@@ -4770,7 +5198,15 @@ class FollowUpAnalyzerTest {
 
     var held =
         analyzer.heldPreviousFindings(
-            prior, List.of(), List.of(), List.of(), resolver, BOT_ID, Map.of());
+            prior,
+            List.of(),
+            List.of(),
+            List.of(),
+            resolver,
+            BOT_ID,
+            KnownWriters.ALL,
+            Map.of(),
+            null);
 
     assertEquals(
         backstopWith(List.of()), held.stream().map(FollowUpAnalyzer.HeldPrevious::status).toList());
@@ -4825,6 +5261,7 @@ class FollowUpAnalyzerTest {
         List.of(),
         resolver,
         BOT_ID,
+        KnownWriters.ALL,
         Map.of(),
         code);
   }
@@ -5237,6 +5674,7 @@ class FollowUpAnalyzerTest {
         earlierRaceThread(replies),
         List.of(),
         BOT_ID,
+        KnownWriters.ALL,
         () -> "+counter.bump();");
   }
 
@@ -5296,6 +5734,7 @@ class FollowUpAnalyzerTest {
             earlierRaceThread(RACE_WRONG_DECLINE),
             List.of(),
             BOT_ID,
+            KnownWriters.ALL,
             () -> "+counter.bump();"));
   }
 
@@ -5375,7 +5814,7 @@ class FollowUpAnalyzerTest {
             List.of(),
             resolver,
             BOT_ID,
-            Map.of());
+            KnownWriters.ALL);
 
     assertEquals(List.of(2), heldIds(statuses));
   }
@@ -5411,6 +5850,7 @@ class FollowUpAnalyzerTest {
             List.of(),
             resolver,
             BOT_ID,
+            KnownWriters.ALL,
             Map.of(),
             () -> {
               reads[0]++;
@@ -5471,6 +5911,7 @@ class FollowUpAnalyzerTest {
                 threads,
                 List.of(),
                 BOT_ID,
+                KnownWriters.ALL,
                 () -> "+counter.bump();")
             .isEmpty());
   }
@@ -5567,6 +6008,7 @@ class FollowUpAnalyzerTest {
                 List.of(),
                 resolver,
                 BOT_ID,
+                KnownWriters.ALL,
                 Map.of(),
                 () -> "+counter.bump();")
             .stream()
@@ -5614,6 +6056,7 @@ class FollowUpAnalyzerTest {
                 List.of(),
                 resolver,
                 BOT_ID,
+                KnownWriters.ALL,
                 Map.of(),
                 () -> "+counter.bump();")
             .stream()
@@ -5658,6 +6101,7 @@ class FollowUpAnalyzerTest {
         conversation,
         new DiffLineResolver(patches),
         BOT_ID,
+        KnownWriters.ALL,
         Map.of(),
         () -> "+unrelated();");
   }
@@ -5754,6 +6198,7 @@ class FollowUpAnalyzerTest {
             List.of(),
             new DiffLineResolver(Map.of("src/B.java", patch(5), "src/C.java", patch(1))),
             BOT_ID,
+            KnownWriters.ALL,
             Map.of(),
             () -> "+unrelated();");
 
@@ -5782,6 +6227,7 @@ class FollowUpAnalyzerTest {
             List.of(),
             new DiffLineResolver(Map.of("src/B.java", patch(5), "src/C.java", patch(1))),
             BOT_ID,
+            KnownWriters.ALL,
             Map.of(),
             () -> "+unrelated();");
 
@@ -5829,6 +6275,7 @@ class FollowUpAnalyzerTest {
             List.of(),
             new DiffLineResolver(Map.of("src/B.java", patch(5))),
             BOT_ID,
+            KnownWriters.ALL,
             Map.of(),
             () -> "+unrelated();");
 
@@ -6033,7 +6480,8 @@ class FollowUpAnalyzerTest {
               List.of(
                   removedLineRoot,
                   comment(400L, 300L, "src/A.java", "@thrillhousebot resolved " + naming, "m")),
-              BOT_ID);
+              BOT_ID,
+              KnownWriters.ALL);
       assertEquals("resolved", rewritten.get(0).status(), naming);
     }
 
@@ -6045,7 +6493,8 @@ class FollowUpAnalyzerTest {
             List.of(
                 removedLineRoot,
                 comment(400L, 300L, "src/A.java", "@thrillhousebot resolved src/A.java:77", "m")),
-            BOT_ID);
+            BOT_ID,
+            KnownWriters.ALL);
     assertEquals("unresolved", other.get(0).status());
   }
 
@@ -6071,7 +6520,8 @@ class FollowUpAnalyzerTest {
             List.of(
                 newFileRoot,
                 comment(400L, 300L, "src/A.java", "@thrillhousebot resolved src/A.java:12", "m")),
-            BOT_ID);
+            BOT_ID,
+            KnownWriters.ALL);
 
     assertEquals("unresolved", rewritten.get(0).status());
   }
@@ -6086,7 +6536,7 @@ class FollowUpAnalyzerTest {
 
     var rewritten =
         analyzer.clearNamedInConversation(
-            previousFindings(), bothUnresolved(), List.of(), threads, BOT_ID);
+            previousFindings(), bothUnresolved(), List.of(), threads, BOT_ID, KnownWriters.ALL);
 
     assertEquals(
         new ReviewResponse.PreviousFindingStatus(
@@ -6134,6 +6584,7 @@ class FollowUpAnalyzerTest {
             declinesRace(ASYNC_AFTER_ACK),
             new DiffLineResolver(Map.of(PAUSE_FILE, patch(60))),
             BOT_ID,
+            KnownWriters.ALL,
             Map.of(),
             () -> DISPATCHING_DIFF);
 
@@ -6157,6 +6608,7 @@ class FollowUpAnalyzerTest {
                 declinesRace(ASYNC_AFTER_ACK),
                 new DiffLineResolver(Map.of(PAUSE_FILE, patch(60))),
                 BOT_ID,
+                KnownWriters.ALL,
                 Map.of(),
                 () -> DISPATCHING_DIFF);
 
@@ -6184,6 +6636,7 @@ class FollowUpAnalyzerTest {
                         new ReviewResult.EarlierRound(finding, 100L))),
                 threads,
                 BOT_ID,
+                KnownWriters.ALL,
                 () -> "+counter.bump();")
             .isEmpty());
   }
@@ -6201,6 +6654,7 @@ class FollowUpAnalyzerTest {
             declinesRace(ASYNC_AFTER_ACK),
             new DiffLineResolver(Map.of(PAUSE_FILE, patch(60))),
             BOT_ID,
+            KnownWriters.ALL,
             Map.of(),
             () -> DISPATCHING_DIFF);
 
@@ -6221,6 +6675,7 @@ class FollowUpAnalyzerTest {
             List.of(),
             new DiffLineResolver(Map.of(PAUSE_FILE, patch(60))),
             BOT_ID,
+            KnownWriters.ALL,
             Map.of(),
             () -> DISPATCHING_DIFF);
 
@@ -6244,7 +6699,11 @@ class FollowUpAnalyzerTest {
 
     var surviving =
         analyzer.survivingEarlierRoundDeclines(
-            statuses, earlierRaceThread(RACE_STANDING_DECLINE), BOT_ID, () -> "+counter.bump();");
+            statuses,
+            earlierRaceThread(RACE_STANDING_DECLINE),
+            BOT_ID,
+            KnownWriters.ALL,
+            () -> "+counter.bump();");
 
     assertEquals(1, surviving.size());
     var decline = surviving.get(0);
@@ -6262,14 +6721,22 @@ class FollowUpAnalyzerTest {
 
     assertTrue(
         new FollowUpAnalyzer(new ObjectMapper(), false)
-            .survivingEarlierRoundDeclines(statuses, threads, BOT_ID, () -> "+counter.bump();")
+            .survivingEarlierRoundDeclines(
+                statuses, threads, BOT_ID, KnownWriters.ALL, () -> "+counter.bump();")
             .isEmpty(),
         "with the re-check off nothing was re-checked, so nothing is remembered");
-    assertTrue(analyzer.survivingEarlierRoundDeclines(statuses, threads, BOT_ID, null).isEmpty());
     assertTrue(
-        analyzer.survivingEarlierRoundDeclines(statuses, threads, BOT_ID, () -> " ").isEmpty());
+        analyzer
+            .survivingEarlierRoundDeclines(statuses, threads, BOT_ID, KnownWriters.ALL, null)
+            .isEmpty());
     assertTrue(
-        analyzer.survivingEarlierRoundDeclines(statuses, threads, BOT_ID, () -> null).isEmpty());
+        analyzer
+            .survivingEarlierRoundDeclines(statuses, threads, BOT_ID, KnownWriters.ALL, () -> " ")
+            .isEmpty());
+    assertTrue(
+        analyzer
+            .survivingEarlierRoundDeclines(statuses, threads, BOT_ID, KnownWriters.ALL, () -> null)
+            .isEmpty());
     var secondReply = earlierRaceThread(RACE_WRONG_DECLINE, "Still declining: it is serialized.");
     assertTrue(
         analyzer
@@ -6277,6 +6744,7 @@ class FollowUpAnalyzerTest {
                 raceStatuses(RACE_WRONG_DECLINE, "Still declining: it is serialized."),
                 secondReply,
                 BOT_ID,
+                KnownWriters.ALL,
                 () -> "+counter.bump();")
             .isEmpty(),
         "a decline that stood only on the second reply rests on a refutable premise");
@@ -6306,6 +6774,7 @@ class FollowUpAnalyzerTest {
                         new ReviewResult.EarlierRound(finding, 100L))),
                 threads,
                 BOT_ID,
+                KnownWriters.ALL,
                 () -> "+counter.bump();")
             .isEmpty());
   }
@@ -6448,6 +6917,7 @@ class FollowUpAnalyzerTest {
         List.of(),
         new DiffLineResolver(Map.of("src/A.java", aPatch, "src/C.java", patch(1))),
         BOT_ID,
+        KnownWriters.ALL,
         renames,
         () -> "+unrelated();");
   }
@@ -6573,6 +7043,7 @@ class FollowUpAnalyzerTest {
             List.of(),
             new DiffLineResolver(Map.of("src/A.java", GUARD_ADDED, "src/C.java", patch(1))),
             BOT_ID,
+            KnownWriters.ALL,
             Map.of(),
             () -> "+unrelated();");
 
@@ -6632,6 +7103,7 @@ class FollowUpAnalyzerTest {
             List.of(maintainerSays(CLEARS_FINDING_ONE)),
             new DiffLineResolver(Map.of("src/A.java", patch(10), "src/C.java", patch(1))),
             BOT_ID,
+            KnownWriters.ALL,
             Map.of(),
             () -> "+unrelated();");
 
@@ -6662,7 +7134,8 @@ class FollowUpAnalyzerTest {
                     "CHANGES_REQUESTED",
                     "sha",
                     new GitHubReviewClient.ReviewResponse.User(BOT))),
-            BOT_ID);
+            BOT_ID,
+            KnownWriters.ALL);
     assertFalse(context.contains("Closed bug"), context);
     assertFalse(context.contains("findings resolved"), context);
     assertTrue(context.contains("Actual open bug"), context);
@@ -6720,7 +7193,8 @@ class FollowUpAnalyzerTest {
             List.of(
                 new GitHubCommentClient.IssueComment(
                     1L, body, new GitHubReviewClient.ReviewResponse.User(BOT), "OWNER")),
-            BOT_ID);
+            BOT_ID,
+            KnownWriters.ALL);
     assertEquals(statuses, rewritten);
   }
 }

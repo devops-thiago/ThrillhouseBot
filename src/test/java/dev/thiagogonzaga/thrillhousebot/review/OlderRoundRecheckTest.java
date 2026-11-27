@@ -158,32 +158,33 @@ class OlderRoundRecheckTest {
     var files = new ArrayList<FileDiff>();
     PATCHES.forEach((path, patch) -> files.add(new FileDiff(path, "modified", 1, 0, 1, patch)));
     return new ReviewContextLoader.ReviewContext(
-        files,
-        "",
-        "",
-        0,
-        List.of(),
-        jsons,
-        priorRounds,
-        false,
-        true,
-        jsons.get(0),
-        threads(priorRounds),
-        "",
-        new InstructionsResolver.ResolvedInstructions("", ""),
-        PathScopedInstructions.NONE,
-        List.of(),
-        "",
-        "",
-        "",
-        "",
-        files,
-        () ->
-            new DiffLineResolver(
-                PATCHES, PATCHES.keySet(), DiffLineResolver.HeadFiles.NONE, changes),
-        null,
-        conversation,
-        List.of());
+            files,
+            "",
+            "",
+            0,
+            List.of(),
+            jsons,
+            priorRounds,
+            false,
+            true,
+            jsons.get(0),
+            threads(priorRounds),
+            "",
+            new InstructionsResolver.ResolvedInstructions("", ""),
+            PathScopedInstructions.NONE,
+            List.of(),
+            "",
+            "",
+            "",
+            "",
+            files,
+            () ->
+                new DiffLineResolver(
+                    PATCHES, PATCHES.keySet(), DiffLineResolver.HeadFiles.NONE, changes),
+            null,
+            conversation,
+            List.of())
+        .withVerifiedWriters(KnownWriters.ALL);
   }
 
   private Round replay(

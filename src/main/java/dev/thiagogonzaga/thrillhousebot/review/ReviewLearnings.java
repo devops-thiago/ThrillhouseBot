@@ -341,9 +341,11 @@ public class ReviewLearnings {
       List<ReviewResult.PreviousFindingStatus> statuses,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       List<GitHubCommentClient.IssueComment> conversationComments,
+      VerifiedWriters verifiedWriters,
       Supplier<String> reviewedCode) {
 
     public DeclineCapture {
+      verifiedWriters = verifiedWriters == null ? VerifiedWriters.none() : verifiedWriters;
       previous = previous == null ? List.of() : List.copyOf(previous);
       statuses = statuses == null ? List.of() : List.copyOf(statuses);
       inlineComments = inlineComments == null ? List.of() : List.copyOf(inlineComments);
@@ -382,10 +384,15 @@ public class ReviewLearnings {
                 capture.inlineComments(),
                 capture.conversationComments(),
                 botIdentity,
+                capture.verifiedWriters(),
                 capture.reviewedCode()));
     surviving.addAll(
         followUpAnalyzer.survivingEarlierRoundDeclines(
-            justified, capture.inlineComments(), botIdentity, capture.reviewedCode()));
+            justified,
+            capture.inlineComments(),
+            botIdentity,
+            capture.verifiedWriters(),
+            capture.reviewedCode()));
     if (surviving.isEmpty()) {
       return 0;
     }
