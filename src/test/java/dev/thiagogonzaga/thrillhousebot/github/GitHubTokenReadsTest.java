@@ -220,7 +220,12 @@ class GitHubTokenReadsTest {
     var rejected = json(401, "{\"message\":\"Bad credentials\"}");
     givenRepositoryAndRuns(RUN_BODY);
     stub.on(RUN, json(200, RUN_BODY))
-        .on(ARTIFACTS, exchange -> (expired.getAndSet(true) ? listing : rejected).to(exchange));
+        .on(
+            ARTIFACTS,
+            exchange -> {
+              var answer = expired.getAndSet(true) ? listing : rejected;
+              answer.to(exchange);
+            });
 
     var artifacts = reads.completedWorkflowRuns(DEAD, "o", "r", "abc").getFirst().artifacts();
 
