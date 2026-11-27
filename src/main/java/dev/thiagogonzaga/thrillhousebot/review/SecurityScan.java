@@ -278,10 +278,10 @@ public class SecurityScan {
   private final ReviewDiffFormatter.IgnoreGlobs skippedFiles;
 
   /** The key of the content fingerprint this scan posts ({@link #fingerprintKey(byte[])}). */
-  private final byte[] fingerprintKey;
+  private final byte[] postedKey;
 
   /** The key markers were posted under before, compared and never posted ({@link #webhookKey}). */
-  private final byte[] webhookKey;
+  private final byte[] earlierKey;
 
   /** What {@link #scanOnce} has read, held weakly by the file list it was read from. */
   private final Map<List<GitHubPullRequestClient.FileDiff>, Result> scans =
@@ -342,8 +342,8 @@ public class SecurityScan {
     this.iacEnabled = iacEnabled;
     this.entropyThreshold = entropyThreshold;
     this.skippedFiles = ReviewDiffFormatter.IgnoreGlobs.compile(skippedFiles);
-    this.fingerprintKey = fingerprintKey(keyMaterial);
-    this.webhookKey = webhookKey(webhookSecret);
+    this.postedKey = fingerprintKey(keyMaterial);
+    this.earlierKey = webhookKey(webhookSecret);
   }
 
   /** A scan with both halves off, for callers that construct the pipeline without configuration. */
@@ -796,9 +796,10 @@ public class SecurityScan {
             hit.rule(),
             secretFinding(
                 filename, lines.get(index).number(), hit, contentFingerprint(hit.rule(), flagged)),
-            Set.of(
-                legacyContentFingerprint(hit.rule(), flagged),
-                contentFingerprint(MAC_ALGORITHM, webhookKey, hit.rule(), flagged)),
+            Set.copyOf(
+                List.of(
+                    legacyContentFingerprint(hit.rule(), flagged),
+                    contentFingerprint(MAC_ALGORITHM, earlierKey, hit.rule(), flagged))),
             identifierOf(hit),
             Set.of()));
     if (hit.rule() == SecurityRule.PRIVATE_KEY) {
@@ -1119,7 +1120,7 @@ public class SecurityScan {
    * characters and length, which leave a short password few candidates.
    */
   String contentFingerprint(SecurityRule rule, String content) {
-    return contentFingerprint(MAC_ALGORITHM, fingerprintKey, rule, content);
+    return contentFingerprint(MAC_ALGORITHM, postedKey, rule, content);
   }
 
   /**

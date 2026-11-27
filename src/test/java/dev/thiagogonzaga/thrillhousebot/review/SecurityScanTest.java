@@ -2198,6 +2198,9 @@ class SecurityScanTest {
     assertEquals(0, SecurityScan.appKeyMaterial(null).length);
     assertEquals(0, SecurityScan.appKeyMaterial("not a key").length);
     assertNotEquals(0, SecurityScan.appKeyMaterial(pem(pkcs1Base64(), "\n")).length);
+    // A missing webhook secret still gives the key earlier markers are compared under.
+    org.junit.jupiter.api.Assertions.assertArrayEquals(
+        SecurityScan.webhookKey(""), SecurityScan.webhookKey(null));
   }
 
   /** A fresh 2048-bit RSA key as the base64 of its PKCS#1 form, the one GitHub hands out. */

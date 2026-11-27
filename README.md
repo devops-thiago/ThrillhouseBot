@@ -288,7 +288,7 @@ Create the GitHub App before starting the bot; its credentials go in `.env`.
 | Setting | Value |
 |---|---|
 | Webhook URL | `https://<your-host>/api/webhook` |
-| Webhook secret | Random string, for example from `openssl rand -hex 32` |
+| Webhook secret | Random string |
 | Repository permissions | Pull requests: R/W, Checks: R/W, Contents: R/W, Issues: R/W, Actions: Read, Commit statuses: Read |
 | Organization permissions | Members: Read (shows installation-wide dashboard counters to organization members) |
 | Subscribe to events | Pull request, Issue comment, Pull request review comment, Check suite, Status, Repository |
