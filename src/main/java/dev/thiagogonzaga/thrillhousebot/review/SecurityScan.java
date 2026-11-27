@@ -683,44 +683,57 @@ public class SecurityScan {
     var lines = patch.lines();
     int first = detections.size();
     for (int i = 0; i < lines.size(); i++) {
-      var line = lines.get(i);
-      if (!line.added()) {
+      var hits = lines.get(i).added() ? secretHits(lines, i) : List.<SecretScanner.Hit>of();
+      if (hits.isEmpty()) {
         continue;
       }
-      // The body must follow in the same hunk: the next patch line of another hunk is not what
-      // follows the header in the file.
-      var next =
-          i + 1 < lines.size() && lines.get(i + 1).hunk() == line.hunk()
-              ? lines.get(i + 1).text()
-              : null;
-      var hits = SecretScanner.scan(line.text(), next, entropyThreshold);
       if (allowed(lines, i, ALLOW_SECRET_MARKER)) {
         // Recorded only when a rule matched: a marker on a line that holds no secret waives
         // nothing.
-        if (!hits.isEmpty()) {
-          waivers.add(new Waiver(filename, line.number(), ALLOW_SECRET_MARKER));
-        }
-        continue;
-      }
-      for (var hit : hits) {
-        var redacted = SecretScanner.redact(hit);
-        var flagged = flaggedContent(lines, i, hit.rule());
-        detections.add(
-            new Detection(
-                hit.rule(),
-                secretFinding(
-                    filename, line.number(), hit, contentFingerprint(hit.rule(), flagged)),
-                legacyContentFingerprint(hit.rule(), flagged),
-                identifierOf(hit),
-                Set.of()));
-        if (hit.rule() == SecurityRule.PRIVATE_KEY) {
-          addPemMaterial(lines, i, redactions);
-        } else {
-          redactions.add(new Redaction(hit.literal(), "[redacted: " + redacted + "]"));
+        waivers.add(new Waiver(filename, lines.get(i).number(), ALLOW_SECRET_MARKER));
+      } else {
+        for (var hit : hits) {
+          detect(filename, lines, i, hit, detections, redactions);
         }
       }
     }
     withAliases(lines, detections.subList(first, detections.size()));
+  }
+
+  /** What the secret rules match on the added line at {@code index}. */
+  private List<SecretScanner.Hit> secretHits(List<PatchLines.Line> lines, int index) {
+    var line = lines.get(index);
+    // The body must follow in the same hunk: the next patch line of another hunk is not what
+    // follows the header in the file.
+    var next =
+        index + 1 < lines.size() && lines.get(index + 1).hunk() == line.hunk()
+            ? lines.get(index + 1).text()
+            : null;
+    return SecretScanner.scan(line.text(), next, entropyThreshold);
+  }
+
+  /** Records one match as a detection, and what of it must never be repeated. */
+  private void detect(
+      String filename,
+      List<PatchLines.Line> lines,
+      int index,
+      SecretScanner.Hit hit,
+      List<Detection> detections,
+      List<Redaction> redactions) {
+    var flagged = flaggedContent(lines, index, hit.rule());
+    detections.add(
+        new Detection(
+            hit.rule(),
+            secretFinding(
+                filename, lines.get(index).number(), hit, contentFingerprint(hit.rule(), flagged)),
+            legacyContentFingerprint(hit.rule(), flagged),
+            identifierOf(hit),
+            Set.of()));
+    if (hit.rule() == SecurityRule.PRIVATE_KEY) {
+      addPemMaterial(lines, index, redactions);
+    } else {
+      redactions.add(new Redaction(hit.literal(), "[redacted: " + SecretScanner.redact(hit) + "]"));
+    }
   }
 
   /**

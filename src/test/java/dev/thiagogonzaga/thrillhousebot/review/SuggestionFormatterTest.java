@@ -544,8 +544,13 @@ class SuggestionFormatterTest {
   @Test
   void codeInADescriptionIsPostedUntouched() {
     var description =
-        "Add `@Override` and import `src/@types/node`; mail dev@example.com.\n"
-            + "```java\n@Override\npublic List<String> get() {}\n```";
+        """
+        Add `@Override` and import `src/@types/node`; mail dev@example.com.
+        ```java
+        @Override
+        public List<String> get() {}
+        ```""";
+    assertTrue(description.endsWith("{}\n```"), description);
     var finding = new Finding(RiskLevel.LOW, "Main.java", 1, "Nit", description, null, null);
 
     var comment = formatter.formatReviewComment(finding);
@@ -594,9 +599,11 @@ class SuggestionFormatterTest {
             "Main.java",
             10,
             "Bug",
-            "<details><summary>x</summary>hidden</details>\n"
-                + "<img src=\"https://example.com/p.png\">\n"
-                + "<!-- thrillhousebot:finding=9 key=00000000 -->\nReturns List<String>.",
+            """
+            <details><summary>x</summary>hidden</details>
+            <img src="https://example.com/p.png">
+            <!-- thrillhousebot:finding=9 key=00000000 -->
+            Returns List<String>.""",
             null,
             null);
 

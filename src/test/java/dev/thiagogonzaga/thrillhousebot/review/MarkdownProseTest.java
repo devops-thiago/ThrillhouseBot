@@ -44,10 +44,45 @@ class MarkdownProseTest {
       } else if (fence != null) {
         fence = line.equals(fence) ? null : fence;
       } else {
-        sb.append(line.replaceAll("(`+)[^`].*?\\1(?!`)", " ")).append('\n');
+        sb.append(withoutSpans(line)).append('\n');
       }
     }
     return sb.toString();
+  }
+
+  /** {@code line} with each code span that closes on it replaced by a blank. */
+  private static String withoutSpans(String line) {
+    var sb = new StringBuilder();
+    int i = 0;
+    while (i < line.length()) {
+      int open = line.indexOf('`', i);
+      if (open < 0) {
+        break;
+      }
+      int run = runEnd(line, open) - open;
+      int close = closingRun(line, open + run, run);
+      sb.append(line, i, open).append(close < 0 ? line.substring(open, open + run) : " ");
+      i = close < 0 ? open + run : close + run;
+    }
+    return sb.append(line.substring(i)).toString();
+  }
+
+  /** Where the next backtick run of exactly {@code run} starts at or after {@code from}, or -1. */
+  private static int closingRun(String line, int from, int run) {
+    for (int at = line.indexOf('`', from); at >= 0; at = line.indexOf('`', runEnd(line, at))) {
+      if (runEnd(line, at) - at == run) {
+        return at;
+      }
+    }
+    return -1;
+  }
+
+  private static int runEnd(String line, int at) {
+    int end = at;
+    while (end < line.length() && line.charAt(end) == '`') {
+      end++;
+    }
+    return end;
   }
 
   private static void assertNotifiesNobody(String posted) {
@@ -98,6 +133,8 @@ class MarkdownProseTest {
         "<https://host.example/@x>",
         "[text](<https://host.example/@x>)",
         "HTTPS://Host.Example:8443/@x?tab=1#top",
+        "https://my-host.example/a%20b+c=d:e/@x",
+        "<https://host.example/a_b~c&d,e;f!g$h'i(j)k*l/@x>",
         "http://host.example/a/@b/@c",
         "[docs]: https://host.example/@x"
       })
@@ -148,6 +185,12 @@ class MarkdownProseTest {
         "https://host.example:x/@user|https://host.example:x/@&#8203;user",
         "https://host.example?@user|https://host.example?@&#8203;user",
         "https://host.example|https://host.example",
+        "https://host.example:80|https://host.example:80",
+        "see http|see http",
+        "https|https",
+        "https://host.example/a_/@user|https://host.example/a_/@&#8203;user",
+        "https://host.example/a,/@user|https://host.example/a,/@&#8203;user",
+        "<https://host.example/a\"b/@user>|&lt;https://host.example/a\"b/@&#8203;user>",
         "http:/host.example/@user|http:/host.example/@&#8203;user",
         // Markup that could split the link before the name ends the address.
         "https://host.example/_x_@user|https://host.example/_x_@&#8203;user",
@@ -203,6 +246,10 @@ class MarkdownProseTest {
         "1. item",
         "123456789) item",
         "1234567890. not a list marker",
+        "12 apples",
+        "- ",
+        "-\t```",
+        "3.\t~~~",
         "12",
         "1.no blank",
         "+ ```",
@@ -211,19 +258,26 @@ class MarkdownProseTest {
   void aLineIsReadForNestingWithoutChangingIt(String line) {
     var posted = MarkdownSafe.prose(line + "\ncode\n```");
     // A fence under a list marker is hoisted with the marker on a line of its own.
-    assertTrue(posted.startsWith(line.replaceAll("[ `~]+$", "")), posted);
+    int end = line.length();
+    while (end > 0 && " \t`~".indexOf(line.charAt(end - 1)) >= 0) {
+      end--;
+    }
+    assertTrue(posted.startsWith(line.endsWith(" ") ? line : line.substring(0, end)), posted);
   }
 
   @Test
   void codeSpansAndFencedCodeAreKeptByteForByte() {
     var text =
-        "Add `@Override` to `src/@types/x.ts` like so:\n"
-            + "```java\n"
-            + "@Override\n"
-            + "\n"
-            + "public List<String> names() { return a < b ? x : y; }\n"
-            + "```\n"
-            + "Then run ``npm i @scope/pkg`` again.";
+        """
+        Add `@Override` to `src/@types/x.ts` like so:
+        ```java
+        @Override
+
+        public List<String> names() { return a < b ? x : y; }
+        ```
+        Then run ``npm i @scope/pkg`` again.""";
+    assertEquals(7, text.lines().count());
+    assertFalse(text.endsWith("\n"));
     assertEquals(text, MarkdownSafe.prose(text));
   }
 
@@ -305,8 +359,13 @@ class MarkdownProseTest {
     assertEquals(
         "1. Change the method:\n```java\n@Override\n  void run() {}\n```\n2. Ask @&#8203;octocat.",
         MarkdownSafe.prose(
-            "1. Change the method:\n   ```java\n   @Override\n     void run() {}\n   ```\n"
-                + "2. Ask @octocat."));
+            """
+            1. Change the method:
+               ```java
+               @Override
+                 void run() {}
+               ```
+            2. Ask @octocat."""));
     assertEquals(
         "> Quoted:\n```\n@Test\n```\n> end",
         MarkdownSafe.prose("> Quoted:\n> ```\n> @Test\n> ```\n> end"));
@@ -338,10 +397,39 @@ class MarkdownProseTest {
   @Test
   void ordinaryMarkdownIsKept() {
     var text =
-        "## Why\n\n- **bold**, _em_, ~~gone~~ and a [link](https://example.com/a?b=1)\n"
-            + "- ![img](https://example.com/i.png)\n\n> quoted\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n"
-            + "1. first\n2. second \\* literal";
+        """
+        ## Why
+
+        - **bold**, _em_, ~~gone~~ and a [link](https://example.com/a?b=1)
+        - ![img](https://example.com/i.png)
+
+        > quoted
+
+        | a | b |
+        |---|---|
+        | 1 | 2 |
+
+        1. first
+        2. second \\* literal""";
+    assertTrue(text.endsWith("2. second \\* literal"), text);
     assertEquals(text, MarkdownSafe.prose(text));
+  }
+
+  @Test
+  void aFenceClosesOnlyAtARunOfItsOwnMarkerAsLongAsItsOpenerWithNothingAfter() {
+    // A shorter run, a run with text after it and a run of the other marker are all content.
+    assertEquals(
+        "`````\n```\n```` x\n~~~~\n`````\nafter @&#8203;octocat",
+        MarkdownSafe.prose("````\n```\n```` x\n~~~~\n````\nafter @octocat"));
+  }
+
+  @Test
+  void contentKeepsWhatLiesBeyondTheNestingItsFenceWasOpenedUnder() {
+    // One quote marker and two blanks were the fence's; a second marker and the rest are content.
+    assertEquals(
+        "```\n> quoted code\n  indented\nx\n```",
+        MarkdownSafe.prose("> ```\n>> quoted code\n>   indented\nx\n> ```"));
+    assertEquals("a trailing backslash \\", MarkdownSafe.prose("a trailing backslash \\"));
   }
 
   @Test
@@ -395,7 +483,9 @@ class MarkdownProseTest {
     // Whatever the text was, every fence it ends up with is closed and at the top level.
     long fenceLines = posted.lines().filter(line -> line.startsWith("```")).count();
     assertEquals(0, fenceLines % 2, posted);
-    assertFalse(posted.lines().anyMatch(line -> line.matches("[ \\t>]+`{3,}.*")), posted);
+    assertFalse(
+        posted.lines().anyMatch(line -> !line.startsWith("```") && line.strip().startsWith("```")),
+        posted);
     assertEquals(posted, MarkdownSafe.prose(posted));
   }
 

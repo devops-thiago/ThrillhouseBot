@@ -626,13 +626,10 @@ public class FollowUpAnalyzer {
   private static boolean bodyCarriesOwnContent(ReviewResponse.Finding finding, String body) {
     String title = finding.title();
     if (title != null && !title.isBlank()) {
-      return body.contains(" — " + title + "**")
-          || body.contains(" — " + MarkdownSafe.inline(title) + "**");
+      return body.contains(" — " + title + "**");
     }
     String description = finding.description();
-    return description != null
-        && !description.isBlank()
-        && (body.contains(description) || body.contains(MarkdownSafe.prose(description)));
+    return description != null && !description.isBlank() && body.contains(description);
   }
 
   /**
@@ -721,7 +718,7 @@ public class FollowUpAnalyzer {
 
   /** Whether {@code body} holds {@code title}, as the model wrote it or as the bot posts it. */
   private static boolean carriesTitle(String body, String title) {
-    return body.contains(title) || body.contains(MarkdownSafe.inline(title));
+    return printedForms(title).anyMatch(body::contains);
   }
 
   private static Stream<GitHubReviewClient.PullRequestComment> botRootComments(

@@ -59,12 +59,6 @@ final class MarkdownProse {
   /** What a fence's info string may carry over: a language tag, nothing else. */
   private static final Pattern LANGUAGE_TAG = Pattern.compile("[A-Za-z0-9+#._-]{1,20}");
 
-  /** Characters of an address path that no inline markdown can split a link at. */
-  private static final String PATH_PUNCTUATION = "/.%+=?#@:-";
-
-  /** What an address inside angle brackets may hold besides: nothing can split it there. */
-  private static final String BRACKETED_PUNCTUATION = "_~&,;!$'()*";
-
   private MarkdownProse() {}
 
   /** An open fenced block: its marker, and the nesting to take off each content line. */
@@ -147,8 +141,17 @@ final class MarkdownProse {
   }
 
   private static int quotesEnd(String line, int from) {
+    return runOf(line, from, " \t>");
+  }
+
+  private static int blanksEnd(String line, int from) {
+    return runOf(line, from, " \t");
+  }
+
+  /** The end of the run of characters of {@code set} that starts at {@code from}. */
+  private static int runOf(String line, int from, String set) {
     int i = from;
-    while (i < line.length() && " \t>".indexOf(line.charAt(i)) >= 0) {
+    while (i < line.length() && set.indexOf(line.charAt(i)) >= 0) {
       i++;
     }
     return i;
@@ -156,23 +159,14 @@ final class MarkdownProse {
 
   /** The end of a bullet or numbered marker at {@code from} and its blanks, else {@code from}. */
   private static int listMarkerEnd(String line, int from) {
-    int i = from;
-    while (i < line.length() && i - from < 10 && asciiDigit(line.charAt(i))) {
-      i++;
-    }
+    int i = digitsEnd(line, from);
     int digits = i - from;
-    if (i >= line.length()) {
+    // A number of up to nine digits takes "." or ")"; without a number, a bullet stands there.
+    var markers = digits == 0 ? "-*+" : ".)";
+    if (digits > 9 || i >= line.length() || markers.indexOf(line.charAt(i)) < 0) {
       return from;
     }
-    boolean numbered = digits >= 1 && digits <= 9 && ".)".indexOf(line.charAt(i)) >= 0;
-    boolean bullet = digits == 0 && "-*+".indexOf(line.charAt(i)) >= 0;
-    if (!numbered && !bullet) {
-      return from;
-    }
-    int blanks = i + 1;
-    while (blanks < line.length() && (line.charAt(blanks) == ' ' || line.charAt(blanks) == '\t')) {
-      blanks++;
-    }
+    int blanks = blanksEnd(line, i + 1);
     return blanks > i + 1 ? blanks : from;
   }
 
@@ -301,7 +295,7 @@ final class MarkdownProse {
     }
     sb.append(text, i, path);
     int end = path;
-    while (end < text.length() && pathCharacter(text.charAt(end), "")) {
+    while (end < text.length() && pathCharacter(text.charAt(end), false)) {
       char c = text.charAt(end);
       if (c == '@' && text.charAt(end - 1) != '/') {
         at(text, end, end + 1, sb);
@@ -324,10 +318,10 @@ final class MarkdownProse {
     if (end < 0) {
       return -1;
     }
-    while (end < text.length() && pathCharacter(text.charAt(end), BRACKETED_PUNCTUATION)) {
+    while (end < text.length() && pathCharacter(text.charAt(end), true)) {
       end++;
     }
-    return end < text.length() && text.charAt(end) == '>' ? end + 1 : -1;
+    return text.startsWith(">", end) ? end + 1 : -1;
   }
 
   /**
@@ -335,44 +329,80 @@ final class MarkdownProse {
    * host, or -1 when no {@code http(s)://host/} is there.
    */
   private static int pathStart(String text, int i) {
-    int host;
-    if (text.regionMatches(true, i, "https://", 0, 8)) {
-      host = i + 8;
-    } else if (text.regionMatches(true, i, "http://", 0, 7)) {
-      host = i + 7;
-    } else {
+    int host = schemeEnd(text, i);
+    if (host < 0) {
       return -1;
     }
-    int end = host;
-    int dots = 0;
-    boolean label = false;
-    while (end < text.length() && (hostCharacter(text.charAt(end)) || text.charAt(end) == '.')) {
-      boolean dot = text.charAt(end) == '.';
-      if (dot && !label) {
+    int end = hostEnd(text, host);
+    if (end < 0) {
+      return -1;
+    }
+    if (text.startsWith(":", end)) {
+      end = digitsEnd(text, end + 1);
+    }
+    return text.startsWith("/", end) ? end + 1 : -1;
+  }
+
+  /** The end of {@code http://} or {@code https://} at {@code i}, in either case, or -1. */
+  private static int schemeEnd(String text, int i) {
+    if (!text.regionMatches(true, i, "http", 0, 4)) {
+      return -1;
+    }
+    int at = text.regionMatches(true, i + 4, "s", 0, 1) ? i + 5 : i + 4;
+    return text.startsWith("://", at) ? at + 3 : -1;
+  }
+
+  /**
+   * The end of the host at {@code from}: two or more labels of letters, digits and hyphens with a
+   * dot between each, or -1. A dot with no label on either side of it is no host.
+   */
+  private static int hostEnd(String text, int from) {
+    int labels = 0;
+    int end = from;
+    boolean dot;
+    do {
+      int start = end;
+      end = labelEnd(text, start);
+      if (end == start) {
         return -1;
       }
-      dots += dot ? 1 : 0;
-      label = !dot;
-      end++;
-    }
-    if (dots == 0 || !label) {
-      return -1;
-    }
-    if (end < text.length() && text.charAt(end) == ':') {
-      end++;
-      while (end < text.length() && asciiDigit(text.charAt(end))) {
-        end++;
-      }
-    }
-    return end < text.length() && text.charAt(end) == '/' ? end + 1 : -1;
+      labels++;
+      dot = text.startsWith(".", end);
+      end += dot ? 1 : 0;
+    } while (dot);
+    return labels > 1 ? end : -1;
   }
 
-  private static boolean hostCharacter(char c) {
-    return asciiAlphanumeric(c) || c == '-';
+  private static int labelEnd(String text, int from) {
+    int end = from;
+    while (end < text.length()
+        && (asciiAlphanumeric(text.charAt(end)) || text.charAt(end) == '-')) {
+      end++;
+    }
+    return end;
   }
 
-  private static boolean pathCharacter(char c, String alsoAllowed) {
-    return asciiAlphanumeric(c) || PATH_PUNCTUATION.indexOf(c) >= 0 || alsoAllowed.indexOf(c) >= 0;
+  private static int digitsEnd(String text, int from) {
+    int end = from;
+    while (end < text.length() && asciiDigit(text.charAt(end))) {
+      end++;
+    }
+    return end;
+  }
+
+  /**
+   * Whether {@code c} may stand in the path of an address: a letter, a digit, punctuation no inline
+   * markdown can split a link at, or, inside angle brackets where nothing can, a little more.
+   */
+  private static boolean pathCharacter(char c, boolean bracketed) {
+    if (asciiAlphanumeric(c)) {
+      return true;
+    }
+    return switch (c) {
+      case '/', '.', '%', '+', '=', '?', '#', '@', ':', '-' -> true;
+      case '_', '~', '&', ',', ';', '!', '$', '\'', '(', ')', '*' -> bracketed;
+      default -> false;
+    };
   }
 
   /**
