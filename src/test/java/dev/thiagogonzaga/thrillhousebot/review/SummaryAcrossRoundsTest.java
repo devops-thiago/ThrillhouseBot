@@ -296,6 +296,156 @@ class SummaryAcrossRoundsTest {
   }
 
   /**
+   * #1436: the review body states how many earlier findings are open, so it lists exactly those,
+   * with a link to the thread where there is one. The rows are then fed to the review-body fallback
+   * a later round uses when no response was persisted, which must not offer them as findings
+   * (#455).
+   */
+  @Test
+  void theReviewBodyListsExactlyTheFindingsItCountsAsStillOpen() {
+    publishFirstRound();
+    var threads = List.of(rootComment(101L, CRITICAL, 1), rootComment(102L, HIGH, 2));
+    var round =
+        new ReviewResponse(
+            List.of(),
+            List.of(
+                new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there"),
+                new ReviewResponse.PreviousFindingStatus(2, "unresolved", "still there")),
+            null);
+    var result = builder.build(followUp(List.of(ROUND_ONE), threads, PATCH), round, CI_CLEAR, plan);
+
+    var body = postedReviewBody(result, "", threads);
+
+    var rows = body.lines().filter(line -> line.startsWith("- ")).toList();
+    assertEquals(3, result.unresolvedPreviousCount());
+    assertEquals(result.unresolvedPreviousCount(), rows.size(), body);
+    assertTrue(body.startsWith(ReviewResult.unresolvedPreviousMessage(3)), body);
+    assertEquals(
+        List.of(
+            "- `src/Main.java:10` — "
+                + CRITICAL.title()
+                + " ([thread](https://github.com/o/r/pull/1#discussion_r101))",
+            "- `src/Main.java:20` — "
+                + HIGH.title()
+                + " ([thread](https://github.com/o/r/pull/1#discussion_r102))",
+            "- `src/Main.java:30` — " + DOUBLE_CHECK.title() + OpenFindingNames.DOUBLE_CHECK_MARK),
+        rows);
+    assertEquals("", priorContextFrom(body));
+  }
+
+  /**
+   * #1436 with a finding raised in the same round: only the delta section states the open count
+   * then, and the list under it names those findings, never the new one.
+   */
+  @Test
+  void aWithFindingsReviewListsTheStillOpenOnesUnderItsDeltaAndALaterRoundSkipsThem() {
+    publishFirstRound();
+    var round =
+        new ReviewResponse(
+            List.of(NEW_IN_ROUND_TWO),
+            List.of(
+                new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there"),
+                new ReviewResponse.PreviousFindingStatus(2, "unresolved", "still there")),
+            null);
+    var result = builder.build(followUp(List.of(ROUND_ONE), List.of()), round, CI_CLEAR, plan);
+    var delta = FollowUpDeltaSummary.DELTA_HEADING + "\n\n- **Previous findings still open:** 3";
+
+    var body = postedReviewBody(result, delta, List.of());
+
+    var listAt = body.indexOf(OpenFindingNames.REVIEW_BODY_LEAD_IN);
+    assertTrue(listAt > body.indexOf(delta), body);
+    var rows = body.substring(listAt).lines().filter(line -> line.startsWith("- ")).toList();
+    assertEquals(result.unresolvedPreviousCount(), rows.size(), body);
+    assertFalse(body.substring(listAt).contains(NEW_IN_ROUND_TWO.title()), body);
+    var context = priorContextFrom(body);
+    assertFalse(context.contains(CRITICAL.title()), context);
+    assertFalse(context.contains(DOUBLE_CHECK.title()), context);
+    assertFalse(context.contains(OpenFindingNames.REVIEW_BODY_LEAD_IN), context);
+  }
+
+  /** The same on the path where the round's new finding opens no thread and the body lists it. */
+  @Test
+  void aReviewThatThreadsNothingStillListsTheStillOpenFindingsUnderItsDelta() {
+    publishFirstRound();
+    var speculative =
+        new ReviewResponse.Finding(
+            "medium",
+            "low",
+            FILE,
+            40,
+            "Unused value may hide a missing assignment",
+            "The empty string may have been meant to hold the input.",
+            "String unused = \"\";",
+            null);
+    var round =
+        new ReviewResponse(
+            List.of(speculative),
+            List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there")),
+            null);
+    var result = builder.build(followUp(List.of(ROUND_ONE), List.of()), round, CI_CLEAR, plan);
+
+    var body =
+        postedReviewBody(result, FollowUpDeltaSummary.DELTA_HEADING + "\n\n- delta", List.of());
+
+    var listAt = body.indexOf(OpenFindingNames.REVIEW_BODY_LEAD_IN);
+    assertTrue(listAt >= 0, body);
+    var rows = body.substring(listAt).lines().filter(line -> line.startsWith("- ")).toList();
+    assertEquals(result.unresolvedPreviousCount(), rows.size(), body);
+    assertFalse(body.substring(listAt).contains(speculative.title()), body);
+  }
+
+  /** Without a delta section a with-findings body states no open count, so it lists nothing. */
+  @Test
+  void aWithFindingsReviewThatStatesNoOpenCountListsNothing() {
+    publishFirstRound();
+    var round =
+        new ReviewResponse(
+            List.of(NEW_IN_ROUND_TWO),
+            List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there")),
+            null);
+    var result = builder.build(followUp(List.of(ROUND_ONE), List.of()), round, CI_CLEAR, plan);
+
+    var body = postedReviewBody(result, "", List.of());
+
+    assertFalse(body.contains(OpenFindingNames.REVIEW_BODY_LEAD_IN), body);
+  }
+
+  /** What a later round with no persisted response reads out of the review {@code body}. */
+  private static String priorContextFrom(String body) {
+    return new FollowUpAnalyzer(new ObjectMapper())
+        .buildPreviousFindingsContext(
+            List.of(new GitHubReviewClient.ReviewResponse(1L, body, "COMMENTED", "sha", BOT_USER)),
+            BOT,
+            KnownWriters.ALL);
+  }
+
+  private String postedReviewBody(
+      ReviewResult result,
+      String delta,
+      List<GitHubReviewClient.PullRequestComment> inlineComments) {
+    publisher.postReview(
+        new ReviewPublisher.PostReviewRequest(
+            "auth",
+            "o",
+            "r",
+            1,
+            "sha",
+            result,
+            new DiffLineResolver(Map.of(FILE, PATCH)),
+            false,
+            List.of(),
+            delta,
+            List.of(),
+            finding -> "",
+            inlineComments));
+    var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+    verify(reviewClient, atLeastOnce())
+        .createReview(anyString(), anyString(), eq("o"), eq("r"), eq(1), captor.capture());
+    var reviews = captor.getAllValues();
+    return reviews.get(reviews.size() - 1).body();
+  }
+
+  /**
    * #1075 (ThrillhouseBot-test#254): round two raised nothing new, the finding that explains the
    * failing test is open since round one, and the summary call wrote that no finding explains the
    * failure. The overview's sentence is computed over every finding the summary lists, so it names
@@ -1703,6 +1853,8 @@ class SummaryAcrossRoundsTest {
     var config = mock(ThrillhouseConfig.class);
     var github = mock(ThrillhouseConfig.GitHubConfig.class);
     when(config.github()).thenReturn(github);
+    var review = mock(ThrillhouseConfig.ReviewConfig.class);
+    when(config.review()).thenReturn(review);
     when(github.writeRetryBudget()).thenReturn(Duration.ofMinutes(5));
     return config;
   }
