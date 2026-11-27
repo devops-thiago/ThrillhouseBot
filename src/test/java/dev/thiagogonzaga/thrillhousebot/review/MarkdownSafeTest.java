@@ -49,6 +49,12 @@ class MarkdownSafeTest {
   }
 
   @Test
+  void aCodeSpanHoldsANameWithItsBackticksAndLineBreaksTakenOut() {
+    assertEquals("`x/@victim <img>`", MarkdownSafe.codeSpan("x/@victim\n<img>"));
+    assertEquals("`a b`", MarkdownSafe.codeSpan("a` `b"));
+  }
+
+  @Test
   void inlineCodeStripsBacktricksSoItCannotCloseItsSpan() {
     assertEquals("foo() bar", MarkdownSafe.inlineCode("foo()\n`bar`"));
     assertFalse(MarkdownSafe.inlineCode("a`b``c").contains("`"));

@@ -62,10 +62,11 @@ class UncoveredFileListTest {
 
     var clause = ReviewResult.coverageGapClause(3, detail);
 
-    assertTrue(clause.contains("did not complete: the call timed out (slow.java)"), clause);
+    assertTrue(clause.contains("did not complete: the call timed out (`slow.java`)"), clause);
     assertTrue(
-        clause.contains("did not complete: the AI provider returned HTTP 503 (down.java)"), clause);
-    assertTrue(clause.contains("did not complete (unknown.java)"), clause);
+        clause.contains("did not complete: the AI provider returned HTTP 503 (`down.java`)"),
+        clause);
+    assertTrue(clause.contains("did not complete (`unknown.java`)"), clause);
     assertEquals("", UncoveredFileList.section(detail));
   }
 

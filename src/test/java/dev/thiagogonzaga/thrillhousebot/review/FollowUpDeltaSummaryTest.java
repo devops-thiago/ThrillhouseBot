@@ -470,8 +470,8 @@ class FollowUpDeltaSummaryTest {
 
     var body = render(result).orElseThrow();
 
-    assertTrue(body.contains("only partially analyzed (clipped.java)"), body);
-    assertTrue(body.contains("omitted entirely (omitted.java)"), body);
+    assertTrue(body.contains("only partially analyzed (`clipped.java`)"), body);
+    assertTrue(body.contains("omitted entirely (`omitted.java`)"), body);
   }
 
   @Test

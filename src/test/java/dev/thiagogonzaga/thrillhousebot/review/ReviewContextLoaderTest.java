@@ -204,7 +204,7 @@ class ReviewContextLoaderTest {
       // Pure renames are disclosed in a rollup, not as empty ### sections (#386).
       assertTrue(
           result.contains(
-              "1 pure rename omitted from AI review (old-name.txt → renamed-only.txt)"));
+              "1 pure rename omitted from AI review (`old-name.txt` → `renamed-only.txt`)"));
       assertFalse(result.contains("### renamed-only.txt"));
     }
   }
