@@ -360,8 +360,10 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   review in the run's listing that is still `APPROVED` and written by a `BotIdentity` login is
   dismissed (`GitHubReviewClient.dismissReview`), newest first, whatever head it approved. It runs
   before the round's own writes because some rounds post no review and a refused one throws. A
-  refusal or failure is logged at warn and never fails the round. Do not narrow it to the bot's
-  latest review, and never dismiss a review the bot did not write.
+  refusal or failure is logged at warn and never fails the round. A refusal (a 4xx) ends the walk;
+  any other failure moves on to the next approval, so one timeout does not leave the older ones
+  counting. Do not narrow it to the bot's latest review, and never dismiss a review the bot did
+  not write.
 - **No "no issues" wording while anything is open** (#933). Every surface reads
   `ReviewResult.unresolvedPreviousCount()`; `ReviewPublisher.noIssuesBody` leads with the
   unresolved-previous message and `LargePrNudge` stays silent.

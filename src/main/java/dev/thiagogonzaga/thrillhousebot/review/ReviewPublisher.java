@@ -840,15 +840,17 @@ public class ReviewPublisher {
    *
    * <p>Best-effort: a dismissal GitHub refuses (on a protected branch its API reference asks for a
    * repository administrator or a place on the rule's list of who may dismiss reviews) or that
-   * fails is logged and the round is published as usual. The walk stops at the first failure, since
-   * the same refusal would meet every other call. The approval then stays until a later round
-   * withdraws it or a person dismisses it.
+   * fails is logged and the round is published as usual. The walk stops at a refusal (a 4xx
+   * answer), since the same refusal would meet every other call. A failure of any other kind (a
+   * timeout, a 5xx) says nothing about the next call, so the older approvals are still tried. An
+   * approval that could not be dismissed stays until a later round withdraws it or a person
+   * dismisses it.
    */
   private void withdrawStandingApprovals(PostReviewRequest post) {
     var reviews = post.priorReviews();
     for (int i = reviews.size() - 1; i >= 0; i--) {
       var review = reviews.get(i);
-      if (isStandingBotApproval(review) && !dismissApproval(post, review)) {
+      if (isStandingBotApproval(review) && dismissApproval(post, review) == Dismissal.REFUSED) {
         return;
       }
     }
@@ -862,8 +864,17 @@ public class ReviewPublisher {
         && botIdentity.matches(review.user().login());
   }
 
-  /** Dismisses one approval; {@code false} when GitHub refused it or the call failed. */
-  private boolean dismissApproval(
+  /** How one dismissal call ended. */
+  private enum Dismissal {
+    DONE,
+    /** GitHub answered with a 4xx: the App may not dismiss reviews here. */
+    REFUSED,
+    /** No answer, or a server error: the next call may still succeed. */
+    FAILED
+  }
+
+  /** Dismisses one approval, logging a call GitHub refused or that failed. */
+  private Dismissal dismissApproval(
       PostReviewRequest post, GitHubReviewClient.ReviewResponse approval) {
     try {
       reviewClient.dismissReview(
@@ -875,13 +886,13 @@ public class ReviewPublisher {
           approval.id(),
           approvalWithdrawnMessage(post.commitSha()));
       Log.infof(
-          "Dismissed approval %d on %s/%s #%d — the review of %s did not approve",
+          "Dismissed approval %d on %s/%s #%d — the round for %s did not approve",
           approval.id(), post.owner(), post.repo(), post.prNumber(), post.commitSha());
-      return true;
+      return Dismissal.DONE;
     } catch (RuntimeException e) {
       Log.warnf(
           e,
-          "Could not dismiss approval %d on %s/%s #%d although the review of %s did not approve —"
+          "Could not dismiss approval %d on %s/%s #%d although the round for %s did not approve —"
               + " it still counts towards the pull request's approvals until someone dismisses it."
               + " Check that the App has Pull requests: write and that branch protection lets it"
               + " dismiss reviews",
@@ -890,15 +901,18 @@ public class ReviewPublisher {
           post.repo(),
           post.prNumber(),
           post.commitSha());
-      return false;
+      return isRefusal(e) ? Dismissal.REFUSED : Dismissal.FAILED;
     }
   }
 
-  /** The reason GitHub shows on the timeline beside a dismissed approval. */
+  /**
+   * The reason GitHub shows on the timeline beside a dismissed approval. It names the round, not a
+   * review, because a round held on CI can withdraw an approval without posting a review.
+   */
   static String approvalWithdrawnMessage(String commitSha) {
-    return "ThrillhouseBot withdrew this approval: its latest review, of "
+    return "ThrillhouseBot withdrew this approval: its review round for "
         + commitSha
-        + ", did not approve the pull request.";
+        + " did not approve the pull request.";
   }
 
   /** One coverage notice for the outcome, including verification-only delta disclosures. */

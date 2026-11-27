@@ -1113,9 +1113,42 @@ class ReviewPublisherTest {
   }
 
   @Test
+  void dismissalThatFailsWithoutAnAnswerStillTriesTheOlderApprovals() {
+    when(reviewClient.dismissReview(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), eq(2L), anyString()))
+        .thenThrow(new jakarta.ws.rs.ProcessingException("read timed out"));
+
+    post(
+        "sha3",
+        heldOnCi(),
+        List.of(
+            review(1L, "APPROVED", "sha1", BOT_LOGIN), review(2L, "APPROVED", "sha2", BOT_LOGIN)));
+
+    // A timeout says nothing about the next call, so the older approval is not left counting.
+    verifyDismissed(2L, "sha3");
+    verifyDismissed(1L, "sha3");
+    assertEquals("COMMENT", postedReviewEvent());
+  }
+
+  @Test
+  void dismissalMetByAServerErrorStillTriesTheOlderApprovals() {
+    when(reviewClient.dismissReview(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), eq(2L), anyString()))
+        .thenThrow(new WebApplicationException(502));
+
+    post(
+        "sha3",
+        heldOnCi(),
+        List.of(
+            review(1L, "APPROVED", "sha1", BOT_LOGIN), review(2L, "APPROVED", "sha2", BOT_LOGIN)));
+
+    verifyDismissed(1L, "sha3");
+  }
+
+  @Test
   void dismissalMessageNamesTheHeadThatWasNotApproved() {
     assertEquals(
-        "ThrillhouseBot withdrew this approval: its latest review, of sha2, did not approve the"
+        "ThrillhouseBot withdrew this approval: its review round for sha2 did not approve the"
             + " pull request.",
         ReviewPublisher.approvalWithdrawnMessage("sha2"));
   }
