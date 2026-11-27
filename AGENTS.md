@@ -367,6 +367,12 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
 - **No "no issues" wording while anything is open** (#933). Every surface reads
   `ReviewResult.unresolvedPreviousCount()`; `ReviewPublisher.noIssuesBody` leads with the
   unresolved-previous message and `LargePrNudge` stays silent.
+- **A review body that counts open findings names them** (#1436). `OpenFindingNames` prints one row
+  per entry of `ReviewResult.openPreviousFindings()`, so the rows equal the count: under the
+  unresolved-previous message, and under the delta section of a review that raised findings. Only
+  `CommentBodyLimit` cuts the list, and it says how many rows it left out.
+  `FollowUpAnalyzer.withoutClosedFindingNames` removes the section by its lead-in, so the
+  review-body fallback never reads the rows back as findings (#455).
 - **A decline is weighed, on every round it applies to** (#169, #947). One write-access reply whose
   premise the reviewed code contradicts reopens the finding (`recheckDeclines`); a second reply
   always stands. A decline on an older round's finding goes through the same test in the backstop
