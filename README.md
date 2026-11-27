@@ -1085,11 +1085,12 @@ implements. Issues are read from GitHub Issues through a provider interface
 are taken in this order:
 
 1. Closing keywords in the PR body (`Closes #57`, `fixes owner/repo#57`,
-   `resolves https://github.com/owner/repo/issues/57`), in order. Code spans,
-   fenced blocks and HTML comments are skipped, so a template's commented-out
-   `Closes #` is not a link. GitHub records these links only when the base is
-   the default branch, so for a PR into a release branch the body is the only
-   source.
+   `resolves https://github.com/owner/repo/issues/57`), in order. An issue URL
+   counts only on the configured GitHub web address (`GITHUB_URL`,
+   `https://github.com` by default). Code spans, fenced blocks and HTML
+   comments are skipped, so a template's commented-out `Closes #` is not a
+   link. GitHub records these links only when the base is the default branch,
+   so for a PR into a release branch the body is the only source.
 2. GitHub's closing references for the PR (one GraphQL read), which add issues
    linked from the Development panel.
 3. The head branch name (`issue-57`, `fix/57-short-name`), only with
@@ -1360,7 +1361,8 @@ and its sessions are flagged "no pricing" in the dashboard instead of showing
 
 After you sign in with GitHub, the dashboard shows an overview with summary
 cards and a live activity feed, plus cost charts by model, input and output token
-breakdowns, and a paginated session history with PR links.
+breakdowns, and a paginated session history with PR links on the configured
+GitHub web address (`GITHUB_URL`).
 
 The dashboard asks GitHub, with your own sign-in, which installations of the
 app you can access and which of their repositories you can read: as a
