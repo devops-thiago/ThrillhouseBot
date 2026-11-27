@@ -157,6 +157,25 @@ class AuthResourceCallbackTest {
   }
 
   @Test
+  void callbackLooksUpTheUserOnAConfiguredEnterpriseServer() throws Exception {
+    when(fixtureContext.config.github().apiUrl()).thenReturn("https://ghe.example.com/api/v3/");
+    when(fixtureContext.httpClient.send(any(HttpRequest.class), any())).thenReturn(httpResponse);
+    when(httpResponse.statusCode()).thenReturn(200);
+    when(httpResponse.body())
+        .thenReturn("{\"access_token\":\"gho_test123\"}")
+        .thenReturn("{\"login\":\"testuser\",\"avatar_url\":\"https://a.co\",\"name\":\"Test\"}");
+
+    assertEquals(303, resource.callback("valid-code", "test-state", "test-state").getStatus());
+
+    var captor = ArgumentCaptor.forClass(HttpRequest.class);
+    verify(fixtureContext.httpClient, times(2)).send(captor.capture(), any());
+    var userRequest = captor.getAllValues().get(1);
+    assertEquals("https://ghe.example.com/api/v3/user", userRequest.uri().toString());
+    assertEquals(
+        Optional.of("Bearer gho_test123"), userRequest.headers().firstValue("Authorization"));
+  }
+
+  @Test
   void callbackShouldRejectMismatchedState() {
     var response = resource.callback("valid-code", "test-state", "wrong-state");
     assertEquals(403, response.getStatus());
