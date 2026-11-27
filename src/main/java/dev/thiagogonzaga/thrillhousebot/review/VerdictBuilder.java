@@ -21,6 +21,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReasoningStepDown;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
@@ -472,7 +473,8 @@ public class VerdictBuilder {
                     linked.verdicts())
                 .withRound(ctx.previousFindingsList(), addedCode(ctx.files()))),
         ciEvaluation,
-        backstopStatuses);
+        backstopStatuses,
+        ctx.priorRoundsUnreadable());
   }
 
   /**
@@ -530,12 +532,27 @@ public class VerdictBuilder {
    * changes.
    */
   static String checkSummaryForResult(ReviewResult result) {
+    if (result.priorRoundsUnreadable()) {
+      return unreadableRoundsSummaryFor(result);
+    }
     if (!result.confidenceHeldTheVerdict()) {
       return verdictSummaryFor(result);
     }
     return verdictSummaryFor(result)
         + " "
         + ReviewResult.confidenceHoldBrief(result.blockingWithheldByConfidence());
+  }
+
+  /**
+   * The summary line of a round held because no stored earlier round could be read. Such a round
+   * raised nothing and holds nothing else open, so the hold is the whole story unless CI or diff
+   * coverage holds too, and then it follows their sentence.
+   */
+  private static String unreadableRoundsSummaryFor(ReviewResult result) {
+    if (result.ciHoldsApproval() || result.truncated()) {
+      return verdictSummaryFor(result) + " " + ReviewResult.PRIOR_ROUNDS_UNREADABLE_BRIEF;
+    }
+    return "No new issues found. " + ReviewResult.PRIOR_ROUNDS_UNREADABLE_BRIEF;
   }
 
   private static String verdictSummaryFor(ReviewResult result) {
@@ -975,7 +992,8 @@ public class VerdictBuilder {
             CiFailureCitations.NONE,
             PrSummaryGenerator.DescriptionSources.NONE),
         ciEvaluation,
-        backstopStatuses);
+        backstopStatuses,
+        false);
   }
 
   private ReviewResult buildResult(
@@ -984,7 +1002,8 @@ public class VerdictBuilder {
       DiffStats diffStats,
       SummaryInputs summaryInputs,
       CiStatusEvaluator.CiEvaluation ciEvaluation,
-      List<ReviewResult.PreviousFindingStatus> backstopStatuses) {
+      List<ReviewResult.PreviousFindingStatus> backstopStatuses,
+      boolean priorRoundsUnreadable) {
     var changedFiles = summaryInputs.changedFiles();
     var offendingCiChecks = ciEvaluation.offendingChecks();
     var ciUnreadable = ciEvaluation.unreadable();
@@ -1018,6 +1037,18 @@ public class VerdictBuilder {
         mergePreviousStatuses(
             followUpAnalyzer.toStatuses(aiResponse.previousFindingsStatus()), backstopStatuses);
     if (state == ReviewState.APPROVE && followUpAnalyzer.hasUnresolved(previousStatuses)) {
+      state = ReviewState.COMMENT;
+    }
+
+    // Earlier rounds are stored and none could be read: nothing they raised was listed to the
+    // model, so no status survived the screen and the backstop had no round to replay. A clean
+    // round then says nothing about what those rounds left open, so it does not approve. Judged
+    // before the CI and coverage holds, which a later reading can lift; this one they cannot.
+    var heldOnUnreadableRounds = state == ReviewState.APPROVE && priorRoundsUnreadable;
+    if (heldOnUnreadableRounds) {
+      Log.warn(
+          "Holding approval: earlier review rounds are stored for this pull request and none"
+              + " could be read");
       state = ReviewState.COMMENT;
     }
 
@@ -1055,7 +1086,8 @@ public class VerdictBuilder {
                 requiredContextsKnown,
                 diffStats.truncation(),
                 withheldByConfidence,
-                summaryInputs.openPrevious()),
+                summaryInputs.openPrevious(),
+                heldOnUnreadableRounds),
             summaryInputs.descriptionSources());
     var scopeNote = reviewScopeNote(summaryInputs);
     if (!scopeNote.isEmpty()) {
@@ -1071,6 +1103,9 @@ public class VerdictBuilder {
     // in full is the larger caveat, and it is the first thing a reader should meet.
     if (withheldByConfidence > 0) {
       summaryMarkdown = ReviewResult.confidenceHoldNotice(withheldByConfidence) + summaryMarkdown;
+    }
+    if (heldOnUnreadableRounds) {
+      summaryMarkdown = ReviewResult.PRIOR_ROUNDS_UNREADABLE_NOTICE + summaryMarkdown;
     }
     summaryMarkdown =
         withCoverageBanners(summaryMarkdown, diffStats, summaryInputs.overviewCarried());
@@ -1092,7 +1127,8 @@ public class VerdictBuilder {
         requiredContextsKnown,
         diffStats.truncation(),
         withheldByConfidence,
-        summaryInputs.openPrevious());
+        summaryInputs.openPrevious(),
+        heldOnUnreadableRounds);
   }
 
   /**

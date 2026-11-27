@@ -954,9 +954,15 @@ public class ReviewPublisher {
 
   private static String reviewNotice(ReviewResult result, PostReviewRequest post) {
     // The delta already includes its partial/verification disclosure; do not repeat it.
-    return result.truncated() && post.followUpDeltaSection().isBlank()
-        ? result.truncationNotice()
-        : "";
+    var truncation =
+        result.truncated() && post.followUpDeltaSection().isBlank()
+            ? result.truncationNotice()
+            : "";
+    // A round held because no stored earlier round could be read has nothing else to say why it
+    // did not approve, and a follow-up posts no new summary comment to carry the banner.
+    return result.priorRoundsUnreadable()
+        ? truncation + ReviewResult.PRIOR_ROUNDS_UNREADABLE_NOTICE
+        : truncation;
   }
 
   /**

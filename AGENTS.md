@@ -353,6 +353,14 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   `VerdictBuilder.buildResult` passes both to `ReviewState.fromFindings`, so a backstop hold can
   request changes, not only downgrade an approval
   (`SummaryAcrossRoundsTest.anEarlierCriticalStillOpenRequestsChangesWhenTheNewFindingsAreLow`).
+- **A round with stored earlier rounds and none readable does not approve.**
+  `ReviewContext.priorRoundsUnreadable` is true when prior responses are stored and none is a
+  persisted one (`FollowUpAnalyzer.isPersistedResponse`): nothing is listed to the model, the
+  status screen drops every status and the backstop has no round to replay. `buildResult` holds a
+  clean verdict at `COMMENT`, logs a WARN and sets `ReviewResult.priorRoundsUnreadable`, which the
+  summary banner, the review body, the check-run summary and `heldOnCiOnly` (no CI revisit) read.
+  A first review, and a readable round that raised nothing, are not this
+  (`UnconfirmedDeclineAcrossRoundsTest`).
 - **A round that does not approve withdraws the bot's standing approvals.** GitHub keeps counting
   an `APPROVED` review after its author posts a `COMMENT` one, so `ReviewPublisher.publishReview`
   calls `withdrawStandingApprovals` before any post unless the round ends in an `APPROVE` review

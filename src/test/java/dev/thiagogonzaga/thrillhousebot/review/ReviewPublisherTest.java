@@ -1242,4 +1242,41 @@ class ReviewPublisherTest {
 
     assertTrue(FollowUpAnalyzer.isSelfAuthoredStatusBody(body), body);
   }
+
+  /** A follow-up that raised nothing and is held because no stored earlier round could be read. */
+  private static ReviewResult heldOnUnreadableRounds() {
+    return new ReviewResult(
+        List.of(),
+        0,
+        0,
+        0,
+        0,
+        null,
+        ReviewState.COMMENT,
+        false,
+        "summary",
+        List.of(),
+        List.of(),
+        0,
+        false,
+        true,
+        null,
+        0,
+        List.of(),
+        true);
+  }
+
+  @Test
+  void aRoundHeldOnUnreadableEarlierRoundsSaysSoInTheReviewBody() {
+    post("sha2", heldOnUnreadableRounds(), List.of());
+
+    var posted = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+    verify(reviewClient)
+        .createReview(anyString(), anyString(), eq("o"), eq("r"), eq(1), posted.capture());
+    assertEquals("COMMENT", posted.getValue().event());
+    var body = posted.getValue().body();
+    assertEquals(ReviewResult.PRIOR_ROUNDS_UNREADABLE_NOTICE.strip(), body);
+    // The bot's own sentence about its verdict is never offered back to the model as a finding.
+    assertTrue(FollowUpAnalyzer.isSelfAuthoredStatusBody(body), body);
+  }
 }

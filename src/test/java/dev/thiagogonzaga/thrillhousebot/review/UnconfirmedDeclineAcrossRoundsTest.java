@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -124,8 +125,8 @@ class UnconfirmedDeclineAcrossRoundsTest {
             jsons,
             priorRounds,
             false,
-            true,
-            jsons.get(0),
+            !jsons.isEmpty(),
+            jsons.isEmpty() ? null : jsons.get(0),
             comments,
             "",
             new InstructionsResolver.ResolvedInstructions("", ""),
@@ -263,5 +264,109 @@ class UnconfirmedDeclineAcrossRoundsTest {
     assertEquals(silent.reviewState(), declined.reviewState());
     assertEquals(stillOpen.reviewState(), declined.reviewState());
     assertEquals(stillOpen.previousStatuses(), declined.previousStatuses());
+  }
+
+  /** The stored rounds as the loader reads them, each JSON parsed once, newest first. */
+  private static ReviewContextLoader.ReviewContext storedContext(List<String> jsons) {
+    return context(jsons, new FollowUpAnalyzer(MAPPER).parsePreviousResponses(jsons), List.of());
+  }
+
+  private static String json(ReviewResponse round) {
+    return MAPPER.valueToTree(round).toString();
+  }
+
+  @Test
+  void aCleanRoundIsHeldAtCommentWhenNoStoredRoundCanBeRead() {
+    var ctx = storedContext(List.of("{not json", " "));
+    assertTrue(ctx.priorRoundsUnreadable());
+
+    var result = roundReporting(ctx, List.of());
+
+    assertEquals(ReviewState.COMMENT, result.reviewState());
+    assertTrue(result.priorRoundsUnreadable());
+    assertEquals(0, result.unresolvedPreviousCount());
+    var summary = result.summaryMarkdown();
+    assertTrue(summary.startsWith(ReviewResult.PRIOR_ROUNDS_UNREADABLE_NOTICE), summary);
+    assertTrue(summary.contains("No new issues found in this round."), summary);
+    assertFalse(summary.contains(PrSummaryGenerator.ZERO_ISSUES_MESSAGE), summary);
+    assertEquals(
+        "No new issues found. " + ReviewResult.PRIOR_ROUNDS_UNREADABLE_BRIEF,
+        VerdictBuilder.checkSummaryForResult(result));
+  }
+
+  @Test
+  void aStatusReportedWhenNoStoredRoundCanBeReadDoesNotLiftTheHold() {
+    var ctx = storedContext(List.of("{not json"));
+
+    assertEquals(ReviewState.COMMENT, roundReporting(ctx, status(1, "resolved")).reviewState());
+    assertEquals(ReviewState.COMMENT, roundReporting(ctx, status(1, "justified")).reviewState());
+  }
+
+  @Test
+  void aCleanFirstReviewStillApproves() {
+    var ctx = storedContext(List.of());
+    assertFalse(ctx.priorRoundsUnreadable());
+
+    var result = roundReporting(ctx, List.of());
+
+    assertEquals(ReviewState.APPROVE, result.reviewState());
+    assertFalse(result.priorRoundsUnreadable());
+    assertFalse(
+        result.summaryMarkdown().contains(ReviewResult.PRIOR_ROUNDS_UNREADABLE_LEAD_IN),
+        result.summaryMarkdown());
+  }
+
+  @Test
+  void aCleanRoundAfterAReadableRoundThatRaisedNothingStillApproves() {
+    var ctx = storedContext(List.of(json(new ReviewResponse(List.of(), List.of(), null))));
+    assertFalse(ctx.priorRoundsUnreadable());
+
+    var result = roundReporting(ctx, List.of());
+
+    assertEquals(ReviewState.APPROVE, result.reviewState());
+    assertFalse(result.priorRoundsUnreadable());
+  }
+
+  @Test
+  void oneReadableRoundBesideAnUnreadableOneIsJudgedOnTheReadableRoundAlone() {
+    // The readable round's open finding is held by the backstop, as before.
+    var open = storedContext(List.of("{not json", json(ROUND_ONE)));
+    assertFalse(open.priorRoundsUnreadable());
+    var held = roundReporting(open, List.of());
+    assertNotEquals(ReviewState.APPROVE, held.reviewState());
+    assertEquals(1, held.unresolvedPreviousCount());
+    assertFalse(held.priorRoundsUnreadable());
+
+    // A readable round that raised nothing leaves nothing to hold, as before.
+    var clean =
+        storedContext(List.of(json(new ReviewResponse(List.of(), List.of(), null)), "{not json"));
+    var approved = roundReporting(clean, List.of());
+    assertEquals(ReviewState.APPROVE, approved.reviewState());
+    assertFalse(approved.priorRoundsUnreadable());
+  }
+
+  @Test
+  void aRoundHeldOnCiAndOnUnreadableRoundsIsNotLeftForCiAloneToApprove() {
+    var ctx = storedContext(List.of("{not json"));
+    var pending =
+        new CiStatusEvaluator.CiEvaluation(
+            List.of(new ReviewResult.CiCheck("build", "check-run", "pending", null)), false);
+    var screened =
+        FollowUpAnalyzer.screenModelStatuses(
+            new ReviewResponse(List.of(), List.of(), null), ctx, ctx.lineResolver(), BOT);
+
+    var result = builder.build(ctx, screened, pending, PLAN);
+
+    assertEquals(ReviewState.COMMENT, result.reviewState());
+    assertTrue(result.ciHoldsApproval());
+    assertTrue(result.priorRoundsUnreadable());
+    // The CI revisit posts the approval a round held on CI alone earned; this one earned none.
+    assertFalse(result.heldOnCiOnly());
+    var checkSummary = VerdictBuilder.checkSummaryForResult(result);
+    assertTrue(checkSummary.startsWith("No new issues found, but 1 "), checkSummary);
+    assertTrue(checkSummary.endsWith(ReviewResult.PRIOR_ROUNDS_UNREADABLE_BRIEF), checkSummary);
+    assertTrue(
+        result.summaryMarkdown().startsWith(ReviewResult.PRIOR_ROUNDS_UNREADABLE_NOTICE),
+        result.summaryMarkdown());
   }
 }

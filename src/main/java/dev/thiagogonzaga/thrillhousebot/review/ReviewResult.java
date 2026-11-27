@@ -54,7 +54,11 @@ public record ReviewResult(
     // describes the pull request's current state, so it lists these beside the round's own
     // findings. Not part of findings(), which stays this round's set for the verdict, the check
     // run and the inline comments.
-    List<Finding> openPreviousFindings) {
+    List<Finding> openPreviousFindings,
+    // True when the only thing between this verdict and APPROVE, besides CI and diff coverage, is
+    // that earlier rounds are stored for the pull request and none could be read — see
+    // #PRIOR_ROUNDS_UNREADABLE_NOTICE.
+    boolean priorRoundsUnreadable) {
 
   private static final String STATUS_SUPERSEDED = "superseded";
 
@@ -68,6 +72,49 @@ public record ReviewResult(
     if (reviewState == null) {
       reviewState = ReviewState.fromHighestRisk(highestRisk);
     }
+  }
+
+  /**
+   * Constructor for results whose earlier rounds, if any, were read: everything but the review path
+   * of {@code VerdictBuilder}, which passes the real flag through the canonical constructor.
+   */
+  public ReviewResult(
+      List<Finding> findings,
+      int criticalCount,
+      int highCount,
+      int mediumCount,
+      int lowCount,
+      RiskLevel highestRisk,
+      ReviewState reviewState,
+      boolean isFirstReview,
+      String summaryMarkdown,
+      List<PreviousFindingStatus> previousStatuses,
+      List<CiCheck> offendingCiChecks,
+      int omittedFiles,
+      boolean ciUnreadable,
+      boolean requiredContextsKnown,
+      TruncationDetail truncation,
+      int blockingWithheldByConfidence,
+      List<Finding> openPreviousFindings) {
+    this(
+        findings,
+        criticalCount,
+        highCount,
+        mediumCount,
+        lowCount,
+        highestRisk,
+        reviewState,
+        isFirstReview,
+        summaryMarkdown,
+        previousStatuses,
+        offendingCiChecks,
+        omittedFiles,
+        ciUnreadable,
+        requiredContextsKnown,
+        truncation,
+        blockingWithheldByConfidence,
+        openPreviousFindings,
+        false);
   }
 
   /**
@@ -494,7 +541,8 @@ public record ReviewResult(
         && ciHoldsApproval()
         && !hasIssues()
         && unresolvedPreviousCount() == 0
-        && !truncated();
+        && !truncated()
+        && !priorRoundsUnreadable;
   }
 
   /** True when the line budget dropped whole files, so this review covers only part of the diff. */
@@ -710,6 +758,30 @@ public record ReviewResult(
   /** The unreadable-CI sibling of {@link #CI_PENDING_ALSO_LEAD_IN}. */
   static final String CI_UNREADABLE_ALSO_LEAD_IN =
       "The CI status could not be read either, so approval is held until it can be confirmed.";
+
+  /**
+   * Lead-in of {@link #PRIOR_ROUNDS_UNREADABLE_NOTICE}. Shared with the recognizer of the bot's own
+   * review bodies so the two cannot drift, like {@link #TRUNCATION_NOTICE_LEAD_IN}.
+   */
+  static final String PRIOR_ROUNDS_UNREADABLE_LEAD_IN =
+      "> ⚠️ **Earlier review rounds could not be read.**";
+
+  /**
+   * Banner of a round held from APPROVE because earlier rounds are stored for the pull request and
+   * none could be read. Nothing those rounds raised can be listed, reported on or replayed, so a
+   * clean round cannot show that what they raised is closed. Prepended to the summary and carried
+   * in the review body.
+   */
+  static final String PRIOR_ROUNDS_UNREADABLE_NOTICE =
+      PRIOR_ROUNDS_UNREADABLE_LEAD_IN
+          + " The stored results of the earlier reviews of this pull request could not be read, so"
+          + " this review cannot confirm that what they raised is closed, and approval is held for"
+          + " this round. Check the earlier review threads before merging.\n\n";
+
+  /** The one-sentence check-run form of {@link #PRIOR_ROUNDS_UNREADABLE_NOTICE}. */
+  static final String PRIOR_ROUNDS_UNREADABLE_BRIEF =
+      "The earlier review rounds on this pull request could not be read — holding approval for"
+          + " this round.";
 
   /** Lead-in of {@link #truncationNotice(int, TruncationDetail)}'s partial-review banner. */
   static final String TRUNCATION_NOTICE_LEAD_IN = "> ⚠️ **Large PR — partial review.**";
