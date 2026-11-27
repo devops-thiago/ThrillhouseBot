@@ -671,6 +671,20 @@ class CommentCommandServiceTest {
     assertTrue(postedBody().contains("Resolved 1"));
   }
 
+  @Test
+  void resolveReportsOnlyTheCountWhenEveryThreadWasResolved() {
+    authorize(true);
+    when(reviewClient.listPullRequestComments(any(), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(List.of(comment(100L, null, "thrillhousebot[bot]")));
+    when(reviewThreadService.threadsByRootComment(any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(Map.of(100L, new ReviewThreadService.ThreadRef("T100", false)));
+    when(reviewThreadService.resolve(any(), eq("T100"))).thenReturn(true);
+
+    service.handle(ctx(CommentCommand.RESOLVE));
+
+    assertEquals("✅ Resolved 1 ThrillhouseBot finding thread(s).", postedBody());
+  }
+
   // #1471: a thread list GitHub did not return is a failure, not a PR with nothing to resolve.
   @Test
   void resolveSaysTheThreadsCouldNotBeReadWhenTheListingFails() {

@@ -482,6 +482,15 @@ public class CommentCommandService {
           notPermitted(e) ? RESOLVE_NOT_PERMITTED_NOTICE : RESOLVE_LISTING_FAILED_NOTICE);
       return;
     }
+    postComment(auth, ctx, resolveThreads(ctx, auth, botRootCommentIds, threads));
+  }
+
+  /** Resolves each open bot thread and returns the reply for what happened to them. */
+  private String resolveThreads(
+      CommandContext ctx,
+      String auth,
+      List<Long> botRootCommentIds,
+      Map<Long, ReviewThreadService.ThreadRef> threads) {
     var resolved = 0;
     var failed = 0;
     for (long rootCommentId : botRootCommentIds) {
@@ -499,13 +508,12 @@ public class CommentCommandService {
         log.warn(
             "Failed to resolve thread {} on {} #{}", thread.id(), repository(ctx), num(ctx), e);
         if (notPermitted(e)) {
-          postComment(auth, ctx, RESOLVE_NOT_PERMITTED_NOTICE);
-          return;
+          return RESOLVE_NOT_PERMITTED_NOTICE;
         }
         failed++;
       }
     }
-    postComment(auth, ctx, resolveOutcome(resolved, failed));
+    return resolveOutcome(resolved, failed);
   }
 
   private static boolean notPermitted(RuntimeException e) {
