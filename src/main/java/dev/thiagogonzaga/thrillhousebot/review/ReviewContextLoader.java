@@ -734,38 +734,56 @@ public class ReviewContextLoader {
     // under-tested. The section goes to the prompt; a refusal goes to the summary's scope note.
     var patchCoverage = patchCoverageResolver.resolve(auth, req, repoSettings, reviewableFiles);
 
-    return new ReviewContext(
-        files,
-        diffResult.text(),
-        baseComparisonResult.text(),
-        omittedFiles,
-        priorReviews,
-        priorAiResponseJsons,
-        priorAiResponses,
-        isFirstVisibleReview,
-        hasContext,
-        previousAiResponseJson,
-        inlineComments,
-        previousFindings,
-        instructions,
-        pathInstructions,
-        repoLabels,
-        projectStack,
-        linkedIssuesContext,
-        configKeyContext,
-        patchCoverage.section(),
-        reviewableFiles,
-        lineResolverSupplier,
-        prTotals,
-        conversationComments,
-        unmatchedIgnoreGlobs,
-        carried,
-        patchCoverage.artifactRefusal(),
-        headUnchanged(
-            previousRoundHeadSha(
-                priorCommitShas, priorAiResponseJsons.size(), previousRoundIndex, carried),
-            req.commitSha()),
-        verifiedWriters);
+    return warnWhenPriorRoundsUnreadable(
+        req,
+        new ReviewContext(
+            files,
+            diffResult.text(),
+            baseComparisonResult.text(),
+            omittedFiles,
+            priorReviews,
+            priorAiResponseJsons,
+            priorAiResponses,
+            isFirstVisibleReview,
+            hasContext,
+            previousAiResponseJson,
+            inlineComments,
+            previousFindings,
+            instructions,
+            pathInstructions,
+            repoLabels,
+            projectStack,
+            linkedIssuesContext,
+            configKeyContext,
+            patchCoverage.section(),
+            reviewableFiles,
+            lineResolverSupplier,
+            prTotals,
+            conversationComments,
+            unmatchedIgnoreGlobs,
+            carried,
+            patchCoverage.artifactRefusal(),
+            headUnchanged(
+                previousRoundHeadSha(
+                    priorCommitShas, priorAiResponseJsons.size(), previousRoundIndex, carried),
+                req.commitSha()),
+            verifiedWriters));
+  }
+
+  /**
+   * {@code ctx}, after a warning when earlier rounds are stored for the pull request and none could
+   * be read ({@link ReviewContext#priorRoundsUnreadable()}). Such a round does not approve, and the
+   * log is where an operator learns which pull request's stored results went bad.
+   */
+  private static ReviewContext warnWhenPriorRoundsUnreadable(
+      ReviewOrchestrator.ReviewRequest req, ReviewContext ctx) {
+    if (ctx.priorRoundsUnreadable()) {
+      Log.warnf(
+          "None of the %d stored earlier review round(s) of %s/%s #%d could be read — this"
+              + " round will not approve",
+          ctx.priorAiResponses().size(), req.owner(), req.repo(), req.prNumber());
+    }
+    return ctx;
   }
 
   /**

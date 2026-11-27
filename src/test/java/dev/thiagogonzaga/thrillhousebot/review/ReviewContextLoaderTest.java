@@ -1006,6 +1006,44 @@ class ReviewContextLoaderTest {
     }
 
     @Test
+    void storedRoundsThatCannotBeReadAreReportedAsUnreadable() {
+      stubLoad(List.of("{not json", " "));
+
+      var ctx = load();
+
+      assertTrue(ctx.hasContext());
+      assertTrue(ctx.priorRoundsUnreadable());
+      assertTrue(ctx.previousFindingsList().isEmpty());
+    }
+
+    @Test
+    void aStoredRoundThatWasReadAndRaisedNothingIsNotUnreadable() {
+      stubLoad(List.of("{\"findings\":[]}", "{not json"));
+
+      assertFalse(load().priorRoundsUnreadable());
+    }
+
+    @Test
+    void aFirstReviewHasNoUnreadableRounds() {
+      stubLoad(List.of());
+
+      assertFalse(load().priorRoundsUnreadable());
+    }
+
+    @Test
+    void carriedFindingsJoinedToUnreadableRoundsMakeARoundThatCanBeRead() {
+      // The carried findings are known and are held like any posted round's, so the round is
+      // judged on them; what the unreadable rounds raised stays unknown.
+      stubLoad(List.of("{not json"));
+      carryover.stash("owner", "repo", 1, "oldsha1", "headsha1", List.of(CARRIED));
+
+      var ctx = load();
+
+      assertFalse(ctx.priorRoundsUnreadable());
+      assertEquals(List.of(CARRIED), ctx.previousFindingsList());
+    }
+
+    @Test
     void carriedFindingsTakeTheIdsAfterThePostedRoundsOwn() {
       stubLoad(List.of(POSTED_ROUND_JSON));
       carryover.stash("owner", "repo", 1, "oldsha1", "headsha1", List.of(CARRIED));

@@ -533,7 +533,8 @@ public class PrSummaryGenerator {
             round.requiredContextsKnown(),
             round.truncation(),
             round.blockingWithheldByConfidence(),
-            open);
+            open,
+            round.priorRoundsUnreadable());
     return new CurrentState(result, carried);
   }
 

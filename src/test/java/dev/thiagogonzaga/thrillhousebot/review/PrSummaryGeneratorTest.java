@@ -2013,7 +2013,8 @@ class PrSummaryGeneratorTest {
             true,
             ReviewResult.TruncationDetail.EMPTY,
             0,
-            List.of(carriedLow, carriedDoubleCheck));
+            List.of(carriedLow, carriedDoubleCheck),
+            false);
 
     var summary = new PrSummaryGenerator(false).generate(2, 3, 1, List.of(), null, round);
 
@@ -2077,7 +2078,8 @@ class PrSummaryGeneratorTest {
         false,
         null,
         0,
-        open);
+        open,
+        false);
   }
 
   @Test

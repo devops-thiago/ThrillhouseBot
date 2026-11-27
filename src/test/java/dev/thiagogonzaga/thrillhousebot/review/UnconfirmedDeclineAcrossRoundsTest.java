@@ -261,6 +261,7 @@ class UnconfirmedDeclineAcrossRoundsTest {
     // an "unresolved" would have held.
     assertTrue(declined.previousStatuses().isEmpty(), declined.previousStatuses().toString());
     assertEquals(0, justified(declined));
+    assertEquals(ReviewState.COMMENT, declined.reviewState(), "nothing was confirmed closed");
     assertEquals(silent.reviewState(), declined.reviewState());
     assertEquals(stillOpen.reviewState(), declined.reviewState());
     assertEquals(stillOpen.previousStatuses(), declined.previousStatuses());
@@ -368,5 +369,35 @@ class UnconfirmedDeclineAcrossRoundsTest {
     assertTrue(
         result.summaryMarkdown().startsWith(ReviewResult.PRIOR_ROUNDS_UNREADABLE_NOTICE),
         result.summaryMarkdown());
+  }
+
+  @Test
+  void aPartialReviewHeldOnUnreadableRoundsNamesBothOnTheCheckRun() {
+    var partial =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.COMMENT,
+            false,
+            "",
+            List.of(),
+            List.of(),
+            2,
+            false,
+            true,
+            null,
+            0,
+            List.of(),
+            true);
+
+    var checkSummary = VerdictBuilder.checkSummaryForResult(partial);
+
+    assertTrue(
+        checkSummary.contains("this is a partial review, so approval is held."), checkSummary);
+    assertTrue(checkSummary.endsWith(ReviewResult.PRIOR_ROUNDS_UNREADABLE_BRIEF), checkSummary);
   }
 }

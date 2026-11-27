@@ -21,7 +21,6 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReasoningStepDown;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
-import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
@@ -1046,9 +1045,6 @@ public class VerdictBuilder {
     // before the CI and coverage holds, which a later reading can lift; this one they cannot.
     var heldOnUnreadableRounds = state == ReviewState.APPROVE && priorRoundsUnreadable;
     if (heldOnUnreadableRounds) {
-      Log.warn(
-          "Holding approval: earlier review rounds are stored for this pull request and none"
-              + " could be read");
       state = ReviewState.COMMENT;
     }
 

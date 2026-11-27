@@ -30,7 +30,9 @@ security limits. To report a vulnerability, see
 - When earlier reviews are stored for a pull request and none of them can be
   read, a review that finds nothing does not approve. It ends as `COMMENT` and
   says why, because the bot cannot confirm that what those reviews raised is
-  closed.
+  closed. This lasts one review: the held review is stored and can be read, so
+  the next one is judged against it and what the unreadable reviews raised is
+  no longer tracked.
 - A review that does not approve dismisses the approvals the bot gave earlier
   on the same pull request, so an approval of an older head does not go on
   counting for code the bot declined to approve. Only the bot's own reviews are

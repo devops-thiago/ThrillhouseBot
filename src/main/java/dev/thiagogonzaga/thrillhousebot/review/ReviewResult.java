@@ -75,49 +75,6 @@ public record ReviewResult(
   }
 
   /**
-   * Constructor for results whose earlier rounds, if any, were read: everything but the review path
-   * of {@code VerdictBuilder}, which passes the real flag through the canonical constructor.
-   */
-  public ReviewResult(
-      List<Finding> findings,
-      int criticalCount,
-      int highCount,
-      int mediumCount,
-      int lowCount,
-      RiskLevel highestRisk,
-      ReviewState reviewState,
-      boolean isFirstReview,
-      String summaryMarkdown,
-      List<PreviousFindingStatus> previousStatuses,
-      List<CiCheck> offendingCiChecks,
-      int omittedFiles,
-      boolean ciUnreadable,
-      boolean requiredContextsKnown,
-      TruncationDetail truncation,
-      int blockingWithheldByConfidence,
-      List<Finding> openPreviousFindings) {
-    this(
-        findings,
-        criticalCount,
-        highCount,
-        mediumCount,
-        lowCount,
-        highestRisk,
-        reviewState,
-        isFirstReview,
-        summaryMarkdown,
-        previousStatuses,
-        offendingCiChecks,
-        omittedFiles,
-        ciUnreadable,
-        requiredContextsKnown,
-        truncation,
-        blockingWithheldByConfidence,
-        openPreviousFindings,
-        false);
-  }
-
-  /**
    * Constructor for results that carry no earlier round's open findings: a first review, and every
    * caller that renders nothing from them.
    */
@@ -155,7 +112,8 @@ public record ReviewResult(
         requiredContextsKnown,
         truncation,
         blockingWithheldByConfidence,
-        List.of());
+        List.of(),
+        false);
   }
 
   /**
