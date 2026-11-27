@@ -119,8 +119,8 @@ final class TestAssertions {
    */
   private static final Pattern SINGLE_QUOTE = Pattern.compile("(?<!\\w)'([^'\\n]++)'");
 
-  /** A function declared or called on a line: its name, then its argument list opening. */
-  private static final Pattern FUNCTION_NAME = Pattern.compile("([A-Za-z_]\\w*+)\\s*+\\(");
+  /** A name on a line and where it starts. */
+  private record NameAt(String name, int start) {}
 
   /**
    * What a declaration puts before a function's name: its type and modifiers ({@code static void},
@@ -264,8 +264,8 @@ final class TestAssertions {
    * for_each_cpu(i, mask) {}, {@code rc = latest_scan(d);} and {@code setup(&d);} do not.
    */
   private static Optional<String> declaredFunction(String code, PatchLines.Line above, int hunk) {
-    var name = FUNCTION_NAME.matcher(code);
-    if (code.endsWith(";") || !name.find()) {
+    var name = code.endsWith(";") ? null : functionName(code);
+    if (name == null) {
       return Optional.empty();
     }
     var prefix = code.substring(0, name.start()).strip();
@@ -276,9 +276,31 @@ final class TestAssertions {
     return !prefix.isEmpty()
             && DECLARATION_PREFIX.matcher(prefix).matches()
             && !STATEMENT_WORDS.contains(opening)
-            && !STATEMENT_WORDS.contains(name.group(1))
-        ? Optional.of(name.group(1))
+            && !STATEMENT_WORDS.contains(name.name())
+        ? Optional.of(name.name())
         : Optional.empty();
+  }
+
+  /**
+   * The first function declared or called on a line: its name, any whitespace, then its argument
+   * list opening; {@code null} when the line has none. The name is the word before the parenthesis
+   * without the digits that word opens with, so a word of digits alone is no name. Each word is
+   * read once, back from its parenthesis: a pattern starting at any letter of a word read the rest
+   * of the word from every one of them, which is quadratic in the length of a line that is one long
+   * word.
+   */
+  private static NameAt functionName(String code) {
+    for (int paren = code.indexOf('('); paren >= 0; paren = code.indexOf('(', paren + 1)) {
+      int end = CallSites.nameEnd(code, paren);
+      int start = CallSites.nameStart(code, end);
+      while (start < end && CallSites.isDigit(code.charAt(start))) {
+        start++;
+      }
+      if (start < end) {
+        return new NameAt(code.substring(start, end), start);
+      }
+    }
+    return null;
   }
 
   /** How many patch lines the index has read. */

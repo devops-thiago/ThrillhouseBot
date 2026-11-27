@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTimeout;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
@@ -1338,5 +1339,77 @@ class PathMentionsTest {
             .screen(new ReviewResponse(List.of(raised), List.of(), null));
 
     assertEquals(kept ? suggestion : null, screened.findings().getFirst().suggestionNew());
+  }
+
+  /**
+   * A code span holding a run of 400,000 blanks and no line break. Looking for a wrapped line used
+   * to start at every blank and read the rest of the run: 32,000 took 2 seconds.
+   */
+  @Test
+  void aLongRunOfBlanksInACodeSpanIsReadOnce() {
+    var mentions = mentions(ZIG_IMAGE, "", Set.of());
+    var description = "`RUN" + " ".repeat(400_000) + "install` is not in the file.";
+
+    assertSame(
+        description,
+        assertTimeoutPreemptively(
+            Duration.ofSeconds(10),
+            () -> mentions.withQuotedPathsCorrected(description, "zig/Dockerfile")));
+  }
+
+  /**
+   * Two breaks with only blanks between them: the second break's blanks belong to the first match.
+   * Each break still reads as one blank.
+   */
+  @Test
+  void aBreakRightAfterAnotherIsReadAsABlankToo() {
+    assertEquals("RUN  install", PathMentions.onOneLine("RUN \n \n install"));
+    assertEquals("a   b", PathMentions.onOneLine("a\n\n\t\nb"));
+  }
+
+  /**
+   * Every string of up to eight characters over a blank, a tab, a break and a letter comes out as a
+   * plain left-to-right reading leaves it: each break, with the blanks around it, is one blank.
+   */
+  @Test
+  void aSpanIsPutOnOneLineAsAPlainReadingPutsIt() {
+    char[] alphabet = {' ', '\t', '\n', 'a'};
+    for (int length = 0; length <= 8; length++) {
+      var chars = new char[length];
+      int combinations = 1 << (2 * length);
+      for (int code = 0; code < combinations; code++) {
+        for (int at = 0; at < length; at++) {
+          chars[at] = alphabet[(code >> (2 * at)) & 3];
+        }
+        var span = new String(chars);
+        assertEquals(readOnOneLine(span), PathMentions.onOneLine(span));
+      }
+    }
+  }
+
+  /** What {@link PathMentions#onOneLine} is held to, written without a pattern. */
+  private static String readOnOneLine(String span) {
+    var out = new StringBuilder();
+    int at = 0;
+    while (at < span.length()) {
+      int blanksEnd = skipBlanks(span, at);
+      if (blanksEnd < span.length() && span.charAt(blanksEnd) == '\n') {
+        out.append(' ');
+        at = skipBlanks(span, blanksEnd + 1);
+      } else {
+        int end = Math.max(blanksEnd, at + 1);
+        out.append(span, at, end);
+        at = end;
+      }
+    }
+    return out.toString();
+  }
+
+  private static int skipBlanks(String span, int from) {
+    int at = from;
+    while (at < span.length() && (span.charAt(at) == ' ' || span.charAt(at) == '\t')) {
+      at++;
+    }
+    return at;
   }
 }

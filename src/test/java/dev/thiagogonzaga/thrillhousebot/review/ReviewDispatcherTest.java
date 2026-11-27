@@ -986,6 +986,14 @@ class ReviewDispatcherTest {
     assertEquals(expected, limits.waiting(1L, TestScopes.REPOSITORY_ID));
   }
 
+  /** Spins until no review waits for a slot; the caller's assertions cover a timeout. */
+  private static void awaitNoneWaiting(AutoReviewSlots limits) {
+    var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    while (limits.waiting(1L, TestScopes.REPOSITORY_ID) != 0 && System.nanoTime() < deadline) {
+      Thread.onSpinWait();
+    }
+  }
+
   @Test
   void automaticReviewsOfOneRepositoryRunOnlyAsManyAtOnceAsTheLimit() throws InterruptedException {
     var limits = new AutoReviewSlots(2, 10);
@@ -1185,8 +1193,15 @@ class ReviewDispatcherTest {
     doAnswer(
             invocation -> {
               started.countDown();
-              // Holds the slot until the shutdown interrupts it.
-              new CountDownLatch(1).await(5, TimeUnit.SECONDS);
+              try {
+                new CountDownLatch(1).await(5, TimeUnit.SECONDS);
+              } catch (InterruptedException _) {
+                // The shutdown interrupts the workers one after the other. The slot is kept until
+                // the waiting review has been interrupted too, so a freed slot cannot reach it
+                // first.
+                awaitNoneWaiting(limits);
+                Thread.currentThread().interrupt();
+              }
               return true;
             })
         .when(orchestrator)
