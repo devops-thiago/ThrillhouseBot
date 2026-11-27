@@ -153,12 +153,16 @@ jobs:
       - name: Resolve Trivy ignore policy for tagged commit
         env:
           TAG: ${{ needs.verify.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           if [ -f .trivyignore ]; then
             echo "Using .trivyignore from ${TAG}"
             exit 0
           fi
-          git fetch origin main --depth=1
+          # The checkout keeps no credential, so the token is passed to this fetch only. That
+          # keeps it working where the repository is not public.
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c "http.extraheader=${auth}" fetch origin main --depth=1
           if git show origin/main:.trivyignore > .trivyignore 2>/dev/null; then
             echo "Tag has no .trivyignore; using scan policy from origin/main"
           else
