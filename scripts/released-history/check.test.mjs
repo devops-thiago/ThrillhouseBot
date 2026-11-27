@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import {
   Git, archiveViolations, archivedVersion, changelogSections, changelogViolations, check,
-  releasedVersions, versionsViolations,
+  releasedVersions, repeatedSections, versionsViolations,
 } from './check.mjs';
 
 const CHANGELOG = `# Changelog
@@ -81,6 +81,34 @@ test('an edited, removed or renamed released section fails', () => {
 
 test('a section whose version has no tag may still change', () => {
   assert.deepEqual(changelogViolations(CHANGELOG, CHANGELOG.replace('- Added b.', '- Added b and d.'), new Set(['1.0.0'])), []);
+});
+
+test('a second section under a released heading fails wherever it is put', () => {
+  const released = new Set(['1.0.0', '1.1.0']);
+  const original = '## [1.0.0] - 2026-01-01\n\n- Added a.\n';
+  const edited = '## [1.0.0] - 2026-01-01\n\n- Rewritten.\n';
+  const repeated = ['CHANGELOG.md: the released section [1.0.0] appears more than once'];
+  // An edited copy above the original: the last section of a name used to be the only one read.
+  assert.deepEqual(changelogViolations(CHANGELOG, CHANGELOG.replace(original, `${edited}\n${original}`), released), repeated);
+  assert.deepEqual(changelogViolations(CHANGELOG, CHANGELOG.replace(original, `${original}\n${edited}`), released), repeated);
+  assert.deepEqual(changelogViolations(CHANGELOG, CHANGELOG.replace(original, `${original}\n${original}`), released), repeated);
+  // Away from the original, under another release.
+  assert.deepEqual(changelogViolations(CHANGELOG, CHANGELOG.replace('## [1.1.0]', `${edited}\n## [1.1.0]`), released), repeated);
+  // A heading in a fenced example is not a second section; it is an edit of the section it sits in.
+  assert.deepEqual(changelogViolations(CHANGELOG, CHANGELOG.replace('- Added b.', '- Added b.\n\n```md\n## [1.0.0] - 2026-01-01\n```'), released),
+    ['CHANGELOG.md: the released section [1.1.0] was changed']);
+});
+
+test('a repeated section keeps the text of every copy', () => {
+  const text = '## [Unreleased]\n\n- One.\n\n## [1.0.0] - 2026-01-01\n\n- Added a.\n\n## [Unreleased]\n\n- Two.\n';
+  assert.deepEqual([...repeatedSections(text)], ['Unreleased']);
+  assert.deepEqual([...repeatedSections(CHANGELOG)], []);
+  assert.equal(changelogSections(text).get('Unreleased'), '## [Unreleased]\n\n- One.\n\n## [Unreleased]\n\n- Two.');
+  // An unreleased name may repeat, and a release that already repeats is held to all of its text.
+  assert.deepEqual(changelogViolations(text, text, new Set(['1.0.0', 'Unreleased'])), []);
+  assert.deepEqual(changelogViolations(CHANGELOG, CHANGELOG.replace('## [Unreleased]\n', '## [Unreleased]\n\n## [Unreleased]\n'), new Set(['1.0.0', '1.1.0'])), []);
+  assert.deepEqual(changelogViolations(text, text.replace('- Two.', '- Three.'), new Set(['Unreleased'])),
+    ['CHANGELOG.md: the released section [Unreleased] was changed']);
 });
 
 test('archive paths map to their version', () => {
