@@ -141,6 +141,18 @@ test('the docs workflow builds only the ref it runs on', () => {
   assert.doesNotMatch(text, /npm ci\s*$/m);
 });
 
+test('a workflow that runs with the base repository\'s rights checks out no pull request ref', () => {
+  for (const path of workflows) {
+    const text = read(path);
+    if (!/^\s+(?:pull_request_target|workflow_run):/m.test(text)) continue;
+    for (const [name, job] of jobsOf(path)) {
+      for (const step of stepsOf(job).filter((s) => s.includes('actions/checkout@'))) {
+        assert.doesNotMatch(step, /^\s+ref:.*github\.event\.(?:pull_request|workflow_run)/m, `${path} job ${name} checks out a pull request ref`);
+      }
+    }
+  }
+});
+
 test('main CI attests the images the release workflow promotes', () => {
   const docker = jobsOf('.github/workflows/ci.yml').get('docker');
   assert.match(docker, /^\s+id-token: write$/m);
