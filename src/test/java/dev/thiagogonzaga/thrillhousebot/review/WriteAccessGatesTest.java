@@ -120,13 +120,24 @@ class WriteAccessGatesTest {
 
     assertTrue(
         analyzer
-            .dropRepliedDuplicates(reRaised, List.of(PREVIOUS_JSON), comments, BOT_ID, CONFIRMED)
+            .dropRepliedDuplicates(
+                reRaised,
+                List.of(PREVIOUS_JSON),
+                comments,
+                BOT_ID,
+                CONFIRMED,
+                new DiffLineResolver(Map.of()))
             .findings()
             .isEmpty());
     assertSame(
         reRaised,
         analyzer.dropRepliedDuplicates(
-            reRaised, List.of(PREVIOUS_JSON), comments, BOT_ID, UNCONFIRMED));
+            reRaised,
+            List.of(PREVIOUS_JSON),
+            comments,
+            BOT_ID,
+            UNCONFIRMED,
+            new DiffLineResolver(Map.of())));
   }
 
   @Test
