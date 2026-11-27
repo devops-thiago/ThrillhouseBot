@@ -1,0 +1,232 @@
+import assert from 'node:assert/strict';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+
+// Rules the workflows and the files around them are held to. They are read as text, the way a
+// reviewer reads them, so a rule that stops holding fails here with the file and the line.
+
+const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const read = (path) => readFileSync(join(root, path), 'utf8');
+const workflowDir = '.github/workflows';
+const workflows = readdirSync(join(root, workflowDir)).filter((name) => name.endsWith('.yml')).map((name) => `${workflowDir}/${name}`);
+const actionDirs = readdirSync(join(root, '.github/actions')).filter((name) => existsSync(join(root, '.github/actions', name, 'action.yml')));
+const actionFiles = actionDirs.map((name) => `.github/actions/${name}/action.yml`);
+
+/** The jobs of a workflow as `name -> text`, split on the two-space keys under `jobs:`. */
+function jobsOf(path) {
+  const lines = read(path).split('\n');
+  const jobs = new Map();
+  let name = null;
+  for (const line of lines.slice(lines.indexOf('jobs:') + 1)) {
+    const key = line.match(/^ {2}([A-Za-z0-9_-]+):\s*$/);
+    if (key) { name = key[1]; jobs.set(name, ''); } else if (name) jobs.set(name, `${jobs.get(name)}${line}\n`);
+  }
+  return jobs;
+}
+
+/** The steps of a job, each as its own text, split on the list items under `steps:`. */
+function stepsOf(job) {
+  const body = job.slice(job.indexOf('    steps:\n') + '    steps:\n'.length);
+  return body.split(/^(?= {6}- )/m).filter((step) => step.trim() !== '');
+}
+
+const usesIn = (text) => [...text.matchAll(/^\s*(?:- )?uses:\s*(\S+)(?:\s+#\s*(\S+))?/gm)].map((match) => ({ target: match[1], comment: match[2] }));
+
+test('every action is pinned to a full commit SHA with a version comment', () => {
+  for (const path of [...workflows, ...actionFiles]) {
+    for (const { target, comment } of usesIn(read(path))) {
+      if (target.startsWith('./')) continue;
+      assert.match(target, /@[0-9a-f]{40}$/, `${path}: ${target} is not pinned to a commit`);
+      assert.match(comment ?? '', /^v\d/, `${path}: ${target} has no version comment`);
+    }
+  }
+});
+
+test('an action is pinned to the same commit wherever it is used', () => {
+  const pins = new Map();
+  for (const path of [...workflows, ...actionFiles]) {
+    for (const { target } of usesIn(read(path))) {
+      if (target.startsWith('./')) continue;
+      const [name, sha] = target.split('@');
+      const repository = name.split('/').slice(0, 2).join('/');
+      if (!pins.has(repository)) pins.set(repository, new Map());
+      pins.get(repository).set(sha, path);
+    }
+  }
+  for (const [repository, shas] of pins) {
+    assert.equal(shas.size, 1, `${repository} is pinned to ${shas.size} commits: ${[...shas].map(([sha, path]) => `${sha} in ${path}`).join(', ')}`);
+  }
+});
+
+test('Dependabot watches the workflows and every composite action directory', () => {
+  const dependabot = read('.github/dependabot.yml');
+  const block = dependabot.slice(dependabot.indexOf('package-ecosystem: "github-actions"')).split(/^ {2}- package-ecosystem:/m)[0];
+  assert.match(block, /^\s+- "\/"$/m);
+  for (const name of actionDirs) assert.ok(block.includes(`- "/.github/actions/${name}"`), `.github/actions/${name} is not in dependabot.yml`);
+});
+
+test('CODEOWNERS starts with a default owner for every path', () => {
+  const patterns = read('.github/CODEOWNERS').split('\n').filter((line) => line.trim() !== '' && !line.startsWith('#'));
+  assert.match(patterns[0], /^\* (@\S+)( @\S+)*$/);
+  assert.equal(patterns.filter((line) => line.startsWith('* ')).length, 1);
+});
+
+test('no Maven cache is restored through a prefix shared by every job', () => {
+  for (const path of workflows) {
+    const keys = [...read(path).matchAll(/^\s+(\$\{\{ runner\.os \}\}\S*)\s*$/gm)].map((match) => match[1]);
+    for (const key of keys) {
+      assert.doesNotMatch(key, /-m2-$/, `${path}: restore key ${key} matches the Maven cache of any job`);
+    }
+  }
+});
+
+test('pull request runs of CI never save the Maven cache', () => {
+  for (const [name, job] of jobsOf('.github/workflows/ci.yml')) {
+    for (const step of stepsOf(job).filter((text) => text.includes('actions/cache/save@'))) {
+      assert.match(step, /if: .*github\.event_name != 'pull_request'/, `ci.yml ${name} saves a cache on pull requests`);
+    }
+  }
+});
+
+test('a test image built from a pull request saves no cache', () => {
+  const path = '.github/workflows/docker-test-image.yml';
+  const text = read(path);
+  let saves = 0;
+  for (const [name, job] of jobsOf(path)) {
+    for (const step of stepsOf(job)) {
+      if (step.includes('actions/cache/save@')) {
+        saves += 1;
+        assert.match(step, /if: .*inputs\.pr_number == ''/, `${name} saves the Maven cache for a pull request build`);
+      }
+      // setup-node writes the npm cache in its post step whenever `cache` is set.
+      const npmCache = step.match(/^\s+cache: (.*)$/m);
+      if (npmCache) assert.match(npmCache[1], /inputs\.pr_number == '' &&/, `${name} saves the npm cache for a pull request build`);
+      const layerCache = step.match(/^\s+cache-to: (.*)$/m);
+      if (layerCache) assert.match(layerCache[1], /inputs\.pr_number == '' &&/, `${name} saves the Docker layer cache for a pull request build`);
+    }
+  }
+  assert.ok(saves > 0 && text.includes('cache-to:'), 'the workflow no longer has the cache steps this test guards');
+  assert.doesNotMatch(text, /\bactions\/cache@/, 'actions/cache saves in its post step with no condition; use cache/restore and cache/save');
+});
+
+test('the test image job that can write to the registry runs no build from the commit', () => {
+  const jobs = jobsOf('.github/workflows/docker-test-image.yml');
+  const privileged = [...jobs].filter(([, job]) => /^\s+(packages|pull-requests|contents|id-token): write$/m.test(job));
+  assert.deepEqual(privileged.map(([name]) => name), ['build-push']);
+  const job = jobs.get('build-push');
+  assert.doesNotMatch(job, /mvnw|\bnpm\b|setup-java|setup-node|uses: \.\//, 'build-push runs build tooling or a local action');
+  assert.doesNotMatch(job, /gh pr checkout/);
+  for (const [name, text] of jobs) {
+    for (const step of stepsOf(text).filter((s) => s.includes('actions/checkout@'))) {
+      assert.match(step, /persist-credentials: false/, `${name} leaves the token in the checkout`);
+    }
+    if (name !== 'build-push' && /mvnw|npm /.test(text)) assert.doesNotMatch(text, /docker\/login-action/, `${name} builds and logs in to the registry`);
+  }
+});
+
+test('the Maven wrapper checks the distribution it downloads', () => {
+  assert.match(read('.mvn/wrapper/maven-wrapper.properties'), /^distributionSha256Sum=[0-9a-f]{64}$/m);
+});
+
+test('the docs workflow builds only the ref it runs on', () => {
+  const text = read('.github/workflows/docs.yml');
+  assert.doesNotMatch(text, /inputs\./, 'docs.yml takes an input');
+  for (const step of stepsOf(jobsOf('.github/workflows/docs.yml').get('build')).filter((s) => s.includes('actions/checkout@'))) {
+    assert.doesNotMatch(step, /^\s+ref:/m, 'docs.yml checks out a ref other than its own');
+    assert.match(step, /persist-credentials: false/);
+  }
+  assert.match(text, /npm ci --ignore-scripts/);
+  assert.doesNotMatch(text, /npm ci\s*$/m);
+});
+
+test('main CI attests the images the release workflow promotes', () => {
+  const docker = jobsOf('.github/workflows/ci.yml').get('docker');
+  assert.match(docker, /^\s+id-token: write$/m);
+  assert.match(docker, /^\s+attestations: write$/m);
+  const attested = stepsOf(docker).filter((step) => step.includes('actions/attest-build-provenance@'));
+  assert.deepEqual(attested.map((step) => step.match(/subject-digest: (.*)$/m)[1]),
+    ['${{ steps.default.outputs.digest }}', '${{ steps.distroless.outputs.digest }}']);
+  for (const step of attested) assert.match(step, /push-to-registry: true/);
+});
+
+test('the release workflow judges the tag before anything else and with its own checker', () => {
+  const verify = jobsOf('.github/workflows/release.yml').get('verify');
+  assert.doesNotMatch(verify, /mvnw|setup-java|actions\/cache/, 'verify runs the tagged build');
+  assert.match(verify, /ref: refs\/tags\/\$\{\{ inputs\.version \|\| github\.ref_name \}\}/);
+  assert.match(verify, /fetch-depth: 0/);
+  assert.match(verify, /run: node \.workflow-ref\/scripts\/release\/check-tag\.mjs/);
+  assert.match(verify, /RELEASE_TAG_SIGNERS: \S+/);
+  const check = verify.slice(verify.indexOf('gh attestation verify'));
+  for (const flag of ['--signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/ci.yml"', '--source-ref refs/heads/main', '--source-digest "$SHA"', '--deny-self-hosted-runners']) {
+    assert.ok(check.includes(flag), `the CI provenance check lacks ${flag}`);
+  }
+});
+
+test('the release workflow scans, promotes, signs and extracts by digest', () => {
+  const jobs = jobsOf('.github/workflows/release.yml');
+  for (const name of ['scan', 'promote', 'release']) {
+    const job = jobs.get(name);
+    assert.match(job, /needs\.verify\.outputs\.digest/, `${name} does not use the verified digest`);
+    assert.doesNotMatch(job, /:\$\{\{ needs\.verify\.outputs\.(sha|tag) \}\}/, `${name} names an image by a tag`);
+    assert.doesNotMatch(job, /ref: \$\{\{ needs\.verify\.outputs\.tag \}\}/, `${name} checks out the tag by name`);
+    for (const line of job.split('\n').filter((text) => /\b(docker (pull|create)|cosign sign|crane tag) /.test(text) && !text.trim().startsWith('#') && !text.includes('echo'))) {
+      assert.match(line, /\$\{IMAGE\}@\$\{?(DIGEST|DIGEST_DISTROLESS|digest)\}?"/, `${name}: '${line.trim()}' does not name the image by digest`);
+    }
+  }
+  assert.doesNotMatch(jobs.get('promote'), /crane digest "\$\{IMAGE\}:\$\{\{/);
+});
+
+test('the publishing jobs of the release workflow run in the release environment', () => {
+  const jobs = jobsOf('.github/workflows/release.yml');
+  for (const name of ['promote', 'release']) assert.match(jobs.get(name), /^ {4}environment: release$/m, `${name} is not gated`);
+  for (const [name, job] of jobs) {
+    if (/^\s+(packages|id-token|attestations): write$/m.test(job)) {
+      assert.match(job, /^ {4}environment: release$/m, `${name} can publish or sign outside the release environment`);
+    }
+  }
+});
+
+test('crane is checked against a pinned SHA-256 before it is unpacked', () => {
+  const text = read('.github/workflows/release.yml');
+  const installs = text.split(/^(?= {6}- )/m).filter((step) => step.includes('go-containerregistry'));
+  assert.ok(installs.length > 0);
+  for (const step of installs) {
+    assert.match(step, /CRANE_SHA256: "[0-9a-f]{64}"/);
+    assert.ok(step.indexOf('sha256sum -c') > 0 && step.indexOf('sha256sum -c') < step.indexOf('tar -x'), 'crane is unpacked before its checksum is checked');
+    assert.doesNotMatch(step, /curl[^\n]*\\\n[^\n]*\n\s*\| tar/, 'crane is piped from curl into tar');
+  }
+});
+
+test('the native builder image is pinned to one digest in the pom and the multistage Dockerfile', () => {
+  const pom = read('pom.xml').match(/<quarkus\.native\.builder-image\s*>([^<]+)</)?.[1];
+  assert.match(pom ?? '', /^quay\.io\/quarkus\/ubi9-quarkus-mandrel-builder-image@sha256:[0-9a-f]{64}$/);
+  const dockerfile = read('src/main/docker/Dockerfile.multistage').match(/^FROM (\S+) AS build$/m)?.[1];
+  assert.equal(dockerfile, pom);
+});
+
+test('the README verification commands name the release workflow and anchor the identity', () => {
+  const readme = read('README.md');
+  const section = readme.slice(readme.indexOf('## Verifying a release'), readme.indexOf('## Operations'));
+  const patterns = [...section.matchAll(/--certificate-identity-regexp='([^']+)'/g)].map((match) => match[1]);
+  assert.ok(patterns.length > 0);
+  for (const pattern of patterns) {
+    assert.ok(pattern.startsWith('^') && pattern.endsWith('$'), `cosign matches ${pattern} anywhere in the identity`);
+    const identity = (ref) => `https://github.com/devops-thiago/ThrillhouseBot/.github/workflows/${ref}`;
+    const version = pattern.match(/tags\/(v\d+\\\.\d+\\\.\d+)/)[1].replaceAll('\\', '');
+    const accepts = (value) => new RegExp(pattern).test(value);
+    assert.ok(accepts(identity(`release.yml@refs/tags/${version}`)));
+    assert.ok(accepts(identity('release.yml@refs/heads/main')));
+    for (const other of [`docker-test-image.yml@refs/tags/${version}`, 'release.yml@refs/heads/feature', `release.yml@refs/tags/${version}-evil`, 'release.yml@refs/tags/v0.0.1']) {
+      assert.ok(!accepts(identity(other)), `${pattern} accepts ${other}`);
+    }
+    assert.ok(!accepts(`https://github.com/devops-thiago/ThrillhouseBot-fork/.github/workflows/release.yml@refs/heads/main`));
+  }
+  const attestations = section.split('gh attestation verify').slice(1);
+  assert.equal(attestations.length, 2);
+  for (const command of attestations) {
+    assert.match(command, /--signer-workflow devops-thiago\/ThrillhouseBot\/\.github\/workflows\/release\.yml/);
+    assert.match(command, /--source-ref refs\/tags\/v\d+\.\d+\.\d+/);
+  }
+});

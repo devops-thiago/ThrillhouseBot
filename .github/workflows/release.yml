@@ -22,14 +22,20 @@ env:
   IMAGE: ghcr.io/devops-thiago/thrillhousebot
 
 jobs:
+  # Decides whether the tag may be released, and fixes what is released: the commit the tag
+  # points at and the digests of the two images main CI built from it. Every later job works
+  # from those values, never from a tag name, so nothing can be swapped in between.
   verify:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: read
+      attestations: read
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
       sha: ${{ steps.meta.outputs.sha }}
+      digest: ${{ steps.images.outputs.digest }}
+      digest_distroless: ${{ steps.images.outputs.digest_distroless }}
     steps:
       - name: Validate version is semver
         env:
@@ -39,58 +45,84 @@ jobs:
             echo "::error::Version must be a semver tag like v0.1.0, got '$VERSION'"
             exit 1
           fi
+      # refs/tags/ in full: a bare name would pick a branch of the same name first. Full
+      # history, because the tag has to be an ancestor of main.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.version || github.ref_name }}
-      - id: meta
-        run: |
-          TAG="${{ inputs.version || github.ref_name }}"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+          ref: refs/tags/${{ inputs.version || github.ref_name }}
+          fetch-depth: 0
+          persist-credentials: false
+      # The checker comes from the workflow's own ref, not from the tag being judged. Nothing
+      # in this job runs code from the tagged tree: pom.xml is read, not built.
+      - name: Check out the release scripts from the workflow ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          java-version: "25"
-          distribution: "temurin"
-      - id: m2
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.m2
-          key: ${{ runner.os }}-m2-release-${{ hashFiles('**/pom.xml', '.mvn/wrapper/maven-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-m2-release-
-            ${{ runner.os }}-m2-
-      - name: Check tag matches pom.xml version
+          path: .workflow-ref
+          sparse-checkout: scripts/release
+          persist-credentials: false
+      # Refuses a tag that is not on main, is not a signed tag from one of the accounts
+      # below, does not match pom.xml, or a run started from a ref other than the tag or main.
+      - name: Check the tag is a signed release tag on main
+        id: meta
         env:
-          TAG: ${{ steps.meta.outputs.tag }}
-        run: |
-          POM_VERSION=$(./mvnw -q help:evaluate -Dexpression=project.version -DforceStdout)
-          if [ "v${POM_VERSION}" != "${TAG}" ]; then
-            echo "::error::Tag ${TAG} does not match pom.xml version ${POM_VERSION}"
-            exit 1
-          fi
+          VERSION: ${{ inputs.version || github.ref_name }}
+          GITHUB_TOKEN: ${{ github.token }}
+          # GitHub logins whose published SSH signing keys may sign a release tag.
+          RELEASE_TAG_SIGNERS: devops-thiago
+        run: node .workflow-ref/scripts/release/check-tag.mjs
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: devops-thiago
           password: ${{ secrets.GITHUB_TOKEN }}
+      # crane moves and reads image tags. The archive is checked against a pinned SHA-256
+      # before anything is unpacked from it.
       - name: Install crane
+        env:
+          CRANE_VERSION: "0.20.6"
+          CRANE_SHA256: "c1d593d01551f2c9a3df5ca0a0be4385a839bd9b86d4a76e18d7b17d16559127"
         run: |
-          curl -fsSL https://github.com/google/go-containerregistry/releases/download/v0.20.6/go-containerregistry_Linux_x86_64.tar.gz \
-            | tar -xzf - crane
-          sudo install crane /usr/local/bin/crane
-      - name: Check CI images exist for tagged commit
+          curl -fsSL -o "$RUNNER_TEMP/crane.tar.gz" \
+            "https://github.com/google/go-containerregistry/releases/download/v${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz"
+          echo "${CRANE_SHA256}  $RUNNER_TEMP/crane.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/crane.tar.gz" -C "$RUNNER_TEMP" crane
+          sudo install "$RUNNER_TEMP/crane" /usr/local/bin/crane
+      # The :<sha> tags are only where to look. What makes an image releasable is the
+      # provenance ci.yml attached when it built it: signed by that workflow, on main, from
+      # exactly the tagged commit. An image pushed under the same tag by anything else has
+      # no such attestation and stops the release here.
+      - name: Check main CI built both images from the tagged commit
+        id: images
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.meta.outputs.sha }}
         run: |
-          for ref in "${{ steps.meta.outputs.sha }}" "${{ steps.meta.outputs.sha }}-distroless"; do
-            if ! crane digest "${IMAGE}:${ref}"; then
-              echo "::error::No image ${IMAGE}:${ref} in GHCR — wait for main CI to finish, then re-run"
+          for variant in default distroless; do
+            ref="${IMAGE}:${SHA}"
+            output=digest
+            if [ "$variant" = distroless ]; then
+              ref="${ref}-distroless"
+              output=digest_distroless
+            fi
+            if ! digest=$(crane digest "$ref"); then
+              echo "::error::No image ${ref} in GHCR. Wait for main CI to finish, then re-run"
               exit 1
             fi
+            if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::Unexpected digest for ${ref}: ${digest}"
+              exit 1
+            fi
+            if ! gh attestation verify "oci://${IMAGE}@${digest}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/ci.yml" \
+              --source-ref refs/heads/main \
+              --source-digest "$SHA" \
+              --deny-self-hosted-runners; then
+              echo "::error::${ref} (${digest}) has no provenance from ci.yml on main for ${SHA}. Images built before the provenance step was added cannot be released again (docs/RELEASING.md)"
+              exit 1
+            fi
+            echo "${output}=${digest}" >> "$GITHUB_OUTPUT"
           done
-      - if: ${{ success() && steps.m2.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.m2
-          key: ${{ steps.m2.outputs.cache-primary-key }}
 
   scan:
     needs: [verify]
@@ -102,7 +134,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.verify.outputs.tag }}
+          ref: ${{ needs.verify.outputs.sha }}
+          persist-credentials: false
       # The trivy-scan composite action is referenced locally below. Local
       # actions resolve from the checked-out tree, but the tag above can predate
       # the action (e.g. re-releasing an old tag via workflow_dispatch). Check it
@@ -112,17 +145,20 @@ jobs:
         with:
           path: .actions-ref
           sparse-checkout: .github/actions
+          persist-credentials: false
       - name: Resolve Trivy ignore policy for tagged commit
+        env:
+          TAG: ${{ needs.verify.outputs.tag }}
         run: |
           if [ -f .trivyignore ]; then
-            echo "Using .trivyignore from ${{ needs.verify.outputs.tag }}"
+            echo "Using .trivyignore from ${TAG}"
             exit 0
           fi
           git fetch origin main --depth=1
           if git show origin/main:.trivyignore > .trivyignore 2>/dev/null; then
             echo "Tag has no .trivyignore; using scan policy from origin/main"
           else
-            echo "::error::No .trivyignore on ${{ needs.verify.outputs.tag }} or origin/main"
+            echo "::error::No .trivyignore on ${TAG} or origin/main"
             exit 1
           fi
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
@@ -139,10 +175,12 @@ jobs:
       # trivy-image-distroless in ci.yml (every push) and by security-scan.yml (daily).
       # Do not re-add the upload; the SARIF is kept as a run artifact below instead.
       # `category` only names the SARIF file when upload is false.
+      #
+      # Scanned by digest, the same digests promote tags and signs.
       - name: Scan default image (gate on CRITICAL/HIGH)
         uses: ./.actions-ref/.github/actions/trivy-scan
         with:
-          image-ref: ${{ env.IMAGE }}:${{ needs.verify.outputs.sha }}
+          image-ref: ${{ env.IMAGE }}@${{ needs.verify.outputs.digest }}
           scanners: vuln
           exit-code: "1"
           trivyignores: .trivyignore
@@ -151,7 +189,7 @@ jobs:
       - name: Scan distroless image (gate on CRITICAL/HIGH)
         uses: ./.actions-ref/.github/actions/trivy-scan
         with:
-          image-ref: ${{ env.IMAGE }}:${{ needs.verify.outputs.sha }}-distroless
+          image-ref: ${{ env.IMAGE }}@${{ needs.verify.outputs.digest_distroless }}
           scanners: vuln
           exit-code: "1"
           trivyignores: .trivyignore
@@ -173,13 +211,15 @@ jobs:
   promote:
     needs: [verify, scan]
     runs-on: ubuntu-latest
+    # The jobs that publish run in the `release` environment, so its protection rules
+    # (required reviewers, allowed branches and tags) apply to them. See docs/RELEASING.md.
+    environment: release
     permissions:
       contents: read
       packages: write
       id-token: write
       attestations: write
     outputs:
-      digest: ${{ steps.digest.outputs.digest }}
       update_latest: ${{ steps.promote.outputs.update_latest }}
     steps:
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
@@ -187,22 +227,46 @@ jobs:
           registry: ghcr.io
           username: devops-thiago
           password: ${{ secrets.GITHUB_TOKEN }}
+      # crane moves and reads image tags. The archive is checked against a pinned SHA-256
+      # before anything is unpacked from it.
       - name: Install crane
+        env:
+          CRANE_VERSION: "0.20.6"
+          CRANE_SHA256: "c1d593d01551f2c9a3df5ca0a0be4385a839bd9b86d4a76e18d7b17d16559127"
         run: |
-          curl -fsSL https://github.com/google/go-containerregistry/releases/download/v0.20.6/go-containerregistry_Linux_x86_64.tar.gz \
-            | tar -xzf - crane
-          sudo install crane /usr/local/bin/crane
+          curl -fsSL -o "$RUNNER_TEMP/crane.tar.gz" \
+            "https://github.com/google/go-containerregistry/releases/download/v${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz"
+          echo "${CRANE_SHA256}  $RUNNER_TEMP/crane.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/crane.tar.gz" -C "$RUNNER_TEMP" crane
+          sudo install "$RUNNER_TEMP/crane" /usr/local/bin/crane
       - name: Promote image tags
         id: promote
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.verify.outputs.tag }}
+          DIGEST: ${{ needs.verify.outputs.digest }}
+          DIGEST_DISTROLESS: ${{ needs.verify.outputs.digest_distroless }}
         run: |
-          TAG="${{ needs.verify.outputs.tag }}"
-          SHA="${{ needs.verify.outputs.sha }}"
           NEW_VER="${TAG#v}"
 
-          crane tag "${IMAGE}:${SHA}" "${TAG}"
-          crane tag "${IMAGE}:${SHA}-distroless" "${TAG}-distroless"
+          # A published version tag is never moved. Running the release again for the same
+          # images is a no-op here; a version tag that already names other images (main CI
+          # was re-run and rebuilt them, or someone retagged) stops the release.
+          release_tag() {
+            local name="$1" digest="$2" current
+            if current=$(crane digest "${IMAGE}:${name}" 2>/dev/null) && [ "$current" != "$digest" ]; then
+              echo "::error::${IMAGE}:${name} is already published as ${current}; this release would move it to ${digest}. See docs/RELEASING.md (Running a release again)"
+              exit 1
+            fi
+            crane tag "${IMAGE}@${digest}" "${name}"
+            current=$(crane digest "${IMAGE}:${name}")
+            if [ "$current" != "$digest" ]; then
+              echo "::error::${IMAGE}:${name} reads back as ${current}, expected ${digest}"
+              exit 1
+            fi
+          }
+          release_tag "${TAG}" "${DIGEST}"
+          release_tag "${TAG}-distroless" "${DIGEST_DISTROLESS}"
 
           # :latest, the docs site and the version bump follow the highest release, so a patch
           # cut on an older line must not take them. Only vMAJOR.MINOR.PATCH releases compete:
@@ -212,7 +276,7 @@ jobs:
           # TAG to that shape, so the new version always takes part. sed rather than grep: under
           # pipefail a filter that matches nothing (first release) must not fail the step.
           UPDATE_LATEST=true
-          HIGHEST_VER=$(gh release list --limit 1000 --exclude-drafts --json tagName -q '.[].tagName' \
+          HIGHEST_VER=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --exclude-drafts --json tagName -q '.[].tagName' \
             | sed -nE 's/^v([0-9]+\.[0-9]+\.[0-9]+)$/\1/p' \
             | sort -V \
             | tail -1)
@@ -227,41 +291,48 @@ jobs:
           # bump-version) are skipped on false, which says nothing on its own. Record it where
           # a reader looks: the run summary and a notice annotation (#733).
           if [ "$UPDATE_LATEST" = true ]; then
-            crane tag "${IMAGE}:${SHA}" latest
-            crane tag "${IMAGE}:${SHA}-distroless" latest-distroless
+            crane tag "${IMAGE}@${DIGEST}" latest
+            crane tag "${IMAGE}@${DIGEST_DISTROLESS}" latest-distroless
             DECISION="${TAG} is the highest release${HIGHEST_VER:+ (previously v${HIGHEST_VER})}: :latest, the docs site and the version bump follow it"
           else
             DECISION="${TAG} is a release on an older line, below v${HIGHEST_VER}: :latest, the docs site and the version bump stay where they are (see docs/RELEASING.md to republish the docs by hand)"
           fi
           echo "::notice title=Promotion::${DECISION}"
-          printf '## Promotion\n\n%s\n' "${DECISION}" >> "$GITHUB_STEP_SUMMARY"
+          {
+            printf '## Promotion\n\n%s\n\n' "${DECISION}"
+            echo "| Image | Digest |"
+            echo "|---|---|"
+            echo "| ${IMAGE}:${TAG} | ${DIGEST} |"
+            echo "| ${IMAGE}:${TAG}-distroless | ${DIGEST_DISTROLESS} |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
           echo "update_latest=${UPDATE_LATEST}" >> "$GITHUB_OUTPUT"
-      - id: digest
-        run: |
-          echo "digest=$(crane digest "${IMAGE}:${{ needs.verify.outputs.tag }}")" >> "$GITHUB_OUTPUT"
-          echo "digest_distroless=$(crane digest "${IMAGE}:${{ needs.verify.outputs.tag }}-distroless")" >> "$GITHUB_OUTPUT"
       - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+      # Signed and attested by the digests verify resolved, not by reading the tags back.
       - name: Sign images (keyless via Sigstore)
+        env:
+          DIGEST: ${{ needs.verify.outputs.digest }}
+          DIGEST_DISTROLESS: ${{ needs.verify.outputs.digest_distroless }}
         run: |
-          cosign sign --yes "${IMAGE}@${{ steps.digest.outputs.digest }}"
-          cosign sign --yes "${IMAGE}@${{ steps.digest.outputs.digest_distroless }}"
+          cosign sign --yes "${IMAGE}@${DIGEST}"
+          cosign sign --yes "${IMAGE}@${DIGEST_DISTROLESS}"
       - name: Attest default image provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ env.IMAGE }}
-          subject-digest: ${{ steps.digest.outputs.digest }}
+          subject-digest: ${{ needs.verify.outputs.digest }}
           push-to-registry: true
       - name: Attest distroless image provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ env.IMAGE }}
-          subject-digest: ${{ steps.digest.outputs.digest_distroless }}
+          subject-digest: ${{ needs.verify.outputs.digest_distroless }}
           push-to-registry: true
 
   release:
     needs: [verify, promote]
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: write
       packages: read
@@ -270,21 +341,25 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.verify.outputs.tag }}
+          ref: ${{ needs.verify.outputs.sha }}
+          persist-credentials: false
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: devops-thiago
           password: ${{ secrets.GITHUB_TOKEN }}
+      # The binaries come out of the image verify resolved and promote signed, by digest.
       - name: Extract native binaries from image
+        env:
+          TAG: ${{ needs.verify.outputs.tag }}
+          DIGEST: ${{ needs.verify.outputs.digest }}
         run: |
-          TAG="${{ needs.verify.outputs.tag }}"
           mkdir -p dist
           for ARCH in amd64 arm64; do
             STAGE="thrillhousebot-${TAG}-linux-${ARCH}"
             mkdir -p "${STAGE}"
-            docker pull --platform "linux/${ARCH}" "${IMAGE}:${TAG}"
-            CID=$(docker create --platform "linux/${ARCH}" "${IMAGE}:${TAG}")
+            docker pull --platform "linux/${ARCH}" "${IMAGE}@${DIGEST}"
+            CID=$(docker create --platform "linux/${ARCH}" "${IMAGE}@${DIGEST}")
             docker cp "${CID}:/work/application" "${STAGE}/thrillhousebot"
             docker rm "${CID}"
             cp LICENSE README.md "${STAGE}/"
@@ -298,7 +373,9 @@ jobs:
         with:
           subject-path: dist/*.tar.gz
       - name: Stage provenance as a release asset
-        run: cp "${{ steps.attest.outputs.bundle-path }}" dist/provenance.intoto.jsonl
+        env:
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: cp "$BUNDLE" dist/provenance.intoto.jsonl
       - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
       - name: Sign artifacts
         run: |
@@ -306,9 +383,10 @@ jobs:
             cosign sign-blob --yes --bundle "${f}.sigstore" "$f"
           done
       - name: Extract release notes from CHANGELOG.md
+        env:
+          TAG: ${{ needs.verify.outputs.tag }}
         run: |
-          VERSION="${{ needs.verify.outputs.tag }}"
-          VERSION="${VERSION#v}"
+          VERSION="${TAG#v}"
           awk -v ver="${VERSION}" '
             $0 ~ "^## \\[" ver "\\]" { found=1; next }
             /^## \[/ { found=0 }
@@ -445,7 +523,6 @@ jobs:
           key: ${{ runner.os }}-m2-release-${{ hashFiles('**/pom.xml', '.mvn/wrapper/maven-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-m2-release-
-            ${{ runner.os }}-m2-
       - name: Compute next snapshot version
         id: next
         env:

@@ -1786,23 +1786,45 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 ## Verifying a release
 
 Release images and binary tarballs are signed with cosign (keyless, through
-Sigstore) and carry build-provenance attestations. To check a release:
+Sigstore) and carry build-provenance attestations. To check a release, name the
+workflow and the tag that must have produced it. A check that accepts anything
+signed from the repository would also accept an artifact signed by another
+workflow or from another branch.
 
 ```bash
-# Signature
+# Signature: signed by the release workflow, for this tag
 cosign verify \
-  --certificate-identity-regexp='https://github.com/devops-thiago/ThrillhouseBot.*' \
+  --certificate-identity-regexp='^https://github\.com/devops-thiago/ThrillhouseBot/\.github/workflows/release\.yml@refs/(tags/v0\.9\.3|heads/main)$' \
   --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
   ghcr.io/devops-thiago/thrillhousebot:v0.9.3
 
 # Provenance (image)
 gh attestation verify oci://ghcr.io/devops-thiago/thrillhousebot:v0.9.3 \
-  --repo devops-thiago/ThrillhouseBot
+  --repo devops-thiago/ThrillhouseBot \
+  --signer-workflow devops-thiago/ThrillhouseBot/.github/workflows/release.yml \
+  --source-ref refs/tags/v0.9.3
 
 # Provenance (a downloaded binary)
 gh attestation verify thrillhousebot-v0.9.3-linux-amd64.tar.gz \
-  --repo devops-thiago/ThrillhouseBot
+  --repo devops-thiago/ThrillhouseBot \
+  --signer-workflow devops-thiago/ThrillhouseBot/.github/workflows/release.yml \
+  --source-ref refs/tags/v0.9.3
 ```
+
+Put the version you are checking in all three places it appears in each command.
+The pattern is anchored with `^` and `$` and its dots are escaped, because cosign
+matches it anywhere in the identity otherwise. A release is signed from its tag.
+One that a maintainer ran again by hand is signed from `main` as well, which is
+why the cosign pattern accepts `heads/main`; for such a release, the `gh`
+commands pass with `--source-ref refs/heads/main`.
+
+To deploy exactly what you verified, pull by the digest `cosign verify` prints
+(`ghcr.io/devops-thiago/thrillhousebot@sha256:…`), not by the tag.
+
+From the release after v0.9.3 on, the release workflow publishes an image only
+when it carries provenance showing that CI built it on `main` from the tagged
+commit, and only for a signed tag on `main`;
+[docs/RELEASING.md](docs/RELEASING.md) describes the checks.
 
 ## Operations
 

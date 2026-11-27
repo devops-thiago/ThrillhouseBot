@@ -85,7 +85,6 @@ jobs:
           key: ${{ runner.os }}-m2-format-${{ hashFiles('**/pom.xml', '.mvn/wrapper/maven-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-m2-format-
-            ${{ runner.os }}-m2-
       # spotbugs runs here, off the test job's critical path. It analyzes main classes, so
       # compile first; spotless needs no compile.
       - run: ./mvnw clean compile spotbugs:check spotless:check -q
@@ -143,7 +142,6 @@ jobs:
           key: ${{ runner.os }}-m2-test-${{ hashFiles('**/pom.xml', '.mvn/wrapper/maven-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-m2-test-
-            ${{ runner.os }}-m2-
       # One reactor: build + test + coverage report in a single Maven run (spotbugs moved to the
       # format job). Avoids re-starting Maven and recompiling across separate invocations.
       - run: ./mvnw clean test jacoco:report
@@ -186,6 +184,8 @@ jobs:
           cache: "npm"
           cache-dependency-path: frontend/package-lock.json
       - run: node --test scripts/installer/install.test.mjs
+      # The release tag checker, and the rules the workflows themselves are held to.
+      - run: node --test scripts/release/check-tag.test.mjs scripts/workflows/policy.test.mjs
       - run: npm ci --ignore-scripts
         working-directory: frontend
       - run: npm run test
@@ -255,7 +255,6 @@ jobs:
           key: ${{ runner.os }}-${{ matrix.arch }}-m2-native-${{ hashFiles('**/pom.xml', '.mvn/wrapper/maven-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-${{ matrix.arch }}-m2-native-
-            ${{ runner.os }}-m2-
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: frontend-dist
@@ -336,9 +335,12 @@ jobs:
     needs: [native-build, test, format]
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
+    # id-token and attestations: the provenance steps at the end of the job.
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -378,6 +380,7 @@ jobs:
           echo "default=${default#,}" >> "$GITHUB_OUTPUT"
           echo "distroless=${distroless#,}" >> "$GITHUB_OUTPUT"
       - name: Build & push default image (UBI9)
+        id: default
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -388,6 +391,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Build & push distroless image
+        id: distroless
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -397,6 +401,21 @@ jobs:
           tags: ${{ steps.tags.outputs.distroless }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # Provenance for the two images, by digest: signed as this workflow, on main, at this
+      # commit. The release workflow promotes a :<sha> image only when it carries this, so a
+      # tag pushed to the registry by anything else is never released.
+      - name: Attest default image provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/devops-thiago/thrillhousebot
+          subject-digest: ${{ steps.default.outputs.digest }}
+          push-to-registry: true
+      - name: Attest distroless image provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/devops-thiago/thrillhousebot
+          subject-digest: ${{ steps.distroless.outputs.digest }}
+          push-to-registry: true
 
   trivy:
     runs-on: ubuntu-latest
@@ -416,7 +435,6 @@ jobs:
           key: ${{ runner.os }}-m2-trivy-${{ hashFiles('**/pom.xml', '.mvn/wrapper/maven-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-m2-trivy-
-            ${{ runner.os }}-m2-
       # Trivy's Maven analyzer fetches any POM missing from ~/.m2; a partial cache still fans out
       # enough Central requests to trip a 429 IP block. dependency:resolve (not go-offline) covers
       # the POM set Trivy's SBOM pass actually reads — see trivy.dev troubleshooting / Maven 429.
@@ -480,7 +498,6 @@ jobs:
           key: ${{ runner.os }}-m2-package-${{ hashFiles('**/pom.xml', '.mvn/wrapper/maven-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-m2-package-
-            ${{ runner.os }}-m2-
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: frontend-dist

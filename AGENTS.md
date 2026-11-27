@@ -66,6 +66,23 @@ same diff.
   evidence reports are uploaded; a missing base or incomplete proof fails.
 - `scripts/dco/` is code-owner protected like the workflow that delegates to it.
 
+## Workflow and release checks
+
+- `scripts/workflows/policy.test.mjs` holds the workflows to their rules: actions pinned to one
+  full commit SHA each, no Maven cache restored through a prefix every job shares, no cache saved
+  from a pull request (CI and the test-image workflow), the test-image job with registry access
+  running no build, `docs.yml` building only its own ref, and the release workflow working by
+  digest inside the `release` environment. Change the workflow and the rule together, and say
+  why in the pull request.
+- `scripts/release/check-tag.mjs` decides whether a tag may be released: `vX.Y.Z`, a signed
+  annotated tag from an account in `RELEASE_TAG_SIGNERS`, on `main`, matching `pom.xml`. The
+  release workflow runs it from its own ref, never from the tag, and its `verify` job builds
+  nothing from the tagged tree. Every check fails closed.
+- Both suites run with `node --test` in the `frontend` CI job. `docs/RELEASING.md` lists the
+  repository settings the release checks assume.
+- A job that runs a pull request's build holds a read-only token and no registry login; it hands
+  results on as artifacts. Pass workflow inputs through `env:` and validate them in the script.
+
 ## Package map
 
 | Package | Owns |

@@ -70,6 +70,31 @@ cannot resolve its review threads.
   (RHSA-2026:81532) with the fixes for CVE-2026-89161, CVE-2026-86145 and CVE-2026-103111, so their
   `.trivyignore` entries are removed. CVE-2026-84782 (`libssl3`, DTLS only) stays ignored for the
   `-distroless` image: Debian has a fixed package, but the distroless base has not picked it up.
+- **The release pipeline checks what it publishes**: a release now needs a signed tag on
+  `main`, made with an SSH signing key GitHub lists for a maintainer, and images that carry
+  provenance from `ci.yml` on `main` for the tagged commit. Before, any `vX.Y.Z` tag on any commit
+  started a release, and whatever image held the commit's tag in the registry was scanned, promoted
+  and signed by tag name. The images are now resolved to digests once and scanned, tagged, signed
+  and unpacked by digest; a published version tag is never moved to other images; the publishing
+  jobs run in the `release` environment; `crane` is checked against a pinned SHA-256. Releases
+  through v0.9.3 cannot be run again with `workflow_dispatch`, because their images predate the CI
+  provenance. The README's verification commands now name the release workflow and the tag; the
+  old cosign pattern was unanchored and matched any workflow in the repository.
+- **A test image built from a pull request can no longer plant a build cache or reach the
+  registry token**: with `pr_number` set, the Docker test image workflow ran the pull request's
+  build in the job that held `packages: write`, and saved its Maven, npm and Docker layer caches
+  where `main` CI and the release workflow restored them. The build now runs in read-only jobs
+  and hands over an artifact, a pull request build saves no cache, and no job restores a Maven
+  cache through the prefix every job shared. The Maven wrapper checks the SHA-256 of the
+  distribution it downloads, and CI's native builds use a builder image pinned by digest.
+- **The docs deploy builds only the ref it runs on**: `docs.yml` took a `ref` input and deployed
+  any branch or commit to the live site from a run started on an allowed ref. The input is gone,
+  so the `github-pages` environment's branch and tag rules decide what can be published.
+- **Every path has a code owner**: `CODEOWNERS` had entries for the workflows and two script
+  directories only, so the required code-owner review did not cover the build files, the composite
+  actions or Dependabot's configuration. A default entry now covers everything. Dependabot also
+  watches the composite action directory, whose `upload-sarif` pin had fallen a major version
+  behind the workflows.
 
 ## [0.9.3] - 2026-11-26
 

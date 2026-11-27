@@ -60,7 +60,7 @@ runs:
         output: ${{ inputs.category }}.sarif
     - name: Upload Trivy SARIF
       if: ${{ always() && inputs.upload == 'true' && hashFiles(format('{0}.sarif', inputs.category)) != '' }}
-      uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v3.28.0
+      uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
       with:
         sarif_file: ${{ inputs.category }}.sarif
         category: ${{ inputs.category }}

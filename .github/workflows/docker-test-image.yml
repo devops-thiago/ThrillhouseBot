@@ -36,6 +36,8 @@ env:
 
 jobs:
   # Resolves the commit every other job builds: the selected branch, or a same-repo PR head.
+  # Nothing is checked out here. The same-repo check and the commit come from one API answer,
+  # so the commit that is built is the one that was checked.
   source:
     runs-on: ubuntu-latest
     permissions:
@@ -44,32 +46,45 @@ jobs:
     outputs:
       sha: ${{ steps.sha.outputs.sha }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Check out PR head
-        if: inputs.pr_number != ''
+      - name: Resolve commit
+        id: sha
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ inputs.pr_number }}
+          REPO: ${{ github.repository }}
+          RUN_SHA: ${{ github.sha }}
         run: |
-          if ! [[ "$PR" =~ ^[0-9]+$ ]]; then
-            echo "::error::pr_number must be digits only"
+          if [ -z "$PR" ]; then
+            sha="$RUN_SHA"
+          else
+            if ! [[ "$PR" =~ ^[0-9]+$ ]]; then
+              echo "::error::pr_number must be digits only"
+              exit 1
+            fi
+            # Same-repo PRs only — fork heads must not publish to our GHCR package.
+            # gh returns headRepository.nameWithOwner (no nested .owner.login).
+            meta=$(gh pr view "$PR" --repo "$REPO" --json headRepository,isCrossRepository,headRefOid \
+              --jq '[.headRepository.nameWithOwner // "-", (.isCrossRepository|tostring), .headRefOid // "-"] | join(" ")')
+            read -r head_repo is_cross sha <<< "$meta"
+            if [ "$is_cross" != "false" ] || [ "$head_repo" != "$REPO" ]; then
+              echo "::error::Refusing to build a fork PR ($head_repo). Push a branch in $REPO instead."
+              exit 1
+            fi
+          fi
+          if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Could not resolve the commit to build"
             exit 1
           fi
-          # Same-repo PRs only — fork heads must not publish to our GHCR package.
-          # gh returns headRepository.nameWithOwner (no nested .owner.login).
-          meta=$(gh pr view "$PR" --json headRepository,isCrossRepository \
-            --jq '[.headRepository.nameWithOwner, (.isCrossRepository|tostring)] | join(" ")')
-          read -r head_repo is_cross <<< "$meta"
-          if [ "$is_cross" = "true" ] || [ "$head_repo" != "${{ github.repository }}" ]; then
-            echo "::error::Refusing to build a fork PR ($head_repo). Push a branch in ${{ github.repository }} instead."
-            exit 1
-          fi
-          gh pr checkout "$PR"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
-      - name: Resolve commit
-        id: sha
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+  # The builds below run the selected commit's own build scripts, which for a pull request is
+  # code nobody has merged. They hold a read-only token and no registry login, and hand the
+  # result to build-push as an artifact.
+  #
+  # With pr_number set, the run's ref is still the branch picked in the form (usually main), so
+  # anything a build job saved to the Actions cache would land in that branch's scope, where
+  # ci.yml and release.yml restore it. A pull request build therefore only reads caches: the
+  # Maven repository, the npm cache and the Docker layer cache are saved by branch builds alone.
 
   # One native binary per architecture, each on a runner of that architecture.
   native-build:
@@ -90,6 +105,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.source.outputs.sha }}
+          persist-credentials: false
 
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
@@ -103,12 +119,12 @@ jobs:
           key: ${{ runner.os }}-${{ matrix.arch }}-m2-native-${{ hashFiles('**/pom.xml', '.mvn/wrapper/maven-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-${{ matrix.arch }}-m2-native-
-            ${{ runner.os }}-${{ matrix.arch }}-m2-
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
-          cache: "npm"
+          # setup-node saves the npm cache when the job ends, after the build has run.
+          cache: ${{ inputs.pr_number == '' && 'npm' || '' }}
           cache-dependency-path: frontend/package-lock.json
 
       - name: Build dashboard
@@ -127,20 +143,77 @@ jobs:
           name: test-native-${{ matrix.arch }}
           path: target/*-runner
           retention-days: 1
-      # This workflow only runs on workflow_dispatch, so unlike ci.yml it needs no pull_request guard.
-      - if: ${{ success() && steps.m2.outputs.cache-hit != 'true' }}
+      - if: ${{ success() && inputs.pr_number == '' && steps.m2.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.m2
           key: ${{ steps.m2.outputs.cache-primary-key }}
 
+  # The JVM application, built without registry access like the native binaries above.
+  jvm-build:
+    needs: [source]
+    if: inputs.variant == 'jvm'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          java-version: "25"
+          distribution: "temurin"
+
+      - id: m2
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2
+          key: ${{ runner.os }}-m2-package-${{ hashFiles('**/pom.xml', '.mvn/wrapper/maven-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-m2-package-
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          # setup-node saves the npm cache when the job ends, after the build has run.
+          cache: ${{ inputs.pr_number == '' && 'npm' || '' }}
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build dashboard
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+          mkdir -p ../src/main/resources/META-INF/resources/dashboard
+          cp -a out/. ../src/main/resources/META-INF/resources/dashboard/
+        working-directory: frontend
+
+      - name: Package (JVM)
+        run: ./mvnw -B package -DskipTests -Dquarkus.package.jar.type=mutable-jar
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-jvm-app
+          path: target/quarkus-app/
+          retention-days: 1
+      - if: ${{ success() && inputs.pr_number == '' && steps.m2.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2
+          key: ${{ steps.m2.outputs.cache-primary-key }}
+
+  # The only job that can write to the registry and to the pull request. It runs no build
+  # script from the selected commit: it takes the built application as an artifact and the
+  # commit's tree as the Docker build context, and nothing else.
   build-push:
-    needs: [source, native-build]
-    # native-build is skipped for the jvm variant; run then too, but never after it failed.
+    needs: [source, native-build, jvm-build]
+    # The build job of the other variant is skipped; run then too, but never after a failure.
     if: >-
       always() && needs.source.result == 'success' &&
-      (needs.native-build.result == 'success' ||
-       (inputs.variant == 'jvm' && needs.native-build.result == 'skipped'))
+      ((inputs.variant == 'native' && needs.native-build.result == 'success') ||
+       (inputs.variant == 'jvm' && needs.jvm-build.result == 'success'))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -150,6 +223,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.source.outputs.sha }}
+          persist-credentials: false
 
       - name: Derive tags
         id: tags
@@ -157,9 +231,9 @@ jobs:
           PR: ${{ inputs.pr_number }}
           EXTRA: ${{ inputs.extra_tag }}
           VARIANT: ${{ inputs.variant }}
+          FULL_SHA: ${{ needs.source.outputs.sha }}
         run: |
-          SHORT_SHA="$(git rev-parse --short=7 HEAD)"
-          FULL_SHA="$(git rev-parse HEAD)"
+          SHORT_SHA="${FULL_SHA:0:7}"
           echo "sha=$FULL_SHA" >> "$GITHUB_OUTPUT"
 
           tags=()
@@ -217,48 +291,11 @@ jobs:
             echo "\`\`\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: inputs.variant == 'jvm'
         with:
-          java-version: "25"
-          distribution: "temurin"
-
-      - id: m2
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        if: inputs.variant == 'jvm'
-        with:
-          path: ~/.m2
-          key: ${{ runner.os }}-m2-package-${{ hashFiles('**/pom.xml', '.mvn/wrapper/maven-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-m2-package-
-            ${{ runner.os }}-m2-
-
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        if: inputs.variant == 'jvm'
-        with:
-          node-version: "22"
-          cache: "npm"
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Build dashboard
-        if: inputs.variant == 'jvm'
-        run: |
-          npm ci --ignore-scripts
-          npm run build
-          mkdir -p ../src/main/resources/META-INF/resources/dashboard
-          cp -a out/. ../src/main/resources/META-INF/resources/dashboard/
-        working-directory: frontend
-
-      - name: Package (JVM)
-        if: inputs.variant == 'jvm'
-        run: ./mvnw -B package -DskipTests -Dquarkus.package.jar.type=mutable-jar
-
-      # This workflow only runs on workflow_dispatch, so unlike ci.yml it needs no pull_request guard.
-      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        if: ${{ success() && inputs.variant == 'jvm' && steps.m2.outputs.cache-hit != 'true' }}
-        with:
-          path: ~/.m2
-          key: ${{ steps.m2.outputs.cache-primary-key }}
+          name: test-jvm-app
+          path: target/quarkus-app/
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: inputs.variant == 'native'
@@ -294,7 +331,8 @@ jobs:
           platforms: ${{ inputs.variant == 'native' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
           tags: ${{ steps.tags.outputs.list }}
           cache-from: type=gha,scope=docker-test-${{ inputs.variant }}
-          cache-to: type=gha,mode=max,scope=docker-test-${{ inputs.variant }}
+          # A pull request build reads the layer cache and writes none (see the note above the build jobs).
+          cache-to: ${{ inputs.pr_number == '' && format('type=gha,mode=max,scope=docker-test-{0}', inputs.variant) || '' }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ steps.tags.outputs.sha }}
