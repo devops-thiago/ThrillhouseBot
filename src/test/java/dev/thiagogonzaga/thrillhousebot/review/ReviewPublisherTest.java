@@ -622,9 +622,9 @@ class ReviewPublisherTest {
 
     publisher.publishSummary("auth", "o", "r", 1, firstReview, false);
     var open =
-        publisher.openFindings(
+        ManifestThreads.openFindings(
             firstReview,
-            new ReviewPublisher.PostedThreads(
+            new ManifestThreads.PostedThreads(
                 Set.of(SuggestionFormatter.findingKey("src/A.java", 12, "NPE"))));
 
     var posted = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
@@ -912,7 +912,7 @@ class ReviewPublisherTest {
             "r",
             1,
             reviewId,
-            ReviewPublisher.approvalWithdrawnMessage(headSha));
+            ApprovalWithdrawals.approvalWithdrawnMessage(headSha));
   }
 
   private void verifyNothingDismissed() {
@@ -942,7 +942,7 @@ class ReviewPublisherTest {
             "r",
             1,
             1L,
-            ReviewPublisher.approvalWithdrawnMessage("sha2"));
+            ApprovalWithdrawals.approvalWithdrawnMessage("sha2"));
     order
         .verify(reviewClient)
         .createReview(anyString(), anyString(), eq("o"), eq("r"), eq(1), any());
@@ -1190,7 +1190,7 @@ class ReviewPublisherTest {
             anyString(), anyString(), anyString(), anyString(), anyInt(), eq(2L), anyString()))
         .thenThrow(new WebApplicationException(response));
 
-    try (var log = CapturedLog.of(ReviewPublisher.class)) {
+    try (var log = CapturedLog.of(ApprovalWithdrawals.class)) {
       post(
           "sha3",
           heldOnCi(),
@@ -1218,7 +1218,7 @@ class ReviewPublisherTest {
                     .entity("{\"message\":\"Resource not accessible by integration\"}")
                     .build()));
 
-    try (var log = CapturedLog.of(ReviewPublisher.class)) {
+    try (var log = CapturedLog.of(ApprovalWithdrawals.class)) {
       post(
           "sha3",
           heldOnCi(),
@@ -1240,7 +1240,7 @@ class ReviewPublisherTest {
     assertEquals(
         "ThrillhouseBot withdrew this approval: its review round for sha2 did not approve the"
             + " pull request.",
-        ReviewPublisher.approvalWithdrawnMessage("sha2"));
+        ApprovalWithdrawals.approvalWithdrawnMessage("sha2"));
   }
 
   @Test
@@ -1248,7 +1248,7 @@ class ReviewPublisherTest {
     assertEquals(
         "ThrillhouseBot withdrew this approval: commits were pushed after it, and sha2 has not"
             + " been reviewed yet.",
-        ReviewPublisher.approvalWithdrawnOnPushMessage("sha2"));
+        ApprovalWithdrawals.approvalWithdrawnOnPushMessage("sha2"));
   }
 
   private void verifyDismissedOnPush(long reviewId, String headSha) {
@@ -1260,12 +1260,12 @@ class ReviewPublisherTest {
             "r",
             1,
             reviewId,
-            ReviewPublisher.approvalWithdrawnOnPushMessage(headSha));
+            ApprovalWithdrawals.approvalWithdrawnOnPushMessage(headSha));
   }
 
   @Test
   void pushWithdrawsEveryStandingBotApprovalNewestFirstAndPostsNothing() {
-    try (var log = CapturedLog.of(ReviewPublisher.class)) {
+    try (var log = CapturedLog.of(ApprovalWithdrawals.class)) {
       publisher.withdrawApprovalsAfterPush(
           "auth",
           "o",
@@ -1310,7 +1310,7 @@ class ReviewPublisherTest {
                     .entity("{\"message\":\"Resource not accessible by integration\"}")
                     .build()));
 
-    try (var log = CapturedLog.of(ReviewPublisher.class)) {
+    try (var log = CapturedLog.of(ApprovalWithdrawals.class)) {
       publisher.withdrawApprovalsAfterPush(
           "auth",
           "o",
@@ -1365,7 +1365,7 @@ class ReviewPublisherTest {
 
   @Test
   void roundLogsItsOwnReasonForADismissal() {
-    try (var log = CapturedLog.of(ReviewPublisher.class)) {
+    try (var log = CapturedLog.of(ApprovalWithdrawals.class)) {
       post("sha2", heldOnCi(), List.of(review(1L, "APPROVED", "sha1", BOT_LOGIN)));
 
       assertTrue(

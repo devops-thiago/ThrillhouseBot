@@ -125,8 +125,10 @@ class FindingBasisTest {
         """;
 
     assertEquals(
-        "**Basis**\n- CI: cites failing check `test`; annotated at `src/A.java:67`,"
-            + " `src/A.java`\n",
+        """
+        **Basis**
+        - CI: cites failing check `test`; annotated at `src/A.java:67`, `src/A.java`
+        """,
         basis.render(
             finding("The CI check \"test (conclusion: failure)\" fails on this."),
             PathScopedInstructions.NONE,
@@ -146,8 +148,11 @@ class FindingBasisTest {
         """;
 
     assertEquals(
-        "**Basis**\n- CI: cites failing check `test`; annotated at `src/A.java:1`,"
-            + " `src/A.java:2`, `src/A.java:3`\n",
+        """
+        **Basis**
+        - CI: cites failing check `test`; annotated at `src/A.java:1`, `src/A.java:2`, \
+        `src/A.java:3`
+        """,
         basis.render(
             finding("The CI check \"test (conclusion: failure)\" fails on this."),
             PathScopedInstructions.NONE,

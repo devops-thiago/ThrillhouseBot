@@ -117,7 +117,7 @@ class ApprovalOnPushTest {
             "r",
             1,
             reviewId,
-            ReviewPublisher.approvalWithdrawnOnPushMessage(headSha));
+            ApprovalWithdrawals.approvalWithdrawnOnPushMessage(headSha));
   }
 
   private void verifyNothingDismissed() {
@@ -203,7 +203,7 @@ class ApprovalOnPushTest {
               "r",
               1,
               1L,
-              ReviewPublisher.approvalWithdrawnOnPushMessage("shaB"));
+              ApprovalWithdrawals.approvalWithdrawnOnPushMessage("shaB"));
       awaitIdle(dispatcher);
       reviewsAre(review(1L, "DISMISSED", "shaA", BOT));
 
@@ -378,7 +378,7 @@ class ApprovalOnPushTest {
             anyString(), anyString(), anyString(), anyString(), anyInt(), anyLong(), anyString()))
         .thenThrow(new WebApplicationException(403));
 
-    try (var log = CapturedLog.of(ReviewPublisher.class)) {
+    try (var log = CapturedLog.of(ApprovalWithdrawals.class)) {
       approvalOnPush.withdraw(PUSH);
 
       verifyDismissed(2L, "sha2");

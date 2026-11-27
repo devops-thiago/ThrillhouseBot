@@ -579,7 +579,7 @@ public class ReviewOrchestrator {
       // #73: the verdict is final for this run once it is on the pull request. A superseded run
       // returned above without reaching here, and a verdict held on CI is announced now, not again
       // when CiHoldRevisit posts the approval.
-      var openFindings = openFindingsOf(reviewPublisher, result, postedThreads);
+      var openFindings = openFindingsOf(result, postedThreads);
       runPostResultStep(
           doneReq,
           "send the outcome notification",
@@ -891,8 +891,8 @@ public class ReviewOrchestrator {
    * the orchestrator and everything it references.
    */
   private static Supplier<OpenFindings> openFindingsOf(
-      ReviewPublisher publisher, ReviewResult result, ReviewPublisher.PostedThreads posted) {
-    return () -> publisher.openFindings(result, posted);
+      ReviewResult result, ManifestThreads.PostedThreads posted) {
+    return () -> ManifestThreads.openFindings(result, posted);
   }
 
   /**
