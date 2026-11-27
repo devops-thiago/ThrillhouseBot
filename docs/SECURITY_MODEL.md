@@ -47,12 +47,20 @@ security limits. To report a vulnerability, see
   dismissed when the review of the new head finishes without approving, and it
   stays if that review never runs or fails, if the bot could not read the pull
   request's reviews, or if a branch protection rule stops the App from
-  dismissing reviews (the bot logs a warning). A push inside
-  `AUTO_REVIEW_MIN_INTERVAL` or past a full repository queue is reviewed late,
-  not skipped, so a pull request author cannot time a push to avoid the review.
-  That later review is held in memory: it never runs if the bot restarts while
-  it waits, if 10,000 pull requests already have one waiting, or if the
-  repository's queue stays full for an hour. If the bot's
+  dismissing reviews. The bot logs a warning in each of the last two cases:
+  one when the reviews could not be listed, saying that earlier approvals were
+  not checked, and one for each approval it could not dismiss. A refusal for
+  want of permission (a 403 that is not a rate limit) ends the attempt for
+  that round. Any other failure (a timeout, a server error, a rate limit, or a
+  404 or 422 for one review) leaves that approval in place and the bot goes on
+  to its older ones. The bot reads at most 1,000 reviews per pull request,
+  oldest first, and logs a warning when it reaches that limit, since an
+  approval past it is not seen. A push inside `AUTO_REVIEW_MIN_INTERVAL` or
+  past a full repository queue is reviewed late, not skipped, so a pull
+  request author cannot time a push to avoid the review. That later review is
+  held in memory: it never runs if the bot restarts while it waits, if 10,000
+  pull requests already have one waiting, or if the repository's queue stays
+  full for an hour. If the bot's
   approval counts towards a required review, turn on "Dismiss stale pull
   request approvals when new commits are pushed" for the branch.
 - Only the latest release gets security fixes.

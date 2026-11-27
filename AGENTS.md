@@ -360,10 +360,16 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   review in the run's listing that is still `APPROVED` and written by a `BotIdentity` login is
   dismissed (`GitHubReviewClient.dismissReview`), newest first, whatever head it approved. It runs
   before the round's own writes because some rounds post no review and a refused one throws. A
-  refusal or failure is logged at warn and never fails the round. A refusal (a 4xx) ends the walk;
-  any other failure moves on to the next approval, so one timeout does not leave the older ones
-  counting. Do not narrow it to the bot's latest review, and never dismiss a review the bot did
-  not write.
+  refusal or failure is logged at warn and never fails the round. Only a permission refusal ends
+  the walk: a 403 that is not a rate limit (`GitHubApiError.isPermissionRefusal`). Any other
+  failure moves on to the next approval: a timeout, a 5xx, a 404 or 422 about the one review, or a
+  429 or rate-limit 403 that `GitHubWriteRetry` gave up on. So one such failure does not leave the
+  older ones counting; do not widen the stop back to every 4xx. The listing is
+  `ReviewContextLoader.fetchPriorReviews`: a listing that fails is logged at warn (the round then
+  dismisses nothing, because the earlier approvals could not be checked) and so is one that fills
+  the 1,000-review walk, where the unread reviews are the newest. A pull request with no reviews
+  lists as empty without failing, so keep the failure at warn. Do not narrow the walk to the
+  bot's latest review, and never dismiss a review the bot did not write.
 - **No "no issues" wording while anything is open** (#933). Every surface reads
   `ReviewResult.unresolvedPreviousCount()`; `ReviewPublisher.noIssuesBody` leads with the
   unresolved-previous message and `LargePrNudge` stays silent.
@@ -387,7 +393,10 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   author out, so the finding stays open. A model `justified` with no verified reply on the
   finding's thread goes back to `unresolved` (`withoutUnconfirmedDeclines`, run first in
   `VerdictBuilder.build` and again inside `recheckDeclines`, whether or not the re-check is
-  enabled); a verified conversation decline restores it. The reply's "no write access" label in
+  enabled); a verified conversation decline restores it. A `justified` under a number that
+  names no listed finding never reaches the verdict or the counts: `ModelStatusScreen` drops it
+  when the review call returns, and with no readable stored round it drops every status
+  (`UnconfirmedDeclineAcrossRoundsTest`). The reply's "no write access" label in
   the prompt is guidance, not the control. `MaintainerReplyService` acknowledges a directive by
   the same permission (`ManualReviewAuthorizer.holdsWriteAccess`), never the allowlist. Do not
   add an association-only path, or a default that treats an unverified author as a writer.

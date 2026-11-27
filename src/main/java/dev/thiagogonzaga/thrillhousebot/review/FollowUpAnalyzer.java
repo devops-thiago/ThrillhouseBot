@@ -2486,8 +2486,12 @@ public class FollowUpAnalyzer {
    * may weigh and nothing more: it cannot close a finding, however the model read it.
    *
    * <p>Only a status naming a finding of the previous round is touched; an id outside it names
-   * nothing and closes nothing. A finding declined with a directive on the PR conversation is
-   * restored by {@link #declineNamedInConversation}, which runs on this pass's result.
+   * nothing and closes nothing. A model status never arrives here with one: {@link
+   * ModelStatusScreen} drops every status that names no listed finding as soon as the review call
+   * returns, and with no readable stored round nothing is listed, so every status is dropped
+   * ({@code UnconfirmedDeclineAcrossRoundsTest}). A finding declined with a directive on the PR
+   * conversation is restored by {@link #declineNamedInConversation}, which runs on this pass's
+   * result.
    *
    * <p>The verdict path runs this first, before the supersede pass, so a finding put back to {@code
    * unresolved} whose code has left the diff is superseded like any other; {@link #recheckDeclines}

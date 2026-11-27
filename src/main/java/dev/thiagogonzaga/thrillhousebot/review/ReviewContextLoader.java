@@ -1034,14 +1034,50 @@ public class ReviewContextLoader {
     }
   }
 
+  /**
+   * The most reviews {@link GitHubReviewClient#listReviews} reads: every page of its walk, full.
+   */
+  static final int MAX_LISTED_REVIEWS =
+      GitHubReviewClient.MAX_REVIEW_PAGES * GitHubReviewClient.REVIEWS_PER_PAGE;
+
+  /**
+   * The pull request's reviews, oldest first, or an empty list when they could not be listed. A
+   * pull request with no review yet lists as empty without failing, so a failure here is never the
+   * ordinary first review: it is logged at warn with what the round loses, because the publisher
+   * takes the approvals it dismisses from this one listing ({@code
+   * ReviewPublisher.withdrawStandingApprovals}) and an empty one dismisses nothing. A listing that
+   * filled every page is logged too: GitHub lists oldest first, so the reviews left unread are the
+   * newest.
+   */
   List<GitHubReviewClient.ReviewResponse> fetchPriorReviews(
       String auth, String owner, String repo, int prNumber) {
+    List<GitHubReviewClient.ReviewResponse> reviews;
     try {
-      return reviewClient.listReviews(auth, ACCEPT, owner, repo, prNumber);
+      reviews = reviewClient.listReviews(auth, ACCEPT, owner, repo, prNumber);
     } catch (RuntimeException e) {
-      Log.debug("No prior reviews found (this is normal for first review)", e);
+      Log.warnf(
+          e,
+          "Could not list the reviews on %s/%s #%d, continuing as if it had none: the bot's earlier"
+              + " approvals could not be checked, so a round that does not approve dismisses none"
+              + " of them, and a stranded pending review is not cleared",
+          owner,
+          repo,
+          prNumber);
       return List.of();
     }
+    if (reviews.size() >= MAX_LISTED_REVIEWS) {
+      Log.warnf(
+          "Reviews on %s/%s #%d hit the %d-review read ceiling (%d pages of %d): GitHub lists the"
+              + " oldest first, so any newer review was not read, and an approval the bot gave"
+              + " among them is neither seen nor dismissed this round",
+          owner,
+          repo,
+          prNumber,
+          MAX_LISTED_REVIEWS,
+          GitHubReviewClient.MAX_REVIEW_PAGES,
+          GitHubReviewClient.REVIEWS_PER_PAGE);
+    }
+    return reviews;
   }
 
   /**

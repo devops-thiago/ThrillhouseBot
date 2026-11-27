@@ -104,6 +104,13 @@ class UnconfirmedDeclineAcrossRoundsTest {
   private static ReviewContextLoader.ReviewContext context(
       List<ReviewResponse> priorRounds, List<GitHubReviewClient.PullRequestComment> replies) {
     var jsons = priorRounds.stream().map(round -> MAPPER.valueToTree(round).toString()).toList();
+    return context(jsons, priorRounds, replies);
+  }
+
+  private static ReviewContextLoader.ReviewContext context(
+      List<String> jsons,
+      List<ReviewResponse> priorRounds,
+      List<GitHubReviewClient.PullRequestComment> replies) {
     var files = List.of(new FileDiff(FILE, "modified", 1, 0, 1, PATCH));
     var comments = new ArrayList<GitHubReviewClient.PullRequestComment>();
     comments.add(root());
@@ -205,5 +212,56 @@ class UnconfirmedDeclineAcrossRoundsTest {
     assertEquals(ReviewState.APPROVE, r4.result().reviewState());
     assertEquals(0, r4.result().unresolvedPreviousCount());
     assertEquals(1, justified(r4.result()));
+  }
+
+  /** A round that raises nothing new and reports one status, screened and judged as in a run. */
+  private ReviewResult roundReporting(
+      ReviewContextLoader.ReviewContext ctx, List<ReviewResponse.PreviousFindingStatus> statuses) {
+    var answer = new ReviewResponse(List.of(), statuses, null);
+    var screened = FollowUpAnalyzer.screenModelStatuses(answer, ctx, ctx.lineResolver(), BOT);
+    return builder.build(ctx, screened, CI_CLEAR, PLAN);
+  }
+
+  private static List<ReviewResponse.PreviousFindingStatus> status(int id, String status) {
+    return List.of(
+        new ReviewResponse.PreviousFindingStatus(id, status, "the author says it is by design"));
+  }
+
+  @ParameterizedTest(name = "justified under number {0}")
+  @CsvSource({"0", "2", "7"})
+  void aDeclineOnANumberOutsideThePreviousRoundClosesAndCountsNothing(int id) {
+    var replies =
+        List.of(reply(1001L, "pr-author", "CONTRIBUTOR", "Won't fix. This is intentional."));
+    var ctx = context(List.of(ROUND_ONE), replies);
+
+    var result = roundReporting(ctx, status(id, "justified"));
+
+    assertNotEquals(ReviewState.APPROVE, result.reviewState());
+    assertEquals(1, result.unresolvedPreviousCount(), "the finding it did not name stays held");
+    assertEquals(0, justified(result));
+  }
+
+  @Test
+  void aDeclineReportedWhenNoStoredRoundCanBeReadNamesNothingAndChangesNothing() {
+    // Every stored response is unreadable, so there is no previous round to number: the bot's
+    // thread is still open and someone without write access answered it.
+    var unreadable = new FollowUpAnalyzer(MAPPER).parsePreviousResponses(List.of("{not json"));
+    var replies =
+        List.of(reply(1001L, "pr-author", "CONTRIBUTOR", "Won't fix. This is intentional."));
+    var ctx = context(List.of("{not json"), unreadable, replies);
+    assertTrue(ctx.previousFindingsList().isEmpty());
+
+    var declined = roundReporting(ctx, status(1, "justified"));
+    var stillOpen = roundReporting(ctx, status(1, "unresolved"));
+    var silent = roundReporting(ctx, List.of());
+
+    // The status screen drops a status that names no listed finding before the verdict reads it,
+    // so a "justified" here is the same as saying nothing: it is not counted and it closes nothing
+    // an "unresolved" would have held.
+    assertTrue(declined.previousStatuses().isEmpty(), declined.previousStatuses().toString());
+    assertEquals(0, justified(declined));
+    assertEquals(silent.reviewState(), declined.reviewState());
+    assertEquals(stillOpen.reviewState(), declined.reviewState());
+    assertEquals(stillOpen.previousStatuses(), declined.previousStatuses());
   }
 }

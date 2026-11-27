@@ -29,6 +29,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import dev.thiagogonzaga.thrillhousebot.CapturedLog;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
@@ -37,11 +38,17 @@ import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import jakarta.ws.rs.WebApplicationException;
+import jakarta.ws.rs.core.Response;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.logging.Level;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.ArgumentCaptor;
 
 /**
@@ -1143,6 +1150,78 @@ class ReviewPublisherTest {
             review(1L, "APPROVED", "sha1", BOT_LOGIN), review(2L, "APPROVED", "sha2", BOT_LOGIN)));
 
     verifyDismissed(1L, "sha3");
+  }
+
+  /** GitHub's answers to a dismissal that say nothing about the App's right to dismiss here. */
+  private static Stream<Arguments> answersThatAreNotAPermissionRefusal() {
+    return Stream.of(
+        Arguments.of("404, the review is gone", Response.status(404).build()),
+        Arguments.of("422, the review was already dismissed", Response.status(422).build()),
+        Arguments.of("429, the retries did not outlast the throttle", Response.status(429).build()),
+        Arguments.of(
+            "403 with Retry-After, a secondary rate limit",
+            Response.status(403).header("Retry-After", "60").build()),
+        Arguments.of(
+            "403 with no rate limit left, the primary rate limit",
+            Response.status(403).header("x-ratelimit-remaining", "0").build()),
+        Arguments.of(
+            "403 worded as a secondary rate limit",
+            Response.status(403)
+                .entity("{\"message\":\"You have exceeded a secondary rate limit.\"}")
+                .build()));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("answersThatAreNotAPermissionRefusal")
+  void dismissalMetByAnAnswerAboutOneCallStillTriesTheOlderApprovals(
+      String answer, Response response) {
+    when(reviewClient.dismissReview(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), eq(2L), anyString()))
+        .thenThrow(new WebApplicationException(response));
+
+    try (var log = CapturedLog.of(ReviewPublisher.class)) {
+      post(
+          "sha3",
+          heldOnCi(),
+          List.of(
+              review(1L, "APPROVED", "sha1", BOT_LOGIN),
+              review(2L, "APPROVED", "sha2", BOT_LOGIN)));
+
+      verifyDismissed(2L, "sha3");
+      verifyDismissed(1L, "sha3");
+      var warnings = log.at(Level.WARNING);
+      assertEquals(1, warnings.size(), warnings.toString());
+      assertTrue(warnings.getFirst().contains("older approvals are still tried"), answer);
+      assertFalse(warnings.getFirst().contains("Pull requests: write"), answer);
+    }
+    assertEquals("COMMENT", postedReviewEvent());
+  }
+
+  @Test
+  void refusedDismissalIsLoggedWithThePermissionHint() {
+    when(reviewClient.dismissReview(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), anyLong(), anyString()))
+        .thenThrow(
+            new WebApplicationException(
+                Response.status(403)
+                    .entity("{\"message\":\"Resource not accessible by integration\"}")
+                    .build()));
+
+    try (var log = CapturedLog.of(ReviewPublisher.class)) {
+      post(
+          "sha3",
+          heldOnCi(),
+          List.of(
+              review(1L, "APPROVED", "sha1", BOT_LOGIN),
+              review(2L, "APPROVED", "sha2", BOT_LOGIN)));
+
+      verify(reviewClient, times(1))
+          .dismissReview(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), anyLong(), anyString());
+      var warnings = log.at(Level.WARNING);
+      assertEquals(1, warnings.size(), warnings.toString());
+      assertTrue(warnings.getFirst().contains("Pull requests: write"), warnings.getFirst());
+    }
   }
 
   @Test
