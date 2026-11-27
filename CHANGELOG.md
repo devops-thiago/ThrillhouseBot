@@ -69,6 +69,38 @@ cannot resolve its review threads.
   writes no file, commit or branch.
 - **A GitHub Enterprise setup guide**: `docs/GITHUB_ENTERPRISE.md` and a docs-site page say which
   GitHub Enterprise products work and what to set up on GitHub for an organization (#1488).
+
+### Fixed
+
+- **A clear or decline comment says what it matched** (#1463): the reply lists the open findings
+  the comment names by `path:line` and title, and gives the title on record for a `path:line` named
+  with another one, where it used to promise to close whatever was named even when nothing was. A
+  title containing a backtick, `<` or `|` now also matches as the summary's source escapes it.
+- **GitHub Enterprise Server can be used.** The bot called `https://api.github.com` and linked to
+  `https://github.com` whatever the deployment: the REST and GraphQL clients, the GitHub App
+  extension, dashboard sign-in and sign-out, pull request links in notifications and learnings, and
+  the App install page were all fixed to github.com. `GITHUB_URL`, `GITHUB_API_URL` and
+  `GITHUB_GRAPHQL_URL` now set the web, REST and GraphQL endpoints (for example
+  `https://ghes.example.com`, `https://ghes.example.com/api/v3` and
+  `https://ghes.example.com/api/graphql`), and `GITHUB_OAUTH_URL` follows `GITHUB_URL` unless set.
+  The defaults are unchanged.
+- **A refused thread resolve says why** (#1471): GitHub's reason is logged instead of being
+  discarded, and a missing permission is named in the reply to a `resolved` directive and to
+  `/resolve`, which no longer answers that there is nothing to resolve.
+- **Dashboard links and issue URLs follow `GITHUB_URL`** (#1491): the two pull request links in the
+  dashboard's session history pointed at `github.com` whatever was configured, and a linked issue
+  written as a full URL was only recognised there. The session payloads now carry
+  `pullRequestUrl`, and only issue URLs on the configured web address are read.
+- **A one-line private key no longer stops the application at start** (#1314): the extension, which
+  reads `GITHUB_PRIVATE_KEY` too, rejected the form `.env.example` asks for (one line with literal
+  `\n` escapes) and a key without its PEM header and footer. Every key the start-up check accepts
+  is now handed to the extension in a form it can read, and a padded `GITHUB_APP_ID` is stripped
+  for it as the bot's own signer did.
+- **The summary comment follows a verdict held on CI** (#1462): when CI turns green and the held
+  approval is posted, the summary no longer says it cannot be approved or lists the checks as
+  pending. While the hold stays, its table shows the checks' current state. The Agent next steps
+  section, when on, follows it too. A summary posted before this change is not rewritten.
+
 ### Security
 
 - **Text a model wrote can no longer notify people, post raw HTML or offer its own suggestion**:
