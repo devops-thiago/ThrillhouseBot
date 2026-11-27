@@ -205,20 +205,6 @@ cannot resolve its review threads.
   (#1314), with the same tokens and to `GITHUB_API_URL`. A job log's address now costs three
   requests instead of one, as the repository and the job are read first. These calls follow
   `HTTP_CONNECT_TIMEOUT` and `HTTP_REQUEST_TIMEOUT` rather than the REST client's settings.
-- **An approval is withdrawn when a later review does not approve**: the bot approved a pull
-  request, more commits were pushed, and the review of the new head ended as `COMMENT` (findings,
-  an earlier finding still open, a CI hold, a partly reviewed diff). GitHub goes on counting an
-  approval after its author posts a comment review, so the approval of the old head kept satisfying
-  a required-review rule for code the bot had not approved. A review that does not end in an
-  approval now dismisses every approval the bot still has on the pull request before it posts, with
-  a message naming the head it reviewed. Only the bot's own reviews are dismissed, and a review
-  that approves again dismisses nothing. The call uses the `Pull requests: Read & write` permission
-  the App already has. On a protected branch GitHub may refuse it unless the App is allowed to
-  dismiss reviews there (the rule's "Restrict who can dismiss pull request reviews" list): the bot
-  then logs a warning, posts its review as usual and the old approval stays. Turn on "Dismiss
-  stale pull request approvals when new commits are pushed" wherever the bot's approval counts;
-  it is also the only protection for a push the bot does not review (a skipped, failed or
-  superseded run). Affects every release up to 0.9.3.
 - **An approval is withdrawn when commits are pushed, and when a later review does not approve**:
   the bot approved a pull request and more commits were pushed. The approval of the old head kept
   satisfying a required-review rule for code the bot had not approved: until the new head was
