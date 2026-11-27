@@ -125,7 +125,7 @@ class FindingPipelineTest {
     when(findingVerificationService.verify(
             anyLong(), any(), any(), any(), any(), any(), any(), any()))
         .thenAnswer(inv -> inv.getArgument(1));
-    when(followUpAnalyzer.dropRepliedDuplicates(any(), any(), any(), any(), any()))
+    when(followUpAnalyzer.dropRepliedDuplicates(any(), any(), any(), any(), any(), any()))
         .thenAnswer(inv -> inv.getArgument(0));
     lenient()
         .when(

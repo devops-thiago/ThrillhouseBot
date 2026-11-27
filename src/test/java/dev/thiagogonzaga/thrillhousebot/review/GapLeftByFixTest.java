@@ -49,7 +49,9 @@ class GapLeftByFixTest {
 
   private static final String PATCH =
       """
-      @@ -270,1 +270,8 @@
+      @@ -268,3 +268,10 @@
+           var calls = memberCalls(changed);
+           var referred = candidates(changed);
       +    for (var entry : referred) {
       +      calls.stream()
       +          .filter(call -> call.madeOn(entry.symbols))
@@ -61,6 +63,8 @@ class GapLeftByFixTest {
       """;
 
   private final FollowUpAnalyzer analyzer = new FollowUpAnalyzer(new ObjectMapper());
+
+  private final DiffLineResolver diff = new DiffLineResolver(Map.of(FILE, PATCH));
 
   private final ReviewResponse.Finding prior =
       finding(
@@ -104,15 +108,11 @@ class GapLeftByFixTest {
     var response = new ReviewResponse(List.of(gap), List.of(resolved), null);
 
     var kept =
-        analyzer.dropRepliedDuplicates(response, json(roundOne), threads, BOT, KnownWriters.ALL);
+        analyzer.dropRepliedDuplicates(
+            response, json(roundOne), threads, BOT, KnownWriters.ALL, diff);
     var guarded =
         FollowUpAnalyzer.withoutOpenThreadDuplicates(
-            kept,
-            List.of(roundOne),
-            threads,
-            new DiffLineResolver(Map.of(FILE, PATCH)),
-            Map.of(),
-            BOT);
+            kept, List.of(roundOne), threads, diff, Map.of(), BOT);
 
     assertEquals(List.of(gap), guarded.findings(), "the gap posts as a new finding");
     assertEquals(
@@ -125,7 +125,7 @@ class GapLeftByFixTest {
 
     assertTrue(
         analyzer
-            .dropRepliedDuplicates(response, json(roundOne), threads, BOT, KnownWriters.ALL)
+            .dropRepliedDuplicates(response, json(roundOne), threads, BOT, KnownWriters.ALL, diff)
             .findings()
             .isEmpty());
   }
@@ -136,7 +136,7 @@ class GapLeftByFixTest {
 
     assertTrue(
         analyzer
-            .dropRepliedDuplicates(response, json(roundOne), threads, BOT, KnownWriters.ALL)
+            .dropRepliedDuplicates(response, json(roundOne), threads, BOT, KnownWriters.ALL, diff)
             .findings()
             .isEmpty());
   }
@@ -147,7 +147,7 @@ class GapLeftByFixTest {
 
     assertTrue(
         analyzer
-            .dropRepliedDuplicates(response, json(roundOne), threads, BOT, KnownWriters.ALL)
+            .dropRepliedDuplicates(response, json(roundOne), threads, BOT, KnownWriters.ALL, diff)
             .findings()
             .isEmpty());
   }
@@ -160,14 +160,14 @@ class GapLeftByFixTest {
 
     assertTrue(
         analyzer
-            .dropRepliedDuplicates(response, json(roundOne), threads, BOT, KnownWriters.ALL)
+            .dropRepliedDuplicates(response, json(roundOne), threads, BOT, KnownWriters.ALL, diff)
             .findings()
             .isEmpty());
   }
 
   @Test
   void aQuoteHoldingOrHeldByThePriorCodeIsStillThePriorCode() {
-    var resolvedNow = Set.of(priorKey);
+    var resolvedNow = new FollowUpAnalyzer.Fixes(Set.of(priorKey), diff);
     var larger = finding(272, gap.title(), "    for (var entry : referred) {\n" + PRIOR_QUOTE);
     var part = finding(272, gap.title(), "entry.members.addAll(members)");
 
@@ -176,8 +176,37 @@ class GapLeftByFixTest {
   }
 
   @Test
+  void aQuoteOfCodeThePullRequestLeftAsItWasIsARestatement() throws Exception {
+    // #1397: the fix leaves its gap in the code it wrote, not in the unchanged line beside it.
+    var neighbour = finding(269, gap.title(), "    var referred = candidates(changed);");
+    var response =
+        new ReviewResponse(List.of(neighbour), List.of(status("resolved", priorKey)), null);
+
+    assertTrue(FollowUpAnalyzer.isSameFinding(neighbour, prior));
+    assertTrue(
+        analyzer
+            .dropRepliedDuplicates(response, json(roundOne), threads, BOT, KnownWriters.ALL, diff)
+            .findings()
+            .isEmpty());
+  }
+
+  @Test
+  void aQuoteThatReachesAnAddedLineOrThatTheDiffCannotPlaceCanStillBeAGap() {
+    var fixes = new FollowUpAnalyzer.Fixes(Set.of(priorKey), diff);
+    var reaching =
+        finding(
+            270,
+            gap.title(),
+            "    var referred = candidates(changed);\n    for (var entry : referred) {");
+    var elsewhere = finding(272, gap.title(), "    return namedAfter(receiver, other);");
+
+    assertTrue(FollowUpAnalyzer.leftByFix(reaching, prior, fixes));
+    assertTrue(FollowUpAnalyzer.leftByFix(elsewhere, prior, fixes));
+  }
+
+  @Test
   void aFindingWithNoQuoteCannotShowItIsAboutOtherCode() {
-    var resolvedNow = Set.of(priorKey);
+    var resolvedNow = new FollowUpAnalyzer.Fixes(Set.of(priorKey), diff);
 
     assertFalse(FollowUpAnalyzer.leftByFix(finding(272, gap.title(), null), prior, resolvedNow));
     assertFalse(FollowUpAnalyzer.leftByFix(finding(272, gap.title(), " \n"), prior, resolvedNow));
@@ -188,7 +217,9 @@ class GapLeftByFixTest {
   void aPriorWithNoQuoteIsLeftByAFixWhoseGapQuotesCode() {
     var unquoted = finding(prior.line(), prior.title(), null);
 
-    assertTrue(FollowUpAnalyzer.leftByFix(gap, unquoted, Set.of(key(unquoted))));
+    assertTrue(
+        FollowUpAnalyzer.leftByFix(
+            gap, unquoted, new FollowUpAnalyzer.Fixes(Set.of(key(unquoted)), diff)));
   }
 
   @Test
@@ -200,7 +231,7 @@ class GapLeftByFixTest {
     assertEquals(
         List.of(gap),
         analyzer
-            .dropRepliedDuplicates(response, json(roundOne), threads, BOT, KnownWriters.ALL)
+            .dropRepliedDuplicates(response, json(roundOne), threads, BOT, KnownWriters.ALL, diff)
             .findings());
   }
 

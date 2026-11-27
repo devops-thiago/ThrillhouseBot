@@ -33,6 +33,7 @@ import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Predicate;
 import java.util.function.ToIntFunction;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
 /**
@@ -376,6 +377,21 @@ public final class DiffLineResolver {
                 added.entrySet().stream()
                     .anyMatch(
                         e -> e.getKey() >= from && e.getKey() <= to && e.getValue().equals(line)));
+  }
+
+  /**
+   * Whether {@code quote} sits in {@code file}'s diff ({@link #locateQuote} for {@code citedLine})
+   * on lines the pull request left as they were: no line from its first to its last is an added one
+   * (#1397). {@code false} when the quote is not located: nothing is known about it then.
+   */
+  public boolean quotesOnlyUnchangedLines(String file, String quote, int citedLine) {
+    var at = locateQuote(file, quote, citedLine);
+    if (at.isEmpty()) {
+      return false;
+    }
+    var added = byFile.get(resolveKey(file, FileSide::hasRightText)).added();
+    return IntStream.rangeClosed(at.get().startLine(), at.get().endLine())
+        .noneMatch(added::containsKey);
   }
 
   /**
