@@ -123,6 +123,12 @@ public class CiFailureContextResolver {
    */
   static final String FAILING_TESTS = "Failing tests named in the job log:";
 
+  /**
+   * How the line a detailed check's annotations are listed under opens, each with the {@link
+   * #NAMED_ONLY} prefix and its {@code path:line} first ({@link #formatAnnotation}).
+   */
+  static final String ANNOTATIONS = "Annotations (";
+
   /** The line the section opens with, before the number of failed checks. */
   private static final String FAILED_AT_START =
       "Checks on this commit that had completed without passing when this review started: ";
@@ -485,7 +491,7 @@ public class CiFailureContextResolver {
     // Failure-level annotations first: a warning on the same page rarely explains the failure.
     ordered.sort(Comparator.comparingInt(CiFailureContextResolver::levelRank));
     var shown = Math.min(ordered.size(), MAX_ANNOTATIONS_PER_CHECK);
-    sb.append("Annotations (")
+    sb.append(ANNOTATIONS)
         .append(shown)
         .append(" of ")
         .append(check.annotationsCount())

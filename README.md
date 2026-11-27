@@ -388,8 +388,9 @@ would push past GitHub's size limit is posted without it.
 
 `REVIEW_SHOW_EVIDENCE=true` adds a **Basis** block under each finding's
 description on its inline or file-level comment: the path-scoped rules covering
-the file, the failing check the finding cites, what the second pass did with it,
-and the review learning that demoted it. A line is left out when the review has
+the file, the failing check the finding cites with up to three places where that
+check annotated the finding's file, what the second pass did with it, and the
+review learning that demoted it. A line is left out when the review has
 nothing for it. It says what the review had, not what the model was thinking, and
 makes no model call.
 
