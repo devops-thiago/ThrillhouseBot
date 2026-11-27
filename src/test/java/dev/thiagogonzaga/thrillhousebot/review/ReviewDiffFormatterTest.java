@@ -23,6 +23,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import io.smallrye.config.WithDefault;
 import java.nio.file.FileSystems;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
@@ -732,6 +733,55 @@ class ReviewDiffFormatterTest {
 
   @Nested
   class GlobMatching {
+
+    /**
+     * Six wildcards against a name of 250 characters: matched by backtracking, this one check took
+     * hours. The ignore list of a repository's settings file is matched against every path a pull
+     * request changes.
+     */
+    @Test
+    void shouldMatchAnIgnoreGlobOfManyWildcardsInBoundedTime() {
+      var formatter = new ReviewDiffFormatter(List.of("*a*a*a*a*a*b", "docs/*a*a*a*a*a*b"), 5000);
+      var name = "a".repeat(250);
+
+      assertTimeoutPreemptively(
+          Duration.ofSeconds(20),
+          () -> {
+            assertFalse(formatter.isIgnored(name));
+            assertFalse(formatter.isIgnored("docs/" + name));
+            assertTrue(formatter.isIgnored("src/deep/" + name + "b"));
+            assertTrue(formatter.isIgnored("docs/" + name + "b"));
+          });
+    }
+
+    /**
+     * A glob of 160 {@code **} against a path of 2,000 directories. A pattern opening with {@code
+     * **}{@code /} is also tried from every directory of the path, which is one pass here and was
+     * one match per directory.
+     */
+    @Test
+    void shouldMatchAGlobFromEveryDirectoryOfADeepPathInBoundedTime() {
+      var formatter = new ReviewDiffFormatter(List.of("**/" + "**a".repeat(160) + "**b"), 5000);
+      var deep = "a/".repeat(2_000) + "a";
+
+      assertTimeoutPreemptively(
+          Duration.ofSeconds(20),
+          () -> {
+            assertFalse(formatter.isIgnored(deep));
+            assertTrue(formatter.isIgnored(deep + "b"));
+          });
+    }
+
+    @Test
+    void shouldDropAnIgnoreGlobLongerThanTheLimit() {
+      var longest = "a".repeat(ReviewDiffFormatter.IgnoreGlobs.MAX_DECLARED_GLOB_CHARS);
+      var formatter = new ReviewDiffFormatter(List.of(longest + "a", "**/*.lock"), 5000);
+
+      assertFalse(formatter.isIgnored(longest + "a"));
+      assertTrue(formatter.isIgnored("yarn.lock"));
+      assertTrue(new ReviewDiffFormatter(List.of(longest), 5000).isIgnored("src/" + longest));
+      assertTrue(new ReviewDiffFormatter(List.of(longest), 5000).isIgnored(longest + "/Main.java"));
+    }
 
     @Test
     void shouldMatchViaPrimaryGlobPattern() {

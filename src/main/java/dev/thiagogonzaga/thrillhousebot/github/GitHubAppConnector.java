@@ -38,7 +38,8 @@ import org.kohsuke.github.connector.GitHubConnectorRequest;
 import org.kohsuke.github.connector.GitHubConnectorResponse;
 
 /**
- * The transport of the calls made with the App's own credential, in place of the extension's.
+ * The transport of the hub4j calls, those made with the App's own credential and those {@link
+ * GitHubTokenReads} makes with an installation token, in place of the extension's.
  *
  * <p>The extension's connector sets no request timeout, and hub4j reports a refused call as an
  * {@code IOException} whose message is the response body, after sleeping through a rate limit. The

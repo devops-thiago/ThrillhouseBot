@@ -288,8 +288,13 @@ final class PathMentions {
    */
   private static final Pattern CODE_SPAN = Pattern.compile("`((?:[^`\\n]|\\n(?!\\n))++)`");
 
-  /** A line break and the indentation after it, inside a wrapped code span. */
-  private static final Pattern WRAP = Pattern.compile("[ \\t]*+\\n[ \\t]*+");
+  /**
+   * A line break inside a wrapped code span, with the blanks before it and the indentation after
+   * it. The blanks before it are read from the first of their run only, so a long run is not read
+   * again from each of its blanks. A break that follows straight on the last match has its blanks
+   * in that match already, and is taken where that match ended.
+   */
+  private static final Pattern WRAP = Pattern.compile("(?:(?<![ \\t])[ \\t]*+|\\G)\\n[ \\t]*+");
 
   /** A code span's text that is a path and nothing else ({@link #quotesMoreThanAPath}). */
   private static final Pattern BARE_PATH = Pattern.compile("[\\w./-]+");
@@ -968,13 +973,18 @@ final class PathMentions {
     return paths;
   }
 
+  /** {@code span} with each line break, and the blanks around it, read as one blank. */
+  static String onOneLine(String span) {
+    return WRAP.matcher(span).replaceAll(" ");
+  }
+
   /**
    * {@code written} with an absolute path the patch lines do not hold replaced, where one fits, and
    * then on one line; {@code written} itself when nothing is replaced.
    */
   private static String correctedQuote(String written, List<String> lines) {
     // A span the description wrapped quotes one line: its break reads as the blank it replaced.
-    String quote = WRAP.matcher(written).replaceAll(" ");
+    String quote = onOneLine(written);
     if (lines.stream().anyMatch(line -> line.contains(quote))) {
       return written;
     }

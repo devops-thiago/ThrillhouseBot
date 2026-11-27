@@ -90,7 +90,7 @@ same diff.
 | `webhook/` | The webhook entry (`WebhookEvents`, driven by the Quarkiverse GitHub App extension's route on `POST /api/webhook`; it owns the HMAC check), triggers and filters (`TriggerDetector`, `ReviewTriggerFilter`), dedupe, pause state, the comment commands (`CommentCommandService`), the `/help` limit for commenters without write access (`HelpReplyLimiter`) |
 | `review/` | Everything between "a review was requested" and "the result is on GitHub": orchestration, context loading, prompt assembly, budgeting, the post-model finding chain, verdict, publishing, CI gating, follow-ups, the on-request commands |
 | `review/ai/` | The LangChain4j layer: AI service interfaces and their prompt constants (`*Prompts`), streaming and retries (`AiReviewService`), parsing and salvage, the verifier, the token ledger, the call gate |
-| `github/` | REST and GraphQL clients (plus hub4j through the Quarkiverse `GitHubClientProvider` for permission, membership, issue and file reads), app auth (`GitHubAppApi`, through the extension's application client), write pacing and retry (`GitHubWritePacer`, `GitHubWriteRetry`), instructions and repo-settings resolution |
+| `github/` | REST and GraphQL clients (plus hub4j through the Quarkiverse `GitHubClientProvider` for permission, membership, issue and file reads, and with a caller's installation token through `GitHubTokenReads` for workflow run, artifact and installation repository listings), app auth (`GitHubAppApi`, through the extension's application client), write pacing and retry (`GitHubWritePacer`, `GitHubWriteRetry`), instructions and repo-settings resolution |
 | `dashboard/` | OAuth sessions, the WebSocket broadcaster, `ReviewSession` persistence, finding-feedback aggregates |
 | `notification/` | The opt-in outgoing review-outcome webhook |
 | `observability/` | The Prometheus endpoint, review-outcome metrics, and the OpenTelemetry resource's `service.instance.id` (`ServiceInstanceResource`: `HOSTNAME`, else a random id per start; `OTEL_RESOURCE_ATTRIBUTES`, comma-separated `key=value` pairs, overrides it) |
@@ -592,6 +592,13 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   refusal, `ProcessingException` for a transport failure, no response body in a message, one
   attempt. `GitHubAppCredentialInterceptor` rewrites the configured key and strips the App ID for
   the extension, so a form the start-up check accepts works for the signer too.
+- **A read made with a token from `GitHubAuthClient` keeps that token** (#1314). `GitHubTokenReads`
+  builds hub4j with the caller's `Authorization` header, never an installation client from
+  `GitHubClientProvider`, which reaches the whole installation. It uses `GitHubAppConnector`, and
+  its listings keep the page bounds the REST clients had. What hub4j cannot express stays on a
+  trimmed REST client whose Javadoc names the limitation: the artifact and job-log redirects
+  (`GitHubActionsClient`), the renamed repository's `301` (`GitHubInstallationClient`) and the
+  listings made with a user's token (`GitHubUserClient`).
 
 ## Prompts
 
