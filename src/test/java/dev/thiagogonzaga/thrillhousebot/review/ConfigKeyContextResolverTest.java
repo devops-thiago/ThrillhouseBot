@@ -285,7 +285,7 @@ class ConfigKeyContextResolverTest {
 
     @Test
     void shouldReadAnAddedLineWhoseContentStartsWithTwoPlusSigns() {
-      // #1396: inside a hunk "+++" is the added marker and content that starts with "++", such as
+      // Inside a hunk "+++" is the added marker and content that starts with "++", such as
       // a "+++" front-matter delimiter line, not the file header.
       var patch = "@@ -1 +1,3 @@\n intro\n+++ `FRONT_MATTER_KEY` +++\n+`REAL_DOC_KEY` matters";
       var doc = new FileDiff("README.md", "modified", 2, 0, 2, patch);
@@ -494,7 +494,7 @@ class ConfigKeyContextResolverTest {
 
     /**
      * A read named on an inner line of a docstring or block comment the hunk opens and closes is
-     * named, not made (#1473).
+     * named, not made.
      */
     @ParameterizedTest
     @ValueSource(
