@@ -93,6 +93,10 @@ public class AutoReviewSlots {
    *
    * @param superseded asked before each wait; {@code true} ends the wait with {@link
    *     Outcome#SUPERSEDED}. {@link #recheckWaiters} makes the waiters of a repository ask again.
+   *     It is asked while this class's lock is held, so it may take a lock of its own only if that
+   *     lock is never held around a call into this class. {@link ReviewDispatcher}'s test takes its
+   *     pull request's monitor, which is private to {@code PerPrState} and released before the
+   *     dispatcher calls {@code acquire}, {@code release} or {@code recheckWaiters}.
    */
   public Outcome acquire(long installationId, long repositoryId, BooleanSupplier superseded) {
     if (maxConcurrent <= 0) {
