@@ -91,6 +91,17 @@ CI enforces this bar:
 - Every commit is signed off (see
   [Developer Certificate of Origin](#developer-certificate-of-origin)).
 
+### Released history is read-only
+
+A released version's section in `CHANGELOG.md` and its archived docs
+(`website/src/content/docs/<version>/`, `website/src/assets/<version>/`,
+`website/src/content/versions/<version>.json` and its entry in
+`website/versions.json`) record what shipped. The `released-history` check fails
+a pull request that edits, removes or renames any of them, or adds a file to an
+archive that already exists, for a version with a `vX.Y.Z` tag. To correct one, add an **Errata** entry to the next release's
+section instead. New entries under `[Unreleased]`, a new release section and a
+new docs archive are always allowed.
+
 ## Coding style
 
 Java code follows the
