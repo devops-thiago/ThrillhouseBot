@@ -3407,7 +3407,7 @@ class ReviewOrchestratorTest {
                 "repo",
                 42,
                 1L,
-                ReviewPublisher.approvalWithdrawnMessage("abcdefgh"));
+                ApprovalWithdrawals.approvalWithdrawnMessage("abcdefgh"));
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
       }
     }
