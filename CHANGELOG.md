@@ -55,7 +55,8 @@ cannot resolve its review threads.
   hidden markers, or add a second `suggestion` block a reader could commit with one click. An `@`
   that could start a mention is now followed by a zero-width space (`@&#8203;name`), which reads
   the same and notifies nobody; an `@` directly after a letter or digit, as in an email address,
-  is unchanged. In descriptions, notes and replies a `<` that could open a tag or comment is
+  is unchanged, and so is one after a `/` in the path of an `http(s)://` address (bare, as a
+  markdown link's destination, or in `<…>`), where GitHub reads no mention. In descriptions, notes and replies a `<` that could open a tag or comment is
   escaped, a fenced block marked `suggestion` becomes a plain code block, and an unclosed fence is
   closed. Code spans and fenced code keep their content byte for byte; a fenced block nested in a
   list or quote is moved to the top level. A title copied from the rendered summary into an

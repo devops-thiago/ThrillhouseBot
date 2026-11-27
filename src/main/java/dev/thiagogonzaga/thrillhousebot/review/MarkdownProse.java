@@ -42,6 +42,11 @@ import java.util.regex.Pattern;
  * ({@code @&#8203;name}, invisible when rendered), and a {@code <} that could open a tag or a
  * comment becomes {@code &lt;}. An {@code @} directly after a letter or digit, as in an email
  * address, is not a mention and stays.
+ *
+ * <p>An {@code @} in the path of a web address stays too, since GitHub links the address and reads
+ * no mention inside a link, and a guard there would break the address. What counts as an address is
+ * kept narrower than what GitHub links ({@link #url}, {@link #angleAutolink}), so that text GitHub
+ * does not link is never taken for one.
  */
 final class MarkdownProse {
 
@@ -54,9 +59,11 @@ final class MarkdownProse {
   /** What a fence's info string may carry over: a language tag, nothing else. */
   private static final Pattern LANGUAGE_TAG = Pattern.compile("[A-Za-z0-9+#._-]{1,20}");
 
-  /** The longest line prefix read as nesting (indentation, quote and list markers). */
-  private static final Pattern NESTING =
-      Pattern.compile("^[ \\t]*(?:>[ \\t]*)*(?:(?:[-*+]|\\d{1,9}[.)])[ \\t]+)?(?:>[ \\t]*)*");
+  /** Characters of an address path that no inline markdown can split a link at. */
+  private static final String PATH_PUNCTUATION = "/.%+=?#@:-";
+
+  /** What an address inside angle brackets may hold besides: nothing can split it there. */
+  private static final String BRACKETED_PUNCTUATION = "_~&,;!$'()*";
 
   private MarkdownProse() {}
 
@@ -93,8 +100,7 @@ final class MarkdownProse {
    * marker for instance, is emitted as a line of its own.
    */
   private static Fence opened(String line, List<String> out) {
-    var nesting = NESTING.matcher(line);
-    int at = nesting.find() ? nesting.end() : 0;
+    int at = nestingEnd(line);
     if (at >= line.length() || (line.charAt(at) != '`' && line.charAt(at) != '~')) {
       return null;
     }
@@ -131,6 +137,45 @@ final class MarkdownProse {
     return first;
   }
 
+  /**
+   * The end of the longest prefix of {@code line} read as nesting: indentation and quote markers,
+   * one list marker followed by a blank, then more of the first.
+   */
+  private static int nestingEnd(String line) {
+    int i = quotesEnd(line, 0);
+    return quotesEnd(line, listMarkerEnd(line, i));
+  }
+
+  private static int quotesEnd(String line, int from) {
+    int i = from;
+    while (i < line.length() && " \t>".indexOf(line.charAt(i)) >= 0) {
+      i++;
+    }
+    return i;
+  }
+
+  /** The end of a bullet or numbered marker at {@code from} and its blanks, else {@code from}. */
+  private static int listMarkerEnd(String line, int from) {
+    int i = from;
+    while (i < line.length() && i - from < 10 && asciiDigit(line.charAt(i))) {
+      i++;
+    }
+    int digits = i - from;
+    if (i >= line.length()) {
+      return from;
+    }
+    boolean numbered = digits >= 1 && digits <= 9 && ".)".indexOf(line.charAt(i)) >= 0;
+    boolean bullet = digits == 0 && "-*+".indexOf(line.charAt(i)) >= 0;
+    if (!numbered && !bullet) {
+      return from;
+    }
+    int blanks = i + 1;
+    while (blanks < line.length() && (line.charAt(blanks) == ' ' || line.charAt(blanks) == '\t')) {
+      blanks++;
+    }
+    return blanks > i + 1 ? blanks : from;
+  }
+
   private static boolean closes(String line, Fence open) {
     var rest = stripNesting(line);
     int end = runEnd(rest, 0);
@@ -141,11 +186,7 @@ final class MarkdownProse {
   }
 
   private static String stripNesting(String line) {
-    int i = 0;
-    while (i < line.length() && " \t>".indexOf(line.charAt(i)) >= 0) {
-      i++;
-    }
-    return line.substring(i);
+    return line.substring(quotesEnd(line, 0));
   }
 
   /** A content line without the quote markers and indentation its fence was opened under. */
@@ -189,19 +230,149 @@ final class MarkdownProse {
       } else if (c == '~') {
         i = tildes(text, i, sb);
       } else if (c == '<') {
-        sb.append(opensTag(text, i) ? "&lt;" : "<");
-        i++;
-      } else if (c == '&') {
-        i = ampersand(text, i, sb);
-      } else if (c == '@') {
-        at(text, i, i + 1, sb);
-        i++;
+        i = angle(text, i, sb);
       } else {
-        sb.append(c);
-        i++;
+        i = plain(text, i, sb);
       }
     }
     return sb.toString();
+  }
+
+  /** A {@code <}: an address in angle brackets kept whole, a tag opener escaped, or itself. */
+  private static int angle(String text, int i, StringBuilder sb) {
+    int end = angleAutolink(text, i);
+    if (end > 0) {
+      sb.append(text, i, end);
+      return end;
+    }
+    sb.append(opensTag(text, i) ? "&lt;" : "<");
+    return i + 1;
+  }
+
+  /**
+   * Text that is neither code nor markup: an address, an {@code @} in either spelling, or itself.
+   */
+  private static int plain(String text, int i, StringBuilder sb) {
+    char c = text.charAt(i);
+    if (c == '&') {
+      return ampersand(text, i, sb);
+    }
+    if (c == '@') {
+      at(text, i, i + 1, sb);
+      return i + 1;
+    }
+    if (c == 'h' || c == 'H') {
+      int end = url(text, i, sb);
+      if (end > 0) {
+        return end;
+      }
+    }
+    sb.append(c);
+    return i + 1;
+  }
+
+  /**
+   * Writes the web address that starts at {@code i} and returns its end, or -1 when none starts
+   * there. An {@code @} right after a {@code /} of its path is written as it is.
+   *
+   * <p>GitHub links more than this accepts, and that is the point: whatever this takes for an
+   * address, GitHub links at least as far, so the {@code @} is inside the link. It must
+   *
+   * <ul>
+   *   <li>start a line or follow a blank or a {@code (}, which is also where a markdown link's
+   *       destination starts;
+   *   <li>open with {@code http://} or {@code https://} and a host of letters, digits and hyphens
+   *       with at least one dot, optionally a port, then a {@code /};
+   *   <li>hold only letters, digits and {@code / . % + = ? # @ : -} from there on. It ends at the
+   *       first other character: a blank, a {@code )}, a quote, and also {@code _ * ~ & $}, which
+   *       emphasis, strikethrough, an entity or math could split the link at, leaving what follows
+   *       as text.
+   * </ul>
+   *
+   * A {@code www.} address without a scheme is not one, and neither is the text of a link.
+   */
+  private static int url(String text, int i, StringBuilder sb) {
+    if (i > 0 && text.charAt(i - 1) != '(' && !Character.isWhitespace(text.charAt(i - 1))) {
+      return -1;
+    }
+    int path = pathStart(text, i);
+    if (path < 0) {
+      return -1;
+    }
+    sb.append(text, i, path);
+    int end = path;
+    while (end < text.length() && pathCharacter(text.charAt(end), "")) {
+      char c = text.charAt(end);
+      if (c == '@' && text.charAt(end - 1) != '/') {
+        at(text, end, end + 1, sb);
+      } else {
+        sb.append(c);
+      }
+      end++;
+    }
+    return end;
+  }
+
+  /**
+   * The end of {@code <http://…>} or {@code <https://…>} opening at {@code i}, or -1. Markdown
+   * reads the whole of it as one link and nothing inside it as markup, so it is kept as written; it
+   * is not a tag, since no tag name holds a colon. The address has a host and a path as {@link
+   * #url} asks, may also hold {@code _ ~ & , ; ! $ ' ( ) *}, and must close on the same line.
+   */
+  private static int angleAutolink(String text, int i) {
+    int end = pathStart(text, i + 1);
+    if (end < 0) {
+      return -1;
+    }
+    while (end < text.length() && pathCharacter(text.charAt(end), BRACKETED_PUNCTUATION)) {
+      end++;
+    }
+    return end < text.length() && text.charAt(end) == '>' ? end + 1 : -1;
+  }
+
+  /**
+   * Where the path of the address at {@code i} starts, just after the {@code /} that follows its
+   * host, or -1 when no {@code http(s)://host/} is there.
+   */
+  private static int pathStart(String text, int i) {
+    int host;
+    if (text.regionMatches(true, i, "https://", 0, 8)) {
+      host = i + 8;
+    } else if (text.regionMatches(true, i, "http://", 0, 7)) {
+      host = i + 7;
+    } else {
+      return -1;
+    }
+    int end = host;
+    int dots = 0;
+    boolean label = false;
+    while (end < text.length() && (hostCharacter(text.charAt(end)) || text.charAt(end) == '.')) {
+      boolean dot = text.charAt(end) == '.';
+      if (dot && !label) {
+        return -1;
+      }
+      dots += dot ? 1 : 0;
+      label = !dot;
+      end++;
+    }
+    if (dots == 0 || !label) {
+      return -1;
+    }
+    if (end < text.length() && text.charAt(end) == ':') {
+      end++;
+      while (end < text.length() && asciiDigit(text.charAt(end))) {
+        end++;
+      }
+    }
+    return end < text.length() && text.charAt(end) == '/' ? end + 1 : -1;
+  }
+
+  private static boolean hostCharacter(char c) {
+    return asciiAlphanumeric(c) || c == '-';
+  }
+
+  private static boolean pathCharacter(char c, String alsoAllowed) {
+    return asciiAlphanumeric(c) || PATH_PUNCTUATION.indexOf(c) >= 0 || alsoAllowed.indexOf(c) >= 0;
   }
 
   /**
@@ -284,22 +455,16 @@ final class MarkdownProse {
     }
   }
 
-  /** {@code text} with every possible mention guarded and nothing else changed. */
+  /**
+   * {@code text} with every possible mention guarded and nothing else changed. An address is read
+   * as {@link #url} reads it; one in angle brackets is not kept, since the caller escapes the
+   * bracket.
+   */
   static String mentions(String text) {
     var sb = new StringBuilder(text.length() + 16);
     int i = 0;
     while (i < text.length()) {
-      char c = text.charAt(i);
-      if (c == '&') {
-        i = ampersand(text, i, sb);
-      } else {
-        if (c == '@') {
-          at(text, i, i + 1, sb);
-        } else {
-          sb.append(c);
-        }
-        i++;
-      }
+      i = plain(text, i, sb);
     }
     return sb.toString();
   }
@@ -320,7 +485,11 @@ final class MarkdownProse {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
   }
 
+  private static boolean asciiDigit(char c) {
+    return c >= '0' && c <= '9';
+  }
+
   private static boolean asciiAlphanumeric(char c) {
-    return asciiLetter(c) || (c >= '0' && c <= '9');
+    return asciiLetter(c) || asciiDigit(c);
   }
 }

@@ -610,4 +610,29 @@ class SuggestionFormatterTest {
     assertEquals(2, SuggestionFormatter.parseFindingMarker(comment).orElseThrow());
     assertEquals(1, comment.split("<!--", -1).length - 1, comment);
   }
+
+  @Test
+  void anAddressInAFindingIsPostedIntactAndAMentionBesideItIsNot() {
+    var finding =
+        new Finding(
+            RiskLevel.LOW,
+            "package.json",
+            4,
+            "Pin https://www.npmjs.com/package/@types/node",
+            "See [the package](https://www.npmjs.com/package/@types/node),"
+                + " <https://github.com/@octocat> and https://unpkg.com/@scope/pkg@1.2.3/file.js"
+                + " (ask @octocat, or [@hubot](https://host.example/x)).",
+            null,
+            null);
+
+    var comment = formatter.formatReviewComment(finding);
+
+    assertTrue(comment.contains(" — Pin https://www.npmjs.com/package/@types/node**"), comment);
+    assertTrue(
+        comment.contains(
+            "See [the package](https://www.npmjs.com/package/@types/node),"
+                + " <https://github.com/@octocat> and https://unpkg.com/@scope/pkg@1.2.3/file.js"
+                + " (ask @&#8203;octocat, or [@&#8203;hubot](https://host.example/x))."),
+        comment);
+  }
 }

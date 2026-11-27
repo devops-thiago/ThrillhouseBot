@@ -24,6 +24,7 @@ import java.time.Duration;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /** Model-written markdown as {@link MarkdownSafe#prose} posts it. */
@@ -83,6 +84,134 @@ class MarkdownProseTest {
     // Rendered, the entity is a zero-width space: the path reads as it was written.
     assertEquals(
         "Update node_modules/@types/node and src/@core/index.ts.", posted.replace("&#8203;", ""));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "https://www.npmjs.com/package/@scope/name",
+        "See https://github.com/@octocat for the profile.",
+        "https://unpkg.com/@scope/pkg@1.2.3/file.js",
+        "[the package](https://www.npmjs.com/package/@types/node)",
+        "[the package](https://www.npmjs.com/package/@types/node \"its page\")",
+        "(https://medium.com/@author/a-post-1a2b3c)",
+        "<https://host.example/@x>",
+        "[text](<https://host.example/@x>)",
+        "HTTPS://Host.Example:8443/@x?tab=1#top",
+        "http://host.example/a/@b/@c",
+        "[docs]: https://host.example/@x"
+      })
+  void anAddressKeepsTheAtInItsPath(String text) {
+    assertEquals(text, MarkdownSafe.prose(text));
+    assertEquals(text, MarkdownSafe.proseLine(text));
+    assertEquals(text, MarkdownSafe.proseCell(text));
+  }
+
+  @Test
+  void anAddressInATitleKeepsItsAtAndABracketedOneIsEscapedAndGuarded() {
+    assertEquals(
+        "Pin https://www.npmjs.com/package/@types/node (https://unpkg.com/@a/b@1.0.0/x.js)",
+        MarkdownSafe.inline(
+            "Pin https://www.npmjs.com/package/@types/node (https://unpkg.com/@a/b@1.0.0/x.js)"));
+    // inline escapes every "<", so the brackets are no autolink there and the "@" is guarded.
+    assertEquals(
+        "&lt;https://host.example/@&#8203;x>", MarkdownSafe.inline("<https://host.example/@x>"));
+  }
+
+  @ParameterizedTest
+  @CsvSource(
+      delimiter = '|',
+      quoteCharacter = '^',
+      value = {
+        // A blank ends the address.
+        "https://host.example/x @user|https://host.example/x @&#8203;user",
+        "https://x @user|https://x @&#8203;user",
+        // A closing parenthesis ends it as far as this reads, whatever GitHub links.
+        "https://x)@user|https://x)@&#8203;user",
+        "(https://host.example/x)@user|(https://host.example/x)@&#8203;user",
+        "https://host.example/a)@user|https://host.example/a)@&#8203;user",
+        // No scheme, no address.
+        "www.host.example/@user|www.host.example/@&#8203;user",
+        "host.example/@user|host.example/@&#8203;user",
+        "ftp://host.example/@user|ftp://host.example/@&#8203;user",
+        // Not where an address may start.
+        "xhttps://host.example/@user|xhttps://host.example/@&#8203;user",
+        "see:https://host.example/@user|see:https://host.example/@&#8203;user",
+        "*https://host.example/@user*|*https://host.example/@&#8203;user*",
+        // Not a host GitHub is sure to link.
+        "https://@user|https://@&#8203;user",
+        "https://host/@user|https://host/@&#8203;user",
+        "https://.host.example/@user|https://.host.example/@&#8203;user",
+        "https://host..example/@user|https://host..example/@&#8203;user",
+        "https://host.example./@user|https://host.example./@&#8203;user",
+        "https://host.example:80@user|https://host.example:80@user",
+        "https://host.example:x/@user|https://host.example:x/@&#8203;user",
+        "https://host.example?@user|https://host.example?@&#8203;user",
+        "https://host.example|https://host.example",
+        "http:/host.example/@user|http:/host.example/@&#8203;user",
+        // Markup that could split the link before the name ends the address.
+        "https://host.example/_x_@user|https://host.example/_x_@&#8203;user",
+        "https://host.example/_/@user_|https://host.example/_/@&#8203;user_",
+        "https://host.example/*x*/@user|https://host.example/*x*/@&#8203;user",
+        "https://host.example/~~x~~/@user|https://host.example/~~x~~/@&#8203;user",
+        "https://host.example/$x$/@user|https://host.example/$x$/@&#8203;user",
+        "https://host.example/&lt;/@user|https://host.example/&lt;/@&#8203;user",
+        "https://host.example/x\"/@user|https://host.example/x\"/@&#8203;user",
+        "https://host.example/[x]/@user|https://host.example/[x]/@&#8203;user",
+        // Inside an address, only an "@" right after a "/" is kept as it is.
+        "https://host.example/a?to=@user|https://host.example/a?to=@&#8203;user",
+        "https://host.example/a/@@user|https://host.example/a/@@&#8203;user",
+        "https://host.example/&#64;user|https://host.example/@&#8203;user",
+        "https://host.example/x:&commat;user|https://host.example/x:@&#8203;user",
+        // The text of a link is prose; only its destination is an address.
+        "[@user](https://host.example/x)|[@&#8203;user](https://host.example/x)",
+        "[x](https://host.example/@a) @user|[x](https://host.example/@a) @&#8203;user",
+        // Angle brackets keep an address only when they close around one.
+        "<https://host.example/@user|&lt;https://host.example/@&#8203;user",
+        "<https://host.example/x @user>|&lt;https://host.example/x @&#8203;user>",
+        "<https://host/@user>|&lt;https://host/@&#8203;user>",
+        "<www.host.example/@user>|&lt;www.host.example/@&#8203;user>",
+        "<mailto:x@host.example> <@user>|&lt;mailto:x@host.example> <@&#8203;user>",
+        "<https://host.example/x>@user|<https://host.example/x>@&#8203;user",
+        "\\<https://host.example/@user>|&lt;https://host.example/@&#8203;user>"
+      })
+  void whatIsNotAnAddressIsStillGuarded(String text, String posted) {
+    assertEquals(posted, MarkdownSafe.prose(text));
+    assertEquals(posted, MarkdownSafe.prose(posted));
+  }
+
+  @Test
+  void addressesOnSeveralLinesAndInListItemsAreKept() {
+    var text =
+        "- https://host.example/@x\n- <https://host.example/a_b/@x~y(z)>\n\n> (http://a.b/@c)";
+    assertEquals(text, MarkdownSafe.prose(text));
+  }
+
+  @Test
+  void anAddressEndsWithItsLine() {
+    assertEquals(
+        "https://host.example/x\n@&#8203;user",
+        MarkdownSafe.prose("https://host.example/x\n@user"));
+    assertEquals("https://x\n@&#8203;user", MarkdownSafe.prose("https://x\n@user"));
+    assertEquals(
+        "see\thttps://host.example/@x", MarkdownSafe.prose("see\thttps://host.example/@x"));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "1. item",
+        "123456789) item",
+        "1234567890. not a list marker",
+        "12",
+        "1.no blank",
+        "+ ```",
+        "> 2) ~~~"
+      })
+  void aLineIsReadForNestingWithoutChangingIt(String line) {
+    var posted = MarkdownSafe.prose(line + "\ncode\n```");
+    // A fence under a list marker is hoisted with the marker on a line of its own.
+    assertTrue(posted.startsWith(line.replaceAll("[ `~]+$", "")), posted);
   }
 
   @Test
@@ -306,6 +435,14 @@ class MarkdownProseTest {
   @Test
   void aLongHostileLineIsRewrittenInLinearTime() {
     var backticks = "` ".repeat(50_000) + "`` ".repeat(10_000) + "@x ".repeat(20_000);
+    var addresses =
+        "https://"
+            + "a".repeat(50_000)
+            + " "
+            + "https://a.b/@x ".repeat(10_000)
+            + "<https://a.b/".repeat(10_000)
+            + "(http://a.".repeat(10_000)
+            + "9".repeat(50_000);
     var entities = "&#0000000000".repeat(20_000) + "\\".repeat(50_000) + "~".repeat(50_000);
     var fences = "```\n".repeat(30_000) + "> - ```\n".repeat(10_000);
     assertTimeoutPreemptively(
@@ -313,6 +450,8 @@ class MarkdownProseTest {
         () -> {
           assertNotifiesNobody(MarkdownSafe.prose(backticks));
           MarkdownSafe.prose(entities);
+          MarkdownSafe.prose(addresses);
+          MarkdownSafe.inline(addresses);
           MarkdownSafe.prose(fences);
         });
   }

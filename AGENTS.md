@@ -731,7 +731,9 @@ live `fence(...)` (#604).
   when its code spans should render), markdown of its own (a description, a status note, a reply)
   through `prose`, a value inside a code span through `inlineCode`. Besides the block break-outs,
   these guard every possible mention (`@&#8203;name`; an `@` after a letter or digit is an email
-  and stays), and `prose` escapes tag and comment openers, turns a `suggestion` fence into a plain
+  and stays, and so does one after a `/` in an `http(s)://host.tld/` address that
+  `MarkdownProse.url` or `angleAutolink` accepts, which is narrower than what GitHub links on
+  purpose: `www.` forms, `_ * ~ & $` and `)` end or disqualify it), and `prose` escapes tag and comment openers, turns a `suggestion` fence into a plain
   block and closes an unclosed fence. `MarkdownProse` rewrites rather than screens: a guess at what
   is code that differs from GitHub's reading posts a mention untouched, so fenced blocks are
   emitted at the top level under a fence longer than their content, code spans count only when
