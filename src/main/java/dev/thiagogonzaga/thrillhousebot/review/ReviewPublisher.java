@@ -36,7 +36,6 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -1817,7 +1816,7 @@ public class ReviewPublisher {
    */
   private static String fileLevelLeadIn(Finding finding) {
     return "_Filed on the file: ThrillhouseBot could not open a thread on "
-        + MarkdownSafe.inlineCode(finding.file() + ":" + finding.line())
+        + MarkdownSafe.codeSpan(finding.file() + ":" + finding.line())
         + ", so this finding has no line anchor and no applicable suggestion. Replies on this"
         + " thread still count._";
   }
@@ -1856,7 +1855,10 @@ public class ReviewPublisher {
   private record InlineAnchor(
       DiffLineResolver.Side side, int line, Optional<DiffLineResolver.LineRange> range) {}
 
-  /** {@code finding} with its basis (#1435), when it has one, under the description. */
+  /**
+   * {@code finding} with its basis (#1435), when it has one, under the description and above the
+   * hidden line a scan finding's description ends with.
+   */
   private static Finding withBasis(Finding finding, String basis) {
     if (basis.isBlank()) {
       return finding;
@@ -1867,7 +1869,7 @@ public class ReviewPublisher {
         finding.file(),
         finding.line(),
         finding.title(),
-        Objects.toString(finding.description(), "") + "\n\n" + basis,
+        SecurityScan.withBlockAppended(finding.description(), basis),
         finding.suggestionOld(),
         finding.suggestionNew());
   }

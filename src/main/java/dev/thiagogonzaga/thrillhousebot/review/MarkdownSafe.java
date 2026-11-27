@@ -91,8 +91,10 @@ public final class MarkdownSafe {
    * fenced block left open is closed, so it cannot take in what the bot appends. A {@code null}
    * value is the empty string.
    *
-   * <p>Code is left byte for byte, in spans that close on their own line and in fenced blocks. See
-   * {@link MarkdownProse} for why the text is rewritten rather than only screened.
+   * <p>Code is left byte for byte, in spans that close on their own line and in fenced blocks. A
+   * span holding a {@code |} is the exception: GitHub reads it as text in a table row, so it is
+   * posted as text. A carriage return ends a line as a line feed does. See {@link MarkdownProse}
+   * for why the text is rewritten rather than only screened.
    */
   public static String prose(String value) {
     return value == null ? "" : MarkdownProse.block(value);
@@ -135,6 +137,14 @@ public final class MarkdownSafe {
   }
 
   /**
+   * A name the bot did not write (a changed file's path, say) as a code span of its own: {@link
+   * #inlineCode} between backticks, so nothing in it is read as a mention, a tag or a link.
+   */
+  public static String codeSpan(String value) {
+    return "`" + inlineCode(value) + "`";
+  }
+
+  /**
    * A model string made safe for a single Markdown table cell: a literal {@code |} would break the
    * column and a line break would break the whole row, so the pipe (and the backslash that would
    * otherwise consume the escape) are escaped and any run of line breaks is folded into one space.
@@ -156,7 +166,7 @@ public final class MarkdownSafe {
     if (value == null) {
       return "-";
     }
-    return MarkdownProse.line(value.replaceAll("[\r\n]+", " "))
+    return MarkdownProse.cell(value.replaceAll("[\r\n]+", " "))
         .replace("\\", "\\\\")
         .replace("|", "\\|");
   }
