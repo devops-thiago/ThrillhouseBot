@@ -104,15 +104,25 @@ public final class MarkdownSafe {
   }
 
   /**
-   * {@code text} as it read before {@link #prose} or {@link #inline} guarded and escaped it, for
-   * text the bot reads back from its own comments and compares with what a model wrote.
+   * One line of {@code text} as it read before {@link #proseLine} guarded and escaped it, for text
+   * the bot reads back from its own comments and compares with what a model wrote: the mention
+   * guard, the escaped {@code <} and backtick, and the escaped run of three or more tildes are
+   * undone. It is not the reverse of {@link #prose} for a block, whose fences are rewritten, nor of
+   * {@link #inline}, whose escaped {@code |} stays.
    */
   public static String unguarded(String text) {
-    return text.replace("@" + MarkdownProse.MENTION_GUARD, "@")
-        .replace("@\u200B", "@")
-        .replace("&lt;", "<")
-        .replace("&#96;", "`");
+    var unescaped =
+        text.replace("@" + MarkdownProse.MENTION_GUARD, "@")
+            .replace("@\u200B", "@")
+            .replace("&lt;", "<")
+            .replace("&#96;", "`");
+    return ESCAPED_TILDE_RUN
+        .matcher(unescaped)
+        .replaceAll(run -> "~".repeat(run.end() - run.start() >> 1));
   }
+
+  /** Three or more tildes as {@link MarkdownProse} escapes them: a backslash before each. */
+  private static final Pattern ESCAPED_TILDE_RUN = Pattern.compile("(?:\\\\~){3,}+");
 
   /**
    * A model string made safe to place inside a {@code `...`} inline code span: flattened to one

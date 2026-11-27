@@ -523,6 +523,17 @@ class MarkdownProseTest {
   }
 
   @Test
+  void readingBackUndoesAnEscapedRunOfTildes() {
+    var gap = "The ~~~ fence, ~~struck~~ text and a longer ~~~~~ run stay";
+    var posted = MarkdownSafe.proseLine(gap);
+
+    assertTrue(posted.contains("\\~\\~\\~ fence"), posted);
+    assertEquals(gap, MarkdownSafe.unguarded(posted));
+    // Fewer than three were never escaped, so a model's own escaped tilde is left as written.
+    assertEquals("a \\~ b \\~\\~ c", MarkdownSafe.unguarded("a \\~ b \\~\\~ c"));
+  }
+
+  @Test
   void aLongHostileLineIsRewrittenInLinearTime() {
     var backticks = "` ".repeat(50_000) + "`` ".repeat(10_000) + "@x ".repeat(20_000);
     var addresses =
