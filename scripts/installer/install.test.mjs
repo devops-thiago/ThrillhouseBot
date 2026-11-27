@@ -31,6 +31,7 @@ function elementsOf(html) {
       value: "",
       textContent: "",
       disabled: /\sdisabled[\s>/]/.test(tag),
+      hidden: /\shidden[\s>/]/.test(tag),
       action: /\saction="([^"]*)"/.exec(tag)?.[1],
       addEventListener: (type, listener) => listeners.push({ type, listener }),
       type(text) {
@@ -71,6 +72,7 @@ async function load(
     disabled: () => el("submit-btn").disabled,
     error: () => el("github-error").textContent,
     preview: () => el("registration-target").textContent,
+    envLine: () => (el("github-env").hidden ? "" : el("github-env-line").textContent),
     manifest: () => el("manifest").value,
   };
 }
@@ -207,6 +209,27 @@ for (const name of Object.keys(PAGES)) {
       assert.equal(page.action(), DEFAULT_ACTION);
     });
 
+    it("shows the GITHUB_URL line to set for another address", async () => {
+      const page = await ready(name);
+      assert.equal(page.envLine(), "");
+      page.address("  HTTPS://GitHub.Example.com:8443/ ");
+      assert.equal(page.envLine(), "GITHUB_URL=https://github.example.com:8443");
+      page.address("https://octo.ghe.com");
+      assert.equal(page.envLine(), "GITHUB_URL=https://octo.ghe.com");
+    });
+
+    it("shows no GITHUB_URL line for github.com or an unusable value", async () => {
+      const page = await ready(name);
+      for (const address of ["", "https://github.com", "https://GitHub.com:443/", "http://x.example"]) {
+        page.address("https://github.example.com");
+        page.address(address);
+        assert.equal(page.envLine(), "", address);
+      }
+      page.address("https://github.example.com");
+      page.organization("-acme");
+      assert.equal(page.envLine(), "");
+    });
+
     it("leaves the manifest as it was", async () => {
       const page = await ready(name);
       const before = page.manifest();
@@ -285,6 +308,11 @@ describe("bundled installer and the configured GitHub address", () => {
     assert.equal(page.el("github-address").placeholder, configured);
     page.organization("acme");
     assert.equal(page.action(), `${configured}/organizations/acme/settings/apps/new`);
+  });
+
+  it("asks for no GITHUB_URL line while the bot's own address is in use", async () => {
+    const page = await load("bundled", { configured });
+    assert.equal(page.envLine(), "");
   });
 
   it("gives way to a typed address and comes back when the field is cleared", async () => {

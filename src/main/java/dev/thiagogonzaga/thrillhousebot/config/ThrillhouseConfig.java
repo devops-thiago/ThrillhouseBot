@@ -111,25 +111,32 @@ public interface ThrillhouseConfig {
     String webhookSecret();
 
     /**
-     * Base URL of the GitHub web UI: {@code https://github.com}, or a GitHub Enterprise Server host
-     * such as {@code https://github.example.com}. Pull request links, issue URLs read from a pull
-     * request description, the OAuth endpoints and the App install page follow it.
+     * Base URL of the GitHub web UI: {@code https://github.com}, {@code
+     * https://<subdomain>.ghe.com}, or a GitHub Enterprise Server host such as {@code
+     * https://github.example.com}. It must be {@code https}. The REST, GraphQL and OAuth addresses,
+     * pull request links, issue URLs read from a pull request description and the App install page
+     * follow it.
      */
     @WithName("web-url")
     @WithDefault("https://github.com")
     String webUrl();
 
     /**
-     * Base URL of the GitHub REST API: {@code https://api.github.com}, or {@code
-     * https://<host>/api/v3} on GitHub Enterprise Server.
+     * Base URL of the GitHub REST API. Unset or blank, it is derived from {@code GITHUB_URL}:
+     * {@code https://api.github.com} for {@code github.com}, {@code
+     * https://api.<subdomain>.ghe.com} for a {@code ghe.com} subdomain, and {@code
+     * <GITHUB_URL>/api/v3} for any other host (GitHub Enterprise Server). It must be {@code https}.
      */
     @WithName("api-url")
     @WithDefault("https://api.github.com")
     String apiUrl();
 
     /**
-     * The GitHub GraphQL endpoint: {@code https://api.github.com/graphql}, or {@code
-     * https://<host>/api/graphql} on GitHub Enterprise Server.
+     * The GitHub GraphQL endpoint. Unset or blank, it is derived from {@code GITHUB_URL}: {@code
+     * https://api.github.com/graphql} for {@code github.com}, {@code
+     * https://api.<subdomain>.ghe.com/graphql} for a {@code ghe.com} subdomain, and {@code
+     * <GITHUB_URL>/api/graphql} for any other host (GitHub Enterprise Server). It must be {@code
+     * https}.
      */
     @WithName("graphql-url")
     @WithDefault("https://api.github.com/graphql")
@@ -1156,8 +1163,8 @@ public interface ThrillhouseConfig {
 
     /**
      * Base URL of GitHub's OAuth endpoints. Unset, it is {@code GITHUB_URL} followed by {@code
-     * /login/oauth}: {@code https://github.com/login/oauth}, or the GitHub Enterprise Server
-     * host's.
+     * /login/oauth}: {@code https://github.com/login/oauth}, or the same path on the other host. It
+     * must be {@code https}.
      */
     @WithName("github.oauth-url")
     Optional<String> oauthUrl();

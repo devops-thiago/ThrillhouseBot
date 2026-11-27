@@ -73,6 +73,7 @@ class StartupConfigValidatorTest {
 
   /** Builder for the config mock so each test tweaks only the value it cares about. */
   private static final class ConfigBuilder {
+    private Map<String, String> githubAddresses = Map.of();
     private String appId = "12345";
     private String privateKey = VALID_PRIVATE_KEY;
     private String webhookSecret = "webhook-secret";
@@ -218,6 +219,11 @@ class StartupConfigValidatorTest {
       return this;
     }
 
+    ConfigBuilder githubAddresses(Map<String, String> v) {
+      this.githubAddresses = v;
+      return this;
+    }
+
     ConfigBuilder maxConcurrentCalls(int v) {
       this.maxConcurrentCalls = v;
       return this;
@@ -348,8 +354,51 @@ class StartupConfigValidatorTest {
       lenient().when(config.notifications()).thenReturn(notifications);
       lenient().when(notifications.webhook()).thenReturn(notificationWebhook);
       return new StartupConfigValidator(
-          config, aiApiKey, new ActiveModelSettings(config, modelName), conciseMaxOutputTokens);
+          config,
+          aiApiKey,
+          new ActiveModelSettings(config, modelName),
+          conciseMaxOutputTokens,
+          name -> Optional.ofNullable(githubAddresses.get(name)),
+          false);
     }
+  }
+
+  @Test
+  void refusesAGitHubAddressThatIsNotHttps() {
+    var addresses =
+        Map.of(
+            "thrillhousebot.github.web-url",
+            "http://ghes.example.com",
+            "thrillhousebot.github.api-url",
+            "https://ghes.example.com/api/v3");
+    var validator = new ConfigBuilder().githubAddresses(addresses).build();
+
+    var message = assertFailsValidation(validator).getMessage();
+
+    assertTrue(message.contains("GITHUB_URL must be an https address"), message);
+    assertFalse(message.contains("GITHUB_API_URL"), message);
+  }
+
+  @Test
+  void acceptsHttpsGitHubAddresses() {
+    var addresses =
+        Map.of(
+            "thrillhousebot.github.web-url",
+            "https://ghes.example.com",
+            "thrillhousebot.github.api-url",
+            "https://ghes.example.com/api/v3");
+
+    assertDoesNotThrow(() -> new ConfigBuilder().githubAddresses(addresses).build().validate());
+  }
+
+  @Test
+  void theAddressesAreLoggedWithoutAPassword() {
+    assertEquals(
+        "https://ghes.example.com/api/v3",
+        StartupConfigValidator.withoutUserInfo("https://bot:s3cr@t@ghes.example.com/api/v3"));
+    assertEquals(
+        "https://ghes.example.com/a@b",
+        StartupConfigValidator.withoutUserInfo("https://ghes.example.com/a@b"));
   }
 
   /** The shipped outgoing-webhook configuration: no URL, so notifications are off. */

@@ -246,8 +246,10 @@ Create the GitHub App before starting the bot; its credentials go in `.env`.
    The installer also has two optional fields. **Organization** registers the
    App under that organization instead of your personal account. **GitHub
    address** (default `https://github.com`) takes a plain `https://host` and
-   changes where the manifest is sent. The bot's support for other addresses is
-   still in progress and untested on a real instance
+   changes where the manifest is sent. For another address the page also shows
+   the `GITHUB_URL` line to set in the bot's `.env`, from which the bot derives
+   its API addresses. Other addresses have not been tested on a real GitHub
+   Enterprise instance
    ([#1487](https://github.com/devops-thiago/ThrillhouseBot/issues/1487)).
 
    <details>
@@ -1774,8 +1776,8 @@ token figures come from the database, so they still work.
 To keep code inside your network, run the model yourself and allow only the
 connections the bot needs. The bot is a GitHub App, so it can never be fully
 offline: it must reach your GitHub. The table below names the `github.com`
-addresses. For GitHub Enterprise, including the settings for Enterprise Server,
-see [GitHub Enterprise](https://github.com/devops-thiago/ThrillhouseBot/blob/main/docs/GITHUB_ENTERPRISE.md).
+addresses. With `GITHUB_URL` set, the bot's calls go to that GitHub instead.
+See [GitHub Enterprise](https://github.com/devops-thiago/ThrillhouseBot/blob/main/docs/GITHUB_ENTERPRISE.md).
 
 ### Outbound connections
 

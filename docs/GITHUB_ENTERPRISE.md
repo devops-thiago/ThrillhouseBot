@@ -10,29 +10,36 @@ GitHub, on top of
 | Your GitHub address | Product | Supported |
 |---|---|---|
 | `github.com/your-org` | Enterprise Cloud | Yes |
-| `github.yourcompany.com` | Enterprise Server | Yes, with the settings below. Not tested on a real instance |
-| `yourcompany.ghe.com` | Enterprise Cloud with data residency | The same settings. Not tested on a real instance |
+| `github.yourcompany.com` | Enterprise Server | Yes, with the setting below. Not tested on a real instance |
+| `yourcompany.ghe.com` | Enterprise Cloud with data residency | The same setting. Not tested on a real instance |
 
 If the `.env.example` of the release you run does not list `GITHUB_URL`, that
 release works with `github.com` only.
 
 ## Point the bot at your GitHub
 
-Skip this for Enterprise Cloud on `github.com`. Otherwise set all three:
+Skip this for Enterprise Cloud on `github.com`. Otherwise set `GITHUB_URL` to
+the web address of your GitHub: `https://<host>` on Enterprise Server, or
+`https://<subdomain>.ghe.com` with data residency. The other addresses are
+derived from it:
 
-| Setting | Enterprise Server | Data residency |
-|---|---|---|
-| `GITHUB_URL` | `https://<host>` | `https://<subdomain>.ghe.com` |
-| `GITHUB_API_URL` | `https://<host>/api/v3` | `https://api.<subdomain>.ghe.com` |
-| `GITHUB_GRAPHQL_URL` | `https://<host>/api/graphql` | `https://api.<subdomain>.ghe.com/graphql` |
+| Address | Enterprise Server | Data residency | Override |
+|---|---|---|---|
+| REST API | `https://<host>/api/v3` | `https://api.<subdomain>.ghe.com` | `GITHUB_API_URL` |
+| GraphQL API | `https://<host>/api/graphql` | `https://api.<subdomain>.ghe.com/graphql` | `GITHUB_GRAPHQL_URL` |
+| Dashboard sign-in | `https://<host>/login/oauth` | `https://<subdomain>.ghe.com/login/oauth` | `GITHUB_OAUTH_URL` |
 
-Each one defaults to `github.com` on its own, so a missed one keeps calling
-`github.com`. Use `https` addresses, because the bot sends its credentials to
-them. Dashboard sign-in follows `GITHUB_URL` unless `GITHUB_OAUTH_URL` is set.
+Set an override only when your deployment serves that address somewhere else,
+such as behind a proxy: a value you set wins. Trailing slashes are ignored and
+a blank value counts as unset.
 
-Support for these addresses is still being completed, tracked in
-[#1487](https://github.com/devops-thiago/ThrillhouseBot/issues/1487): no way to
-add an internal certificate authority to the published images is documented yet.
+Every address must be `https`, because the bot sends its credentials to it, and
+the bot does not start otherwise. At start-up it logs the web, REST and GraphQL
+addresses it uses.
+
+None of this has been tested on a real GitHub Enterprise instance. No way to add
+an internal certificate authority to the published images is documented yet
+([#1493](https://github.com/devops-thiago/ThrillhouseBot/issues/1493)).
 
 ## Register the app under the organization
 
@@ -41,6 +48,7 @@ otherwise. For an app owned by the organization, fill in the **Organization**
 field on the install page. On Enterprise Server or data residency, check the
 **GitHub address** field too: the page your bot serves starts from `GITHUB_URL`,
 the pages in the repository and on this project's site start from `github.com`.
+For an address you type, the page shows the `GITHUB_URL` line to set.
 
 If the page you use has no such fields, register the app by hand at
 `<GITHUB_URL>/organizations/<ORG>/settings/apps/new`

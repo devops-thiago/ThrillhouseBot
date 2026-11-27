@@ -855,6 +855,19 @@ live `fence(...)` (#604).
   persist or post `SecretScanner.Hit.literal()`, and keep test credentials generated at run time
   (`FakeCredentials`), never as literals.
 
+## GitHub addresses
+
+- `GITHUB_URL` is the one setting that moves the bot to another GitHub.
+  `config/GitHubAddressInterceptor` derives an unset or blank `GITHUB_API_URL` and
+  `GITHUB_GRAPHQL_URL` from it. Its priority keeps it inside SmallRye's expression interceptor,
+  which resolves `${...}` only through the interceptors below it.
+- A new client takes its address from `thrillhousebot.github.*`: a REST client uses the
+  `github-api` or `github-graphql` config key, and no source spells out a `github.com` URL
+  (`GitHubAddressSourcesTest`). `GitHubAddressWiringTest` runs each existing client against a stub.
+- Credentials go only to `https` addresses. A new property that holds a GitHub address belongs in
+  `config/GitHubAddressCheck`, which `StartupConfigValidator` runs ahead of the other start-up
+  observers. `http` passes on a loopback host in Quarkus's test launch mode and nowhere else.
+
 ## Native image
 
 - The production image is GraalVM native. A class Jackson binds by reflection (a record the bot

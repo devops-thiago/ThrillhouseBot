@@ -17,16 +17,21 @@ package dev.thiagogonzaga.thrillhousebot.config;
 
 import dev.thiagogonzaga.thrillhousebot.notification.NotificationSettings;
 import dev.thiagogonzaga.thrillhousebot.review.BlockingStrictness;
+import io.quarkus.runtime.LaunchMode;
 import io.quarkus.runtime.StartupEvent;
+import jakarta.annotation.Priority;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
+import jakarta.interceptor.Interceptor;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
+import org.eclipse.microprofile.config.ConfigProvider;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,6 +45,10 @@ import org.slf4j.LoggerFactory;
  * GITHUB_WEBHOOK_SECRET}) and the AI API key ({@code AI_API_KEY}) are hard-required. Dashboard
  * OAuth ({@code GITHUB_CLIENT_ID} / {@code GITHUB_CLIENT_SECRET}) is optional: when absent the
  * dashboard login is simply disabled, which is logged rather than treated as an error.
+ *
+ * <p>Every configured GitHub address must be {@code https} ({@link GitHubAddressCheck}). Only in
+ * Quarkus's test launch mode is {@code http} accepted, and only on a loopback host, where the test
+ * stubs listen.
  */
 @ApplicationScoped
 public class StartupConfigValidator {
@@ -72,6 +81,8 @@ public class StartupConfigValidator {
   private final String aiApiKey;
   private final ActiveModelSettings activeModel;
   private final Optional<Integer> conciseMaxOutputTokens;
+  private final Function<String, Optional<String>> property;
+  private final boolean loopbackHttpAllowed;
 
   @Inject
   public StartupConfigValidator(
@@ -80,7 +91,13 @@ public class StartupConfigValidator {
       ActiveModelSettings activeModel,
       @ConfigProperty(name = "quarkus.langchain4j.openai.concise.chat-model.max-tokens")
           Optional<Integer> conciseMaxOutputTokens) {
-    this(config, aiApiKey.orElse(""), activeModel, conciseMaxOutputTokens);
+    this(
+        config,
+        aiApiKey.orElse(""),
+        activeModel,
+        conciseMaxOutputTokens,
+        name -> ConfigProvider.getConfig().getOptionalValue(name, String.class),
+        LaunchMode.TEST.equals(LaunchMode.current()));
   }
 
   /** Visible for tests: exercises validation outcomes without booting the CDI container. */
@@ -88,14 +105,22 @@ public class StartupConfigValidator {
       ThrillhouseConfig config,
       String aiApiKey,
       ActiveModelSettings activeModel,
-      Optional<Integer> conciseMaxOutputTokens) {
+      Optional<Integer> conciseMaxOutputTokens,
+      Function<String, Optional<String>> property,
+      boolean loopbackHttpAllowed) {
     this.config = config;
     this.aiApiKey = aiApiKey;
     this.activeModel = activeModel;
     this.conciseMaxOutputTokens = conciseMaxOutputTokens;
+    this.property = property;
+    this.loopbackHttpAllowed = loopbackHttpAllowed;
   }
 
-  void onStart(@Observes StartupEvent event) {
+  /**
+   * Runs ahead of the observers left at the default priority, so nothing they send at start-up (the
+   * session scope backfill calls GitHub as the App) leaves before the addresses were checked.
+   */
+  void onStart(@Observes @Priority(Interceptor.Priority.APPLICATION) StartupEvent event) {
     validate();
   }
 
@@ -115,6 +140,7 @@ public class StartupConfigValidator {
         github.webhookSecret(),
         "GITHUB_WEBHOOK_SECRET",
         "thrillhousebot.github.webhook-secret");
+    problems.addAll(GitHubAddressCheck.problems(property, loopbackHttpAllowed));
     requirePresent(problems, aiApiKey, "AI_API_KEY", "quarkus.langchain4j.openai.api-key");
     validateReviewBudget(problems, config.review());
     validateAutoReviewLimits(problems, config.review());
@@ -139,6 +165,7 @@ public class StartupConfigValidator {
     }
 
     logDashboardStatus();
+    logGitHubAddresses();
     spendCeilingWarning(config.review()).ifPresent(log::warn);
     logReasoningStatus();
     logCiGatingStatus();
@@ -1142,6 +1169,24 @@ public class StartupConfigValidator {
                 + " it), set the values above, and restart. Dashboard OAuth (GITHUB_CLIENT_ID /"
                 + " GITHUB_CLIENT_SECRET) is optional.");
     return sb.toString();
+  }
+
+  /** Says where GitHub is reached, since two of the addresses can be derived from a third. */
+  private void logGitHubAddresses() {
+    property
+        .apply("thrillhousebot.github.web-url")
+        .ifPresent(
+            web ->
+                log.info(
+                    "GitHub addresses: web {}, REST {}, GraphQL {}",
+                    withoutUserInfo(web),
+                    withoutUserInfo(property.apply("thrillhousebot.github.api-url").orElse("")),
+                    withoutUserInfo(
+                        property.apply("thrillhousebot.github.graphql-url").orElse(""))));
+  }
+
+  static String withoutUserInfo(String url) {
+    return url.replaceFirst("://[^/?#]*@", "://");
   }
 
   private void logDashboardStatus() {
