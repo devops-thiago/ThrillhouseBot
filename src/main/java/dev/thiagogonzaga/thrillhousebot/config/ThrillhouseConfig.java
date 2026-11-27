@@ -370,9 +370,12 @@ public interface ThrillhouseConfig {
      *
      * <p>Complements {@link #maxAiCalls()}, which bounds how many calls are planned but not what
      * they cost: one call against a large-context model can span two orders of magnitude of spend.
-     * The overrun is bounded by one in-flight call per parallel batch.
+     * The overrun is bounded by one in-flight call per parallel batch. The default leaves room for
+     * a full review at the default budget (six calls of 48,000 input tokens, their answers, the
+     * verifier and a few retries); raise it together with {@code REVIEW_MAX_INPUT_TOKENS} or {@code
+     * REVIEW_MAX_AI_CALLS}.
      */
-    @WithDefault("0")
+    @WithDefault("1000000")
     @WithName("max-tokens-per-review")
     long maxTokensPerReview();
 
@@ -610,16 +613,40 @@ public interface ThrillhouseConfig {
     Duration ackReactionTimeout();
 
     /**
-     * Minimum time between automatic reviews of one PR. Pushes inside the window are skipped, even
-     * on a new head (in memory, per replica). {@code /review} always runs. {@code 0} reviews every
-     * push.
+     * Minimum time between automatic reviews of one PR. Pushes, reopens and repeated
+     * ready-for-review events inside the window are skipped, even on a new head (in memory, per
+     * replica). {@code /review} always runs. {@code 0} reviews every event.
      *
      * <p>A manual {@code /review} never shifts the window. A negative value also disables
-     * throttling.
+     * throttling. The first ready-for-review of a head runs inside the window; a later one of the
+     * same head does not.
      */
-    @WithDefault("0")
+    @WithDefault("1m")
     @WithName("auto-review-min-interval")
     Duration autoReviewMinInterval();
+
+    /**
+     * Most automatic reviews of one repository running at once. A review past it waits for one to
+     * finish. {@code /review} and {@code /summary} never wait and are not counted. {@code 0} means
+     * no limit.
+     *
+     * <p>A negative value is rejected at boot. In memory, per replica.
+     */
+    @WithDefault("4")
+    @WithName("auto-review-max-concurrent-per-repo")
+    int autoReviewMaxConcurrentPerRepo();
+
+    /**
+     * Most automatic reviews of one repository waiting for a slot under {@code
+     * AUTO_REVIEW_MAX_CONCURRENT_PER_REPO}, one per pull request. A review past it is skipped and
+     * counted as {@code REPOSITORY_QUEUE_FULL}; a later push or {@code /review} reviews the pull
+     * request. {@code 0} means no limit.
+     *
+     * <p>A negative value is rejected at boot.
+     */
+    @WithDefault("50")
+    @WithName("auto-review-max-queued-per-repo")
+    int autoReviewMaxQueuedPerRepo();
 
     /**
      * How CI affects approval: {@code strict} holds approval while required CI is pending, failing
@@ -1232,9 +1259,10 @@ public interface ThrillhouseConfig {
      * {@code 0} means no limit.
      *
      * <p>#838: a negative value is rejected at boot. A call past the ceiling waits instead of
-     * reaching a provider that refuses requests past its own concurrency limit.
+     * reaching a provider that refuses requests past its own concurrency limit. Set it to the
+     * number of concurrent requests the provider allows when that is lower than the default.
      */
-    @WithDefault("0")
+    @WithDefault("16")
     @WithName("max-concurrent-calls")
     int maxConcurrentCalls();
 

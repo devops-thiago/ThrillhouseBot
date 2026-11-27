@@ -61,7 +61,8 @@ Attackers considered:
   description, comments and any text the bot reads from the PR. They may try
   to inject instructions into the model prompt, make the bot leak data, approve
   a bad change, or run up the model bill.
-- A commenter without write access who tries to trigger paid reviews.
+- A commenter without write access who tries to trigger paid reviews or to
+  make the bot post.
 - A model endpoint that returns malformed, oversized or hostile output.
 - A web visitor trying to reach the dashboard or ride on a signed-in session.
 
@@ -113,7 +114,26 @@ at most 30 minutes while GitHub is unreachable, and ends the session when GitHub
 rejects its token.
 Organization membership is granted only on GitHub's explicit answer. Optional context and outgoing
 notifications are off until enabled, and a manual `/review` needs write access
-to the repository (`webhook/ManualReviewAuthorizer`).
+to the repository (`webhook/ManualReviewAuthorizer`). That check runs before the
+bot writes anything for a command: a commenter it refuses gets no 👀 reaction,
+no paused or closed notice and no reply. `/help` is the one command open to
+anyone, answered for a commenter without write access once per pull request per
+hour (`webhook/HelpReplyLimiter`).
+
+A pull request author needs no write access to start automatic reviews, so
+their cost is bounded with no setting. One review spends at most
+`REVIEW_MAX_TOKENS_PER_REVIEW` tokens (default 1,000,000). A repository runs at
+most `AUTO_REVIEW_MAX_CONCURRENT_PER_REPO` automatic reviews at once (default 4)
+with at most `AUTO_REVIEW_MAX_QUEUED_PER_REPO` waiting (default 50), and the
+process sends at most `AI_MAX_CONCURRENT_CALLS` model calls at once (default
+16). A pull request is not reviewed again within `AUTO_REVIEW_MIN_INTERVAL` of
+its last automatic review (default one minute), which covers a push, a reopen
+of an unchanged head and a repeated ready-for-review of the same head. These
+bound how fast spend can accrue, not its total: an author who keeps pushing new
+commits to several pull requests keeps the repository's four slots busy. Use
+`WEBHOOK_EXCLUDED_AUTHORS`, the label gates or `GITHUB_ALLOWED_ACCOUNTS`, and a
+spending limit at the model provider, where that is not acceptable. Setting a
+limit to `0` turns it off.
 
 ### Complete mediation
 

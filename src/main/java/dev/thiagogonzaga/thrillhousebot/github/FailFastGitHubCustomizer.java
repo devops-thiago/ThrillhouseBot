@@ -25,6 +25,13 @@ import org.kohsuke.github.GitHubRateLimitHandler;
  * Makes the GitHub App extension's clients fail on a rate or secondary limit instead of waiting.
  * hub4j's default handlers sleep until the limit resets, up to an hour, which would hold a review
  * or a dashboard request open; every caller already treats a failed read as unavailable.
+ *
+ * <p>It also puts {@link GitHubAppConnector} on the application clients {@link GitHubAppApi} asks
+ * the extension for. Every other client, including the ones the extension builds for itself to mint
+ * the tokens behind its installation clients, keeps the extension's connector.
+ *
+ * <p>This stays the application's only {@link GitHubCustomizer}: the extension uses one only when
+ * exactly one bean exists, so a second would switch both off without an error.
  */
 @ApplicationScoped
 public class FailFastGitHubCustomizer implements GitHubCustomizer {
@@ -37,6 +44,9 @@ public class FailFastGitHubCustomizer implements GitHubCustomizer {
   @Override
   public void customizeApplicationClient(GitHubBuilder builder) {
     failFast(builder);
+    if (GitHubAppApi.CONNECTOR.isBound()) {
+      builder.withConnector(GitHubAppApi.CONNECTOR.get());
+    }
   }
 
   private static void failFast(GitHubBuilder builder) {

@@ -187,6 +187,7 @@ public class CiHoldRevisit {
           evaluation.offendingChecks().size(),
           evaluation.unreadable());
       var stillHeld = resultFor(ReviewState.COMMENT, evaluation);
+      refreshSummary(auth, task, stillHeld);
       updateCheckRun(
           auth,
           task,
@@ -210,10 +211,11 @@ public class CiHoldRevisit {
     Log.infof(
         "CI on %s for %s/%s #%d is green — posted the held approval",
         task.headSha(), task.owner(), task.repo(), task.prNumber());
+    var approved = resultFor(ReviewState.APPROVE, evaluation);
+    refreshSummary(auth, task, approved);
     // The approval is on the pull request; concluding the check run is best-effort after it, as
     // it is for a review's own post-result steps.
     try {
-      var approved = resultFor(ReviewState.APPROVE, evaluation);
       updateCheckRun(auth, task, verdict, approved, VerdictBuilder.checkSummaryForResult(approved));
     } catch (RuntimeException e) {
       Log.warnf(
@@ -223,6 +225,20 @@ public class CiHoldRevisit {
           task.repo(),
           task.prNumber(),
           verdict.checkRunId());
+    }
+  }
+
+  /** Best-effort: a summary that cannot be edited costs neither the approval nor the hold. */
+  private void refreshSummary(String auth, Recheck task, ReviewResult ci) {
+    try {
+      reviewPublisher.refreshCiState(auth, task.owner(), task.repo(), task.prNumber(), ci);
+    } catch (RuntimeException e) {
+      Log.warnf(
+          e,
+          "Could not refresh the CI state in the summary of %s/%s #%d",
+          task.owner(),
+          task.repo(),
+          task.prNumber());
     }
   }
 

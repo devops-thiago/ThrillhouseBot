@@ -15,29 +15,16 @@
  */
 package dev.thiagogonzaga.thrillhousebot.github;
 
-import com.nimbusds.jose.JOSEException;
-import com.nimbusds.jose.JOSEObjectType;
-import com.nimbusds.jose.JWSAlgorithm;
-import com.nimbusds.jose.JWSHeader;
-import com.nimbusds.jose.crypto.RSASSASigner;
-import com.nimbusds.jwt.JWTClaimsSet;
-import com.nimbusds.jwt.SignedJWT;
-import dev.thiagogonzaga.thrillhousebot.config.RsaPrivateKeyParser;
-import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
-import java.security.interfaces.RSAPrivateKey;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
-import org.eclipse.microprofile.rest.client.inject.RestClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -69,8 +56,7 @@ public class GitHubAuthClient {
    */
   static final Duration TOKEN_TTL = Duration.ofMinutes(30);
 
-  private final ThrillhouseConfig config;
-  private final GitHubTokenApi tokenApi;
+  private final GitHubAppApi appApi;
 
   /**
    * What a token may reach: one repository of an installation, by its name as the caller has it
@@ -156,13 +142,11 @@ public class GitHubAuthClient {
    */
   private final Map<String, TokenOwner> tokenOwners = new ConcurrentHashMap<>();
 
-  private final AtomicReference<RSAPrivateKey> cachedPrivateKey = new AtomicReference<>();
-
   private final Supplier<Instant> clock;
 
   @Inject
-  public GitHubAuthClient(ThrillhouseConfig config, @RestClient GitHubTokenApi tokenApi) {
-    this(config, tokenApi, Instant::now);
+  public GitHubAuthClient(GitHubAppApi appApi) {
+    this(appApi, Instant::now);
   }
 
   /**
@@ -170,46 +154,12 @@ public class GitHubAuthClient {
    * owner stays resolvable — so the tests need a clock they can move rather than one they must
    * outwait. Nothing else in this class reads the time directly.
    */
-  GitHubAuthClient(ThrillhouseConfig config, GitHubTokenApi tokenApi, Supplier<Instant> clock) {
-    this.config = config;
-    this.tokenApi = tokenApi;
+  GitHubAuthClient(GitHubAppApi appApi, Supplier<Instant> clock) {
+    this.appApi = appApi;
     this.clock = clock;
     // Minting is the one thing only this bean can do, and the GitHub writes that need a dead token
     // replaced are interface default methods with nowhere to inject it. See GitHubTokenRefresh.
     GitHubTokenRefresh.SHARED.bind(this::mintedReplacementFor);
-  }
-
-  /**
-   * Generates a JWT signed with the GitHub App's private key (RS256). JWT expires in 10 minutes
-   * (GitHub maximum).
-   */
-  public String generateAppJwt() {
-    return signedAppJwt();
-  }
-
-  private String signedAppJwt() {
-    try {
-      Instant now = clock.get();
-      var privateKey = privateKey();
-
-      var claims =
-          new JWTClaimsSet.Builder()
-              // GitHub rejects an "iss" with padding, but boot validation accepts a padded app id.
-              .issuer(config.github().appId().strip())
-              .claim("iat", now.getEpochSecond())
-              .claim("exp", now.plus(10, ChronoUnit.MINUTES).getEpochSecond())
-              .build();
-
-      var header = new JWSHeader.Builder(JWSAlgorithm.RS256).type(JOSEObjectType.JWT).build();
-
-      var jwt = new SignedJWT(header, claims);
-      jwt.sign(new RSASSASigner(privateKey));
-
-      return jwt.serialize();
-    } catch (JOSEException | IllegalArgumentException e) {
-      log.error("Failed to generate GitHub App JWT", e);
-      throw new GitHubAuthException("JWT generation failed", e);
-    }
   }
 
   /**
@@ -228,29 +178,21 @@ public class GitHubAuthClient {
     }
 
     var installationId = scope.installationId();
-    var jwt = signedAppJwt();
-    var authHeader = BEARER + jwt;
-
-    GitHubTokenApi.InstallationTokenResponse response;
+    String token;
     if (scope.repository() == null) {
       log.info("Generating new installation token for installation {}", installationId);
-      response = tokenApi.createInstallationToken(authHeader, ACCEPT, installationId);
+      token = appApi.createInstallationToken(installationId);
     } else {
       log.info(
           "Generating new installation token for installation {}, limited to one repository",
           installationId);
-      response =
-          tokenApi.createRepositoryToken(
-              authHeader,
-              ACCEPT,
-              installationId,
-              new GitHubTokenApi.RepositoryScope(List.of(scope.repository())));
+      token = appApi.createRepositoryToken(installationId, scope.repository());
     }
 
     // Read after the round trip, so the recorded instant is no earlier than GitHub's own issue
     // time and the entry below is never retired sooner than the token it names.
     var issuedAt = clock.get();
-    var newToken = new CachedToken(response.token(), issuedAt.plus(TOKEN_TTL));
+    var newToken = new CachedToken(token, issuedAt.plus(TOKEN_TTL));
     // One entry per repository reviewed would otherwise stay for as long as the process runs.
     tokenCache.values().removeIf(entry -> !issuedAt.isBefore(entry.expiresAt()));
     tokenCache.put(scope, newToken);
@@ -283,6 +225,11 @@ public class GitHubAuthClient {
    */
   public String getAuthHeader(long installationId) {
     return BEARER + token(TokenScope.installation(installationId));
+  }
+
+  /** The ids of every installation of the App, asked for with the App's own credential. */
+  public List<Long> listInstallationIds() {
+    return appApi.listInstallationIds();
   }
 
   /**
@@ -319,8 +266,8 @@ public class GitHubAuthClient {
    * instead of minting again; two that arrive together both mint, and two valid installation tokens
    * are as good as one, since GitHub does not invalidate either. What must not happen is a holder
    * losing the ability to name its installation, and {@link #tokenOwners} retires by age precisely
-   * so that cannot be raced. A lock across the token endpoint's round trip would buy only the saved
-   * request.
+   * so that cannot be raced. A lock across the mint's round trips would buy only the saved
+   * requests.
    *
    * <p>Kept separate from the method the constructor binds only because a constructor must not hand
    * out a reference to an overridable method — CDI subclasses this bean. For the same reason
@@ -351,14 +298,5 @@ public class GitHubAuthClient {
         (key, cached) ->
             cached.token().equals(dead) ? new CachedToken(dead, Instant.EPOCH) : cached);
     return Optional.of(BEARER + token(scope));
-  }
-
-  private RSAPrivateKey privateKey() {
-    var key = cachedPrivateKey.get();
-    if (key == null) {
-      key = RsaPrivateKeyParser.parse(config.github().privateKey());
-      cachedPrivateKey.set(key);
-    }
-    return key;
   }
 }

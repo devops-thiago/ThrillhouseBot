@@ -26,6 +26,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -346,6 +347,37 @@ class CiHoldRevisitTest {
   }
 
   @Test
+  void theSummaryIsRefreshedWithTheOutcomeOfTheRecheck() {
+    hold();
+    when(ciStatusEvaluator.evaluate(AUTH, "owner", "repo", HEAD, "main"))
+        .thenReturn(red(), green());
+
+    revisit.revisit(RECHECK);
+    revisit.revisit(RECHECK);
+
+    var states = ArgumentCaptor.forClass(ReviewResult.class);
+    verify(reviewPublisher, times(2))
+        .refreshCiState(eq(AUTH), eq("owner"), eq("repo"), eq(42), states.capture());
+    assertEquals(
+        List.of(ReviewState.COMMENT, ReviewState.APPROVE),
+        states.getAllValues().stream().map(ReviewResult::reviewState).toList());
+  }
+
+  @Test
+  void aSummaryThatCannotBeEditedStillLeavesTheApprovalAndConcludesTheCheckRun() {
+    hold();
+    when(ciStatusEvaluator.evaluate(AUTH, "owner", "repo", HEAD, "main")).thenReturn(green());
+    doThrow(new RuntimeException("boom"))
+        .when(reviewPublisher)
+        .refreshCiState(anyString(), anyString(), anyString(), anyInt(), any());
+
+    revisit.revisit(RECHECK);
+
+    verify(checkRunManager).updateCheckRun(any());
+    assertTrue(registry.heldAt("owner", "repo", 42, HEAD).isEmpty());
+  }
+
+  @Test
   void failedCheckRunUpdateOnRedCiKeepsTheHold() {
     hold();
     when(ciStatusEvaluator.evaluate(AUTH, "owner", "repo", HEAD, "main")).thenReturn(red());
@@ -354,5 +386,6 @@ class CiHoldRevisitTest {
     revisit.revisit(RECHECK);
 
     assertFalse(registry.heldAt("owner", "repo", 42, HEAD).isEmpty());
+    verify(reviewPublisher).refreshCiState(eq(AUTH), eq("owner"), eq("repo"), eq(42), any());
   }
 }

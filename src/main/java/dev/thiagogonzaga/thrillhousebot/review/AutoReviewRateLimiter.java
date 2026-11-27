@@ -31,6 +31,10 @@ import java.util.function.LongSupplier;
  * @thrillhousebot review}) never checks it and never records into it, so explicit triggers always
  * run and do not shift the automatic window. State is in-memory per replica, like {@link
  * ReviewDispatcher}.
+ *
+ * <p>Marking a draft ready lifts the window once for a head: a second {@code ready_for_review} of
+ * the same head is throttled like any other event, so converting a pull request to draft and back
+ * cannot start one review after another. Only the last such head of a pull request is remembered.
  */
 @ApplicationScoped
 public class AutoReviewRateLimiter {
@@ -40,6 +44,12 @@ public class AutoReviewRateLimiter {
 
   /** PR key → epoch-millis deadline until which automatic reviews of that PR are throttled. */
   final ConcurrentHashMap<String, Long> deadlines = new ConcurrentHashMap<>();
+
+  /** PR key → the head whose ready-for-review last lifted the window, and when it did. */
+  final ConcurrentHashMap<String, ReadyHead> readyHeads = new ConcurrentHashMap<>();
+
+  /** The head a ready-for-review lifted the window for, and the epoch millis it happened at. */
+  record ReadyHead(String sha, long at) {}
 
   private final long intervalMillis;
   private final int sweepThreshold;
@@ -74,12 +84,36 @@ public class AutoReviewRateLimiter {
   }
 
   /**
-   * Clears any throttle window for this PR so the next automatic review can run immediately. Used
-   * when a draft is marked ready ({@code ready_for_review}) — that transition should always trigger
-   * a review even if a recent {@code synchronize} fell inside the interval.
+   * Lifts the throttle window for a draft marked ready ({@code ready_for_review}), once per head:
+   * that transition should start a review even when a recent {@code synchronize} fell inside the
+   * interval, but only the first time for a given head.
+   *
+   * @return {@code true} when the window was lifted, so the caller dispatches without asking {@link
+   *     #isThrottled}; {@code false} when this head already had its window lifted, the head is
+   *     unknown, or throttling is disabled, in which case the caller asks {@link #isThrottled} as
+   *     for any other event
    */
-  public void clearForPr(String owner, String repo, int prNumber) {
-    deadlines.remove(key(owner, repo, prNumber));
+  public boolean clearForReadyHead(String owner, String repo, int prNumber, String headSha) {
+    if (intervalMillis <= 0 || headSha == null || headSha.isBlank()) {
+      return false;
+    }
+    var key = key(owner, repo, prNumber);
+    long now = clock.getAsLong();
+    var lifted = new boolean[1];
+    readyHeads.compute(
+        key,
+        (ignored, previous) -> {
+          if (previous != null && previous.sha().equalsIgnoreCase(headSha)) {
+            return previous;
+          }
+          lifted[0] = true;
+          return new ReadyHead(headSha, now);
+        });
+    if (lifted[0]) {
+      deadlines.remove(key);
+      sweepExpired(now);
+    }
+    return lifted[0];
   }
 
   /**
@@ -98,15 +132,24 @@ public class AutoReviewRateLimiter {
 
   /**
    * {@link #recordCompletion} refreshes a PR's deadline but never shrinks the map, so PRs that stop
-   * receiving pushes would accumulate forever. Sweep expired entries once the map is large enough
+   * receiving pushes would accumulate forever. Sweep expired entries once a map is large enough
    * that the scan is worthwhile; live entries are never removed, so a throttled PR can never slip
    * through.
    */
   void sweepExpired(long now) {
-    if (deadlines.size() < sweepThreshold) {
-      return;
+    if (deadlines.size() >= sweepThreshold) {
+      deadlines.values().removeIf(deadline -> deadline <= now);
     }
-    deadlines.values().removeIf(deadline -> deadline <= now);
+    if (readyHeads.size() >= sweepThreshold) {
+      // A remembered head is dropped once the interval has passed since the lift and the PR has
+      // no live deadline. Live entries stay, so a repeated ready-for-review cannot lift a window.
+      readyHeads
+          .entrySet()
+          .removeIf(
+              entry ->
+                  entry.getValue().at() + intervalMillis <= now
+                      && deadlines.getOrDefault(entry.getKey(), 0L) <= now);
+    }
   }
 
   private static String key(String owner, String repo, int prNumber) {

@@ -94,6 +94,14 @@ cannot resolve its review threads.
   under the description what the review established for it: the path-scoped rules covering the
   file, the failing check the finding cites, the second pass's verdict, and the review learning
   that demoted it. Each line is a name, path, id or fixed phrase, and is left out when empty.
+- **GitHub App authentication goes through the Quarkiverse GitHub App extension** (#1314): the
+  extension signs the App JWT, and its application client mints installation tokens and lists the
+  App's installations, so the bot's own JWT signing and the `nimbus-jose-jwt` dependency are gone.
+  Minting a token now takes three GitHub requests instead of one (the App, the installation, then
+  the token), and the installation listing adds one for the App. These calls follow
+  `HTTP_CONNECT_TIMEOUT` and `HTTP_REQUEST_TIMEOUT` (10s each by default) rather than the REST
+  client's settings. They go to `GITHUB_API_URL`. hub4j's response logger is capped at `INFO`: below
+  that it writes out an answer it cannot parse, which for a token request holds the token.
 
 ### Fixed
 
@@ -116,6 +124,15 @@ cannot resolve its review threads.
   dashboard's session history pointed at `github.com` whatever was configured, and a linked issue
   written as a full URL was only recognised there. The session payloads now carry
   `pullRequestUrl`, and only issue URLs on the configured web address are read.
+- **A one-line private key no longer stops the application at start** (#1314): the extension, which
+  reads `GITHUB_PRIVATE_KEY` too, rejected the form `.env.example` asks for (one line with literal
+  `\n` escapes) and a key without its PEM header and footer. Every key the start-up check accepts
+  is now handed to the extension in a form it can read, and a padded `GITHUB_APP_ID` is stripped
+  for it as the bot's own signer did.
+- **The summary comment follows a verdict held on CI** (#1462): when CI turns green and the held
+  approval is posted, the summary no longer says it cannot be approved or lists the checks as
+  pending. While the hold stays, its table shows the checks' current state. The Agent next steps
+  section, when on, follows it too. A summary posted before this change is not rewritten.
 
 ### Security
 
@@ -123,6 +140,27 @@ cannot resolve its review threads.
   (RHSA-2026:81532) with the fixes for CVE-2026-89161, CVE-2026-86145 and CVE-2026-103111, so their
   `.trivyignore` entries are removed. CVE-2026-84782 (`libssl3`, DTLS only) stays ignored for the
   `-distroless` image: Debian has a fixed package, but the distroless base has not picked it up.
+- **Automatic reviews are bounded without any setting**: a pull request author needs no write
+  access to start a review, and until now every limit on automatic reviews shipped switched off,
+  so the number of pull requests and pushes alone decided how many reviews and model calls ran.
+  The defaults are now `AUTO_REVIEW_MIN_INTERVAL=1m`, `REVIEW_MAX_TOKENS_PER_REVIEW=1000000` and
+  `AI_MAX_CONCURRENT_CALLS=16`, and two new settings limit one repository to four automatic
+  reviews at once (`AUTO_REVIEW_MAX_CONCURRENT_PER_REPO`) with up to fifty waiting, one per pull
+  request (`AUTO_REVIEW_MAX_QUEUED_PER_REPO`). Reviews past the first limit wait and are still
+  reviewed; one past the second is skipped as `REPOSITORY_QUEUE_FULL`. Converting a pull request
+  to draft and back no longer starts a new review of the same commit each time: ready-for-review
+  lifts the interval once per head commit. Setting any of these to `0` turns it off, as before.
+  **What you will notice:** a push, reopen or repeated ready-for-review within a minute of an
+  automatic review of the same pull request is skipped (`RATE_LIMITED`) and not reviewed later,
+  so push again or comment `/review`; a deployment that raised `REVIEW_MAX_INPUT_TOKENS` or
+  `REVIEW_MAX_AI_CALLS` should raise `REVIEW_MAX_TOKENS_PER_REVIEW` too (the bot warns at startup
+  when the planned input is above it); and a provider that allows fewer than sixteen concurrent
+  requests still needs `AI_MAX_CONCURRENT_CALLS` set to its limit.
+- **The bot writes nothing for a command before checking who sent it**: `/review` on a paused pull
+  request posted the paused notice for any commenter, every command got the 👀 reaction whoever
+  sent it, and `/help` was answered every time anyone asked. The write-access check now comes
+  first, so a commenter it refuses gets no reaction, no notice and no reply, and `/help` from a
+  commenter without write access is answered once per pull request per hour.
 
 ## [0.9.3] - 2026-11-26
 
