@@ -91,7 +91,8 @@ class FindingsManifestThreadTest {
         true,
         null,
         0,
-        openPrevious);
+        openPrevious,
+        false);
   }
 
   /** {@code thread} by entry line. */
