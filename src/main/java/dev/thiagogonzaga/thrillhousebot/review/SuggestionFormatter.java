@@ -333,7 +333,9 @@ public class SuggestionFormatter {
       sb.append(' ').append(disclaimer);
     }
     sb.append("\n\n");
-    sb.append(finding.description()).append("\n");
+    // The description is the model's own markdown: posted as prose, never as raw text (a mention
+    // would notify its target, and a suggestion fence would stand beside the bot's own).
+    sb.append(SecurityScan.postedDescription(finding.title(), finding.description())).append("\n");
 
     if (includeSuggestion && finding.hasSuggestion()) {
       sb.append(formatSuggestionBlock(finding.suggestionOld(), finding.suggestionNew()));

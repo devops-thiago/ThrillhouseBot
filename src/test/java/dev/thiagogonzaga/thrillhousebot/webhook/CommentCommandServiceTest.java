@@ -71,7 +71,7 @@ class CommentCommandServiceTest {
   @BeforeEach
   void setUp() {
     MockitoAnnotations.openMocks(this);
-    when(authClient.getAuthHeader(anyLong())).thenReturn("token");
+    when(authClient.getAuthHeader(anyLong(), anyString())).thenReturn("token");
     when(config.review()).thenReturn(reviewConfig);
     when(reviewConfig.addDocsEnabled()).thenReturn(true);
     when(reviewConfig.improveEnabled()).thenReturn(true);
@@ -705,7 +705,7 @@ class CommentCommandServiceTest {
 
   @Test
   void executeSwallowsRuntimeExceptions() {
-    when(authClient.getAuthHeader(anyLong())).thenThrow(new RuntimeException("boom"));
+    when(authClient.getAuthHeader(anyLong(), anyString())).thenThrow(new RuntimeException("boom"));
 
     // A failure inside the async task must be logged, not propagated to the executor thread.
     assertDoesNotThrow(() -> service.handle(ctx(CommentCommand.HELP)));
@@ -723,7 +723,7 @@ class CommentCommandServiceTest {
 
   @Test
   void notifyPausedSwallowsRuntimeExceptions() {
-    when(authClient.getAuthHeader(anyLong())).thenThrow(new RuntimeException("boom"));
+    when(authClient.getAuthHeader(anyLong(), anyString())).thenThrow(new RuntimeException("boom"));
 
     assertDoesNotThrow(() -> service.notifyPaused(ctx(CommentCommand.REVIEW)));
     verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
@@ -731,7 +731,7 @@ class CommentCommandServiceTest {
 
   @Test
   void notifyClosedSwallowsRuntimeExceptions() {
-    when(authClient.getAuthHeader(anyLong())).thenThrow(new RuntimeException("boom"));
+    when(authClient.getAuthHeader(anyLong(), anyString())).thenThrow(new RuntimeException("boom"));
 
     assertDoesNotThrow(() -> service.notifyClosed(ctx(CommentCommand.REVIEW)));
     verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());

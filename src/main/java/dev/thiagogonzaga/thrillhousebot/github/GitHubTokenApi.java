@@ -16,12 +16,14 @@
 package dev.thiagogonzaga.thrillhousebot.github;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.MediaType;
+import java.util.List;
 import org.eclipse.microprofile.rest.client.annotation.RegisterProvider;
 import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 
@@ -36,6 +38,27 @@ public interface GitHubTokenApi {
       @jakarta.ws.rs.HeaderParam(HttpHeaders.AUTHORIZATION) String authorization,
       @jakarta.ws.rs.HeaderParam("Accept") String accept,
       @PathParam("installation_id") long installationId);
+
+  /**
+   * As {@link #createInstallationToken}, for a token that reaches only the repositories {@code
+   * scope} names. GitHub answers 422 when the installation does not cover one of them.
+   */
+  @POST
+  @Path("/app/installations/{installation_id}/access_tokens")
+  @Consumes(MediaType.APPLICATION_JSON)
+  @Produces(MediaType.APPLICATION_JSON)
+  InstallationTokenResponse createRepositoryToken(
+      @jakarta.ws.rs.HeaderParam(HttpHeaders.AUTHORIZATION) String authorization,
+      @jakarta.ws.rs.HeaderParam("Accept") String accept,
+      @PathParam("installation_id") long installationId,
+      RepositoryScope scope);
+
+  /** The request body that limits a token to repositories of the installation, by name. */
+  record RepositoryScope(List<String> repositories) {
+    public RepositoryScope {
+      repositories = List.copyOf(repositories);
+    }
+  }
 
   record InstallationTokenResponse(String token, @JsonProperty("expires_at") String expiresAt) {}
 }

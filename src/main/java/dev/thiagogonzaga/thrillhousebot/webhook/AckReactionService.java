@@ -131,7 +131,7 @@ public class AckReactionService {
 
   private void react(
       long installationId, String owner, String repo, long commentId, CommentKind kind) {
-    var auth = authClient.getAuthHeader(installationId);
+    var auth = authClient.getAuthHeader(installationId, repo);
     var request = new GitHubReactionClient.CreateReactionRequest(EYES);
     if (kind == CommentKind.ISSUE) {
       reactionClient.createIssueCommentReaction(auth, ACCEPT, owner, repo, commentId, request);

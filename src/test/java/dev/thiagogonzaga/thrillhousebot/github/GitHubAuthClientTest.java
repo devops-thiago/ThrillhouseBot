@@ -179,6 +179,122 @@ class GitHubAuthClientTest {
     verify(tokenApi, times(1)).createInstallationToken(anyString(), anyString(), eq(43L));
   }
 
+  private static GitHubTokenApi.RepositoryScope only(String repository) {
+    return new GitHubTokenApi.RepositoryScope(List.of(repository));
+  }
+
+  @Test
+  void aRepositoryHeaderIsMintedForThatRepositoryAlone() {
+    when(tokenApi.createRepositoryToken(anyString(), anyString(), eq(42L), eq(only("widgets"))))
+        .thenReturn(token("widgets-token"));
+
+    assertEquals("Bearer widgets-token", authClient.getAuthHeader(42L, "widgets"));
+
+    verify(tokenApi)
+        .createRepositoryToken(
+            argThat(jwt -> jwt.startsWith("Bearer ")),
+            eq("application/vnd.github+json"),
+            eq(42L),
+            eq(only("widgets")));
+    // Nothing reaching every repository of the installation was asked for along the way.
+    verify(tokenApi, never()).createInstallationToken(anyString(), anyString(), anyLong());
+  }
+
+  @Test
+  void eachRepositoryGetsItsOwnTokenAndReusesIt() {
+    when(tokenApi.createRepositoryToken(anyString(), anyString(), eq(42L), eq(only("widgets"))))
+        .thenReturn(token("widgets-token"));
+    when(tokenApi.createRepositoryToken(anyString(), anyString(), eq(42L), eq(only("payroll"))))
+        .thenReturn(token("payroll-token"));
+    when(tokenApi.createInstallationToken(anyString(), anyString(), eq(42L)))
+        .thenReturn(token("installation-token"));
+
+    assertEquals("Bearer widgets-token", authClient.getAuthHeader(42L, "widgets"));
+    assertEquals("Bearer payroll-token", authClient.getAuthHeader(42L, "payroll"));
+    assertEquals("Bearer widgets-token", authClient.getAuthHeader(42L, "widgets"));
+    assertEquals("Bearer widgets-token", authClient.getAuthHeader(42L, " widgets "));
+    // The installation-wide token is a third one, and never stands in for a repository's.
+    assertEquals("Bearer installation-token", authClient.getAuthHeader(42L));
+    assertEquals("Bearer payroll-token", authClient.getAuthHeader(42L, "payroll"));
+
+    verify(tokenApi, times(2)).createRepositoryToken(anyString(), anyString(), eq(42L), any());
+    verify(tokenApi, times(1)).createInstallationToken(anyString(), anyString(), eq(42L));
+  }
+
+  @Test
+  void aRepositoryHeaderIsNeverWidenedWhenTheNameIsMissingOrTheMintIsRefused() {
+    assertThrows(IllegalArgumentException.class, () -> authClient.getAuthHeader(42L, null));
+    assertThrows(IllegalArgumentException.class, () -> authClient.getAuthHeader(42L, "  "));
+
+    var refused = new jakarta.ws.rs.WebApplicationException(422);
+    when(tokenApi.createRepositoryToken(anyString(), anyString(), eq(42L), any()))
+        .thenThrow(refused);
+    assertSame(
+        refused,
+        assertThrows(
+            jakarta.ws.rs.WebApplicationException.class,
+            () -> authClient.getAuthHeader(42L, "not-installed")));
+
+    verify(tokenApi, never()).createInstallationToken(anyString(), anyString(), anyLong());
+  }
+
+  @Test
+  void aRejectedRepositoryTokenIsReplacedByOneForTheSameRepository() {
+    when(tokenApi.createRepositoryToken(anyString(), anyString(), eq(42L), eq(only("widgets"))))
+        .thenReturn(token("expired-token"), token("minted-token"));
+    var dead = authClient.getAuthHeader(42L, "widgets");
+
+    var fresh = authClient.refreshedAuthHeader(dead);
+
+    assertEquals(Optional.of("Bearer minted-token"), fresh);
+    assertEquals("Bearer minted-token", authClient.getAuthHeader(42L, "widgets"));
+    verify(tokenApi, times(2))
+        .createRepositoryToken(anyString(), anyString(), eq(42L), eq(only("widgets")));
+    verify(tokenApi, never()).createInstallationToken(anyString(), anyString(), anyLong());
+  }
+
+  @Test
+  void aGoneInstallationDropsEveryRepositoryTokenItHad() {
+    when(tokenApi.createRepositoryToken(anyString(), anyString(), anyLong(), any()))
+        .thenReturn(token("t"));
+    authClient.getAuthHeader(42L, "widgets");
+    authClient.getAuthHeader(42L, "payroll");
+    authClient.getAuthHeader(43L, "widgets");
+
+    authClient.onInstallationChange(
+        new InstallationChange(InstallationChange.Kind.GONE, 42L, java.util.List.of()));
+    authClient.getAuthHeader(42L, "widgets");
+    authClient.getAuthHeader(42L, "payroll");
+    authClient.getAuthHeader(43L, "widgets");
+
+    verify(tokenApi, times(4)).createRepositoryToken(anyString(), anyString(), eq(42L), any());
+    verify(tokenApi, times(1)).createRepositoryToken(anyString(), anyString(), eq(43L), any());
+  }
+
+  @Test
+  void expiredCacheEntriesOfOtherRepositoriesAreDroppedOnTheNextMint() {
+    var minted = new AtomicInteger();
+    when(tokenApi.createRepositoryToken(anyString(), anyString(), eq(42L), any()))
+        .thenAnswer(invocation -> token("token-" + minted.incrementAndGet()));
+    var first = authClient.getAuthHeader(42L, "widgets");
+
+    advance(GitHubAuthClient.TOKEN_TTL.plusSeconds(1));
+    authClient.getAuthHeader(42L, "payroll");
+
+    // The expired token is out of the cache, and still names its repository for a late 401.
+    assertEquals(Optional.of("Bearer token-3"), authClient.refreshedAuthHeader(first));
+    assertEquals("Bearer token-3", authClient.getAuthHeader(42L, "widgets"));
+    verify(tokenApi, times(2))
+        .createRepositoryToken(anyString(), anyString(), eq(42L), eq(only("widgets")));
+  }
+
+  @Test
+  void theScopeBodyNamesOnlyTheRepository() throws Exception {
+    assertEquals(
+        "{\"repositories\":[\"widgets\"]}",
+        new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(only("widgets")));
+  }
+
   @Test
   void shouldGetSeparateTokensForDifferentInstallations() {
     var installId1 = 10L;
@@ -488,6 +604,12 @@ class GitHubAuthClientTest {
         }
       }
       return token("token-" + n);
+    }
+
+    @Override
+    public InstallationTokenResponse createRepositoryToken(
+        String authorization, String accept, long installationId, RepositoryScope scope) {
+      throw new UnsupportedOperationException("this test mints installation-wide tokens only");
     }
   }
 

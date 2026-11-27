@@ -29,11 +29,22 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** Sends periodic keepalive frames so reverse proxies do not idle-close dashboard sockets. */
+/**
+ * Sends periodic keepalive frames so reverse proxies do not idle-close dashboard sockets, and
+ * re-checks on a timer of its own what each open connection may still read.
+ */
 @ApplicationScoped
 public class DashboardWebSocketKeepAlive {
 
   private static final Logger log = LoggerFactory.getLogger(DashboardWebSocketKeepAlive.class);
+
+  /**
+   * How often the open connections' access is re-checked. Fixed rather than tied to {@code
+   * WEBSOCKET_KEEPALIVE_MS}: turning the keepalive off, or stretching it for a patient proxy, must
+   * not let a login whose access was removed keep receiving events. Each reader answers from its
+   * cached scope until that expires, so a tick rarely reaches GitHub.
+   */
+  static final long ACCESS_RECHECK_MS = 25_000L;
 
   private final Vertx vertx;
 
@@ -42,6 +53,8 @@ public class DashboardWebSocketKeepAlive {
   private final ThrillhouseConfig config;
 
   private volatile long timerId = -1;
+
+  private volatile long accessTimerId = -1;
 
   private final ExecutorService refreshExecutor =
       Executors.newThreadPerTaskExecutor(
@@ -62,12 +75,13 @@ public class DashboardWebSocketKeepAlive {
   }
 
   void onStart(@Observes StartupEvent event) {
+    accessTimerId = vertx.setPeriodic(ACCESS_RECHECK_MS, id -> refreshReaders());
     var intervalMs = config.websocketKeepAliveMs();
     // vertx.setPeriodic rejects delays < 1 with an exception that would abort startup.
     if (intervalMs <= 0) {
       log.warn(
           "WEBSOCKET_KEEPALIVE_MS={} — keepalive disabled; stale session replay buffers "
-              + "will not be evicted either",
+              + "will not be evicted either. Open connections' access is still re-checked",
           intervalMs);
       return;
     }
@@ -77,13 +91,15 @@ public class DashboardWebSocketKeepAlive {
             id -> {
               broadcaster.sendKeepAlive();
               broadcaster.evictStaleSessionBuffers();
-              refreshReaders();
             });
   }
 
   void onStop(@Observes ShutdownEvent event) {
     if (timerId >= 0) {
       vertx.cancelTimer(timerId);
+    }
+    if (accessTimerId >= 0) {
+      vertx.cancelTimer(accessTimerId);
     }
     refreshExecutor.shutdownNow();
   }
@@ -92,7 +108,7 @@ public class DashboardWebSocketKeepAlive {
    * An installation change can end what an open connection may read (#1222); re-resolve now rather
    * than at the next tick. Only submits work, so the webhook never waits on GitHub. When a refresh
    * is already running, it may have passed some connections before the change, so it makes another
-   * pass instead of dropping this one: with the keepalive off there is no later tick to catch up.
+   * pass instead of dropping this one, rather than leave it to the next tick.
    */
   void onInstallationChange(@Observes InstallationChange change) {
     if (requests.getAndIncrement() == 0) {

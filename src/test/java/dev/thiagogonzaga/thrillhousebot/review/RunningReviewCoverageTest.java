@@ -65,7 +65,7 @@ class RunningReviewCoverageTest {
 
   @BeforeEach
   void setUp() {
-    when(authClient.getAuthHeader(3L)).thenReturn("Bearer t");
+    when(authClient.getAuthHeader(3L, "repo")).thenReturn("Bearer t");
   }
 
   @Test
@@ -88,7 +88,7 @@ class RunningReviewCoverageTest {
 
   @Test
   void shouldFallBackAndLogWhenTheTokenCannotBeMinted() {
-    when(authClient.getAuthHeader(3L)).thenThrow(new IllegalStateException("no key"));
+    when(authClient.getAuthHeader(3L, "repo")).thenThrow(new IllegalStateException("no key"));
 
     var logged = captureLog(() -> assertEquals(Optional.empty(), coverage.currentHead(req)));
 

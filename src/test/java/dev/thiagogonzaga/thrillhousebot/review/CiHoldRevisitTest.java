@@ -93,7 +93,7 @@ class CiHoldRevisitTest {
             reviewPublisher,
             registry,
             labelGate);
-    when(authClient.getAuthHeader(123L)).thenReturn(AUTH);
+    when(authClient.getAuthHeader(123L, "repo")).thenReturn(AUTH);
     when(contextLoader.currentHeadSha(eq(AUTH), any())).thenReturn(Optional.of(HEAD));
   }
 

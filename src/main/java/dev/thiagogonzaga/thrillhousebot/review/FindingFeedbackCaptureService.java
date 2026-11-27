@@ -242,7 +242,7 @@ public class FindingFeedbackCaptureService {
     if (replyAuthorLogin == null || replyAuthorLogin.isBlank()) {
       return;
     }
-    var auth = authClient.getAuthHeader(scope.installationId());
+    var auth = authClient.getAuthHeader(scope.installationId(), repo);
     var permissionCache = new HashMap<String, Boolean>();
     if (!mayHoldWriteAccess(reply.authorAssociation())) {
       return;

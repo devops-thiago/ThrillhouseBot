@@ -35,7 +35,16 @@ import java.util.regex.Pattern;
  *       neutralizes the fence / {@code <details>} / HTML / pipe / backtick break-outs; {@link
  *       #inlineCode(String)} is the variant for a string placed inside a {@code `...`} span, and
  *       {@link #tableCell(String)} the variant for one markdown table cell.
+ *   <li><b>prose</b> — {@link #prose(String)} for a model field that is markdown of its own (a
+ *       finding's description, a status note, a reply) and {@link #proseLine(String)} for one
+ *       flattened to a line: the markdown is kept, and what must not reach a reader is taken out.
  * </ul>
+ *
+ * <p>Every operation except the code ones also keeps the text from notifying anyone: an {@code @}
+ * that could start a mention of a user or a team is followed by a zero-width space
+ * ({@code @&#8203;name}), which renders the same and links nobody. Text the bot writes itself, such
+ * as the {@code @thrillhousebot resolved} hints, does not pass through here and is posted as
+ * written.
  */
 public final class MarkdownSafe {
 
@@ -66,7 +75,43 @@ public final class MarkdownSafe {
    * unchanged.
    */
   public static String inline(String value) {
-    return oneLine(value).replace("<", "&lt;").replace("`", "&#96;").replace("|", "\\|");
+    return MarkdownProse.mentions(oneLine(value))
+        .replace("<", "&lt;")
+        .replace("`", "&#96;")
+        .replace("|", "\\|");
+  }
+
+  /**
+   * A model field that is markdown in its own right, made safe to post as a block of its own:
+   * emphasis, lists, links, code spans and fenced code are kept, and three things are taken out. An
+   * {@code @} that could mention a user or a team is guarded; a {@code <} that could open an HTML
+   * tag or comment (a {@code </details>}, a hidden marker of the bot's own) is escaped; and a
+   * fenced block marked {@code suggestion} becomes a plain one, since on a review comment GitHub
+   * offers such a block as a change to commit and only {@link #suggestionBlock} may post one. A
+   * fenced block left open is closed, so it cannot take in what the bot appends. A {@code null}
+   * value is the empty string.
+   *
+   * <p>Code is left byte for byte, in spans that close on their own line and in fenced blocks. See
+   * {@link MarkdownProse} for why the text is rewritten rather than only screened.
+   */
+  public static String prose(String value) {
+    return value == null ? "" : MarkdownProse.block(value);
+  }
+
+  /** {@link #prose(String)} for a field rendered on one line, such as a list bullet. */
+  public static String proseLine(String value) {
+    return MarkdownProse.line(oneLine(value));
+  }
+
+  /**
+   * {@code text} as it read before {@link #prose} or {@link #inline} guarded and escaped it, for
+   * text the bot reads back from its own comments and compares with what a model wrote.
+   */
+  public static String unguarded(String text) {
+    return text.replace("@" + MarkdownProse.MENTION_GUARD, "@")
+        .replace("@\u200B", "@")
+        .replace("&lt;", "<")
+        .replace("&#96;", "`");
   }
 
   /**
@@ -90,6 +135,20 @@ public final class MarkdownSafe {
       return "-";
     }
     return value.replace("\\", "\\\\").replace("|", "\\|").replaceAll("[\r\n]+", " ");
+  }
+
+  /**
+   * {@link #tableCell(String)} for a cell that holds prose rather than a path inside a code span (a
+   * file's summary, a check's name): the same escaping, with the cell's mentions guarded and its
+   * HTML escaped as {@link #proseLine} does, and its code spans kept.
+   */
+  public static String proseCell(String value) {
+    if (value == null) {
+      return "-";
+    }
+    return MarkdownProse.line(value.replaceAll("[\r\n]+", " "))
+        .replace("\\", "\\\\")
+        .replace("|", "\\|");
   }
 
   /**

@@ -47,6 +47,7 @@ Assets:
 
 - The GitHub App private key and the installation tokens minted from it, which
   can write reviews, comments, check runs and labels on installed repositories.
+  A token minted for work on one repository reaches that repository only.
 - The model API key, which costs money to use.
 - The webhook secret, the OAuth client secret and dashboard session tokens.
 - Review history and cost data in PostgreSQL.
@@ -69,7 +70,7 @@ Attackers considered:
 | Boundary | Data crossing it | Control |
 |----------|------------------|---------|
 | GitHub to `POST /api/webhook` | Event payloads | HMAC-SHA256 signature check, delivery-ID deduplication, Jackson parsing into typed records |
-| Bot to GitHub API | Reads of PR data, writes of reviews and comments | Short-lived installation tokens over HTTPS, App permissions limited to what the bot uses |
+| Bot to GitHub API | Reads of PR data, writes of reviews and comments | Short-lived installation tokens over HTTPS, limited to the repository being worked on where the bot mints them itself, App permissions limited to what the bot uses; model text is posted with mentions, raw HTML and `suggestion` fences neutralized |
 | Bot to model endpoint | Prompts with untrusted PR text out, model text in | Untrusted text fenced in the prompt, model output parsed as data and verified before posting |
 | Browser to dashboard | OAuth login, session cookie, API calls | GitHub OAuth with a `state` check, per-request access checks |
 | Bot to notification webhook | Review outcome payload | HTTPS required by default, optional HMAC signature |
@@ -91,6 +92,14 @@ workflow declares its token permissions, read-only unless a workflow or job
 needs a write scope, such as the image push or the Dependency Review comment.
 The container images run as an unprivileged user (UID 1001 on UBI9-micro,
 `nonroot` on distroless) and the binary is installed read-only (`0555`).
+
+Reviews, commands, replies and reactions run on an installation token minted
+for the one repository they concern (`github/GitHubAuthClient`), so a leaked
+token does not open the installation's other repositories. Two paths still use
+installation-wide tokens: the dashboard backfill, which lists an installation's
+repositories, and the GitHub App extension's own client, used to read
+repository settings and instructions, check permissions, read linked issues
+and decide dashboard access.
 
 ### Fail-safe defaults
 

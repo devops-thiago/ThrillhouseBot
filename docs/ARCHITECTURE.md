@@ -335,8 +335,9 @@ assignments whose value passes an entropy threshold (`REVIEW_SECRET_SCAN_ENTROPY
 default 3.5). `IacScanner` matches admin ports open to the internet, public S3 buckets, wildcard
 IAM, privileged pods, host namespaces, a final Dockerfile stage running as root and disabled
 encryption. `SecurityRule` holds each rule's severity and title. A `thrillhousebot:allow-secret` or
-`thrillhousebot:allow-iac` comment on the line or the line above suppresses a match, and
-`REVIEW_SECURITY_SCAN_SKIPPED_FILES` excludes fixture paths.
+`thrillhousebot:allow-iac` comment on the line or the line above suppresses a match, and the
+summary's review-scope note lists each suppressed line by `path:line` and marker
+(`SecurityScan.formatWaivers`). `REVIEW_SECURITY_SCAN_SKIPPED_FILES` excludes fixture paths.
 
 The merge runs after verification, so no model grades a pattern match and the verifier's
 fail-open marking never applies to one. A model finding that reports the same defect nearby is
@@ -688,7 +689,8 @@ over installations whose installation-wide views the login may see: its own pers
 an organization it is a member of (`GET /orgs/{org}/memberships/{user}` with the installation token,
 which needs Organization → Members: read and is granted only on an active membership; a 403 logs
 the missing permission once). A WebSocket connection
-reads its scope from memory on every event; the keepalive tick re-resolves it on a virtual
+reads its scope from memory on every event; a 25-second timer of its own, which runs whatever
+`WEBSOCKET_KEEPALIVE_MS` is, re-resolves it on a virtual
 thread, never the event loop or a review thread, and closes the connection once nothing is
 readable or the session has ended.
 

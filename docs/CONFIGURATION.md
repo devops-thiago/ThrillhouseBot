@@ -39,7 +39,7 @@ These variables set Quarkus and LangChain4j keys rather than a `thrillhousebot.*
 |---|---|---|---|
 | `HTTP_CONNECT_TIMEOUT`<br>`thrillhousebot.http-connect-timeout` | Outbound HTTP connect timeout (GitHub API, OAuth). | duration | `10s` |
 | `HTTP_REQUEST_TIMEOUT`<br>`thrillhousebot.http-request-timeout` | Outbound HTTP request timeout (GitHub API, OAuth). | duration | `10s` |
-| `WEBSOCKET_KEEPALIVE_MS`<br>`thrillhousebot.websocket-keepalive-ms` | Dashboard WebSocket keepalive in milliseconds, so reverse proxies do not close idle connections. `0` or less disables it and stale replay-buffer eviction. | integer | `25000` |
+| `WEBSOCKET_KEEPALIVE_MS`<br>`thrillhousebot.websocket-keepalive-ms` | Dashboard WebSocket keepalive in milliseconds, so reverse proxies do not close idle connections. `0` or less disables it and stale replay-buffer eviction; what each open connection may read is still re-checked every 25 seconds. | integer | `25000` |
 
 ## `thrillhousebot.ai`
 

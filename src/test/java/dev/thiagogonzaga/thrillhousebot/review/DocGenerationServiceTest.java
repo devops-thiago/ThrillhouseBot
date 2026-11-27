@@ -96,7 +96,7 @@ class DocGenerationServiceTest {
   @BeforeEach
   void setUp() {
     MockitoAnnotations.openMocks(this);
-    when(authClient.getAuthHeader(anyLong())).thenReturn(AUTH);
+    when(authClient.getAuthHeader(anyLong(), anyString())).thenReturn(AUTH);
     when(config.review()).thenReturn(reviewConfig);
     when(reviewConfig.maxReviewComments()).thenReturn(50);
     when(reviewConfig.maxAiCalls()).thenReturn(6);
@@ -616,7 +616,8 @@ class DocGenerationServiceTest {
 
   @Test
   void swallowsUnexpectedFailures() {
-    when(authClient.getAuthHeader(anyLong())).thenThrow(new RuntimeException("auth down"));
+    when(authClient.getAuthHeader(anyLong(), anyString()))
+        .thenThrow(new RuntimeException("auth down"));
 
     assertDoesNotThrow(() -> service.handle(task()));
     verifyNoInteractions(commentClient);
