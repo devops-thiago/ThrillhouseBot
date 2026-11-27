@@ -342,6 +342,49 @@ public interface GitHubReviewClient {
         });
   }
 
+  /** One HTTP attempt at dismissing a review. Callers want {@link #dismissReview} instead. */
+  @PUT
+  @Path("/repos/{owner}/{repo}/pulls/{pullNumber}/reviews/{reviewId}/dismissals")
+  @Produces(MediaType.APPLICATION_JSON)
+  @Consumes(MediaType.APPLICATION_JSON)
+  ReviewResponse dismissReviewOnce(
+      @HeaderParam("Authorization") String auth,
+      @HeaderParam("Accept") String accept,
+      @PathParam("owner") String owner,
+      @PathParam("repo") String repo,
+      @PathParam("pullNumber") int pullNumber,
+      @PathParam("reviewId") long reviewId,
+      DismissReviewRequest request);
+
+  /**
+   * Dismisses a submitted review, with the throttle backoff described on {@link GitHubWriteRetry}.
+   * GitHub keeps the review and its comments and marks it {@code DISMISSED}, so it no longer counts
+   * towards the pull request's approvals. The route needs the App's "Pull requests: write"
+   * permission. GitHub's reference adds that on a protected branch the caller must be a repository
+   * administrator or on the rule's list of people, teams and apps that may dismiss reviews.
+   */
+  default ReviewResponse dismissReview(
+      String auth,
+      String accept,
+      String owner,
+      String repo,
+      int pullNumber,
+      long reviewId,
+      String message) {
+    return GitHubWriteRetry.DEFAULT.call(
+        "dismiss review " + reviewId + " on " + owner + "/" + repo + " #" + pullNumber,
+        auth,
+        credential ->
+            dismissReviewOnce(
+                credential,
+                accept,
+                owner,
+                repo,
+                pullNumber,
+                reviewId,
+                new DismissReviewRequest(message, DISMISS_EVENT)));
+  }
+
   /** One HTTP attempt at reading one review. Callers want {@link #getReview} instead. */
   @GET
   @Path("/repos/{owner}/{repo}/pulls/{pullNumber}/reviews/{reviewId}")
@@ -507,6 +550,12 @@ public interface GitHubReviewClient {
       body = CommentBodyLimit.cap(body);
     }
   }
+
+  /** The one {@code event} GitHub accepts on the dismissal route. */
+  String DISMISS_EVENT = "DISMISS";
+
+  /** Payload for {@link #dismissReviewOnce}: the reason shown on the pull request's timeline. */
+  record DismissReviewRequest(String message, String event) {}
 
   /** GitHub's {@code subject_type} for a review thread that targets a whole file. */
   String SUBJECT_TYPE_FILE = "file";

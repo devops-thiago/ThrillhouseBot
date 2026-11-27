@@ -629,6 +629,32 @@ organization-owned app), tick **Check suite** and **Status**, and save. The
 existing `Checks: Read & write` and `Commit statuses: Read` permissions cover
 both.
 
+### Withdrawing an earlier approval
+
+GitHub keeps counting a reviewer's approval after the same reviewer posts a
+later `COMMENT` review. So when a review does not end in an approval, the bot
+first dismisses every approval it still has on the pull request, with a message
+naming the head it just reviewed. This covers a review with findings, one with
+an earlier finding still open, a CI hold and a partly reviewed diff. Only the
+bot's own approvals are dismissed, never a person's or another app's, and a
+review that approves again dismisses nothing. An approval held on CI is
+dismissed too and comes back when the checks turn green.
+
+The call needs the `Pull requests: Read & write` permission the App already
+has. On a protected branch, GitHub's API reference says the caller must also be
+a repository administrator or on the rule's "Restrict who can dismiss pull
+request reviews" list, so GitHub may refuse the dismissal there. The bot then
+logs a warning naming the review, posts its own review as usual, and the old
+approval stays until someone dismisses it. If you see that warning, add the App
+to the rule's list.
+
+The approval is withdrawn when a review finishes, not when commits are pushed,
+and not at all when no review runs for the new head (a draft, a label or path
+skip, a paused bot, a failed run). Where the bot's approval counts towards a
+required review, also turn on "Dismiss stale pull request approvals when new
+commits are pushed" in the branch protection rule or ruleset, so GitHub drops
+it on the push itself.
+
 ### Summary comment
 
 With `REVIEW_AGENT_NEXT_STEPS_ENABLED` on, the summary also carries a short

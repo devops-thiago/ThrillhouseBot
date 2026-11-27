@@ -622,5 +622,17 @@ class ThrottledInlineCommentTest {
         String auth, String accept, String owner, String repo, int pullNumber, long reviewId) {
       throw new UnsupportedOperationException("not part of this seam");
     }
+
+    @Override
+    public ReviewResponse dismissReviewOnce(
+        String auth,
+        String accept,
+        String owner,
+        String repo,
+        int pullNumber,
+        long reviewId,
+        DismissReviewRequest request) {
+      throw new UnsupportedOperationException("not part of this seam");
+    }
   }
 }

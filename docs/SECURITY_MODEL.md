@@ -27,6 +27,10 @@ security limits. To report a vulnerability, see
 - Features that send more data to the model or to a third party are off by
   default (CI-failure context, linked-issue context, review learnings, outgoing
   notifications, the security scan).
+- A review that does not approve dismisses the approvals the bot gave earlier
+  on the same pull request, so an approval of an older head does not go on
+  counting for code the bot declined to approve. Only the bot's own reviews are
+  dismissed.
 
 ## What you cannot expect
 
@@ -39,6 +43,12 @@ security limits. To report a vulnerability, see
   HTTPS to work.
 - OAuth sessions and some review state live in memory in a single process (see
   Known limitations in the README). A restart signs dashboard users out.
+- The bot's approval is not withdrawn at the moment commits are pushed. It is
+  dismissed when the review of the new head finishes without approving, and it
+  stays if that review never runs or fails, or if a branch protection rule
+  stops the App from dismissing reviews (the bot logs a warning). If the bot's
+  approval counts towards a required review, turn on "Dismiss stale pull
+  request approvals when new commits are pushed" for the branch.
 - Only the latest release gets security fixes.
 
 ## Threat model
@@ -82,7 +92,8 @@ Attackers considered:
 The App manifest (`manifest.json`) asks for `contents: write`, `actions: read`,
 `statuses: read`, `checks: write`, `pull_requests: write` and `issues: write`.
 Issues write is needed because pull request conversation comments, labels and
-reactions go through the Issues API; linked issues are only read.
+reactions go through the Issues API; linked issues are only read. Pull requests
+write also covers dismissing the bot's own earlier approval.
 Contents write is needed only because GitHub refuses `resolveReviewThread`
 without it. The bot writes no file, commit or branch, but an installation token
 carries the permission, so a leaked token or private key could; an operator who

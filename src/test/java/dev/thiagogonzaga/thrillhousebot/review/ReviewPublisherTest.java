@@ -789,6 +789,305 @@ class ReviewPublisherTest {
         .createPendingReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
   }
 
+  private static final String BOT_LOGIN = "thrillhousebot";
+
+  private static GitHubReviewClient.ReviewResponse review(
+      long id, String state, String commitSha, String login) {
+    return new GitHubReviewClient.ReviewResponse(
+        id,
+        "",
+        state,
+        commitSha,
+        login == null ? null : new GitHubReviewClient.ReviewResponse.User(login));
+  }
+
+  /** A follow-up with no new findings whose approval pending CI holds back. */
+  private static ReviewResult heldOnCi() {
+    return new ReviewResult(
+        List.of(),
+        0,
+        0,
+        0,
+        0,
+        null,
+        ReviewState.COMMENT,
+        false,
+        "summary",
+        List.of(),
+        List.of(new ReviewResult.CiCheck("build", "check-run", "pending", null)),
+        0);
+  }
+
+  private static ReviewResult withFinding(ReviewState state) {
+    var finding =
+        new Finding(RiskLevel.HIGH, "src/A.java", 3, "Missing null check", "desc", null, null);
+    return new ReviewResult(
+        List.of(finding),
+        0,
+        1,
+        0,
+        0,
+        RiskLevel.HIGH,
+        state,
+        false,
+        "summary",
+        List.of(),
+        List.of(),
+        0);
+  }
+
+  private void post(
+      String headSha, ReviewResult result, List<GitHubReviewClient.ReviewResponse> priorReviews) {
+    publisher.postReview(
+        new ReviewPublisher.PostReviewRequest(
+            "auth",
+            "o",
+            "r",
+            1,
+            headSha,
+            result,
+            new DiffLineResolver(Map.of()),
+            false,
+            List.of(),
+            "",
+            priorReviews));
+  }
+
+  private void verifyDismissed(long reviewId, String headSha) {
+    verify(reviewClient)
+        .dismissReview(
+            "auth",
+            "application/vnd.github+json",
+            "o",
+            "r",
+            1,
+            reviewId,
+            ReviewPublisher.approvalWithdrawnMessage(headSha));
+  }
+
+  private void verifyNothingDismissed() {
+    verify(reviewClient, never())
+        .dismissReview(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), anyLong(), anyString());
+  }
+
+  private String postedReviewEvent() {
+    var posted = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+    verify(reviewClient)
+        .createReview(anyString(), anyString(), eq("o"), eq("r"), eq(1), posted.capture());
+    return posted.getValue().event();
+  }
+
+  @Test
+  void roundOnANewHeadThatDoesNotApproveDismissesTheBotsEarlierApproval() {
+    post("sha2", heldOnCi(), List.of(review(1L, "APPROVED", "sha1", BOT_LOGIN)));
+
+    var order = org.mockito.Mockito.inOrder(reviewClient);
+    order
+        .verify(reviewClient)
+        .dismissReview(
+            "auth",
+            "application/vnd.github+json",
+            "o",
+            "r",
+            1,
+            1L,
+            ReviewPublisher.approvalWithdrawnMessage("sha2"));
+    order
+        .verify(reviewClient)
+        .createReview(anyString(), anyString(), eq("o"), eq("r"), eq(1), any());
+    assertEquals("COMMENT", postedReviewEvent());
+  }
+
+  @Test
+  void roundThatRequestsChangesDismissesTheBotsEarlierApproval() {
+    post(
+        "sha2",
+        withFinding(ReviewState.REQUEST_CHANGES),
+        List.of(review(1L, "APPROVED", "sha1", BOT_LOGIN)));
+
+    verifyDismissed(1L, "sha2");
+    assertEquals("REQUEST_CHANGES", postedReviewEvent());
+  }
+
+  @Test
+  void roundThatDoesNotApproveDismissesAnApprovalOfTheSameHead() {
+    post("sha1", heldOnCi(), List.of(review(1L, "APPROVED", "sha1", BOT_LOGIN)));
+
+    verifyDismissed(1L, "sha1");
+  }
+
+  @Test
+  void approvalBehindALaterCommentReviewIsStillDismissed() {
+    // GitHub goes on counting an approval after the same author comments, so the approval is the
+    // review to withdraw even though it is no longer the bot's latest one.
+    post(
+        "sha3",
+        heldOnCi(),
+        List.of(
+            review(1L, "APPROVED", "sha1", BOT_LOGIN), review(2L, "COMMENTED", "sha2", BOT_LOGIN)));
+
+    verifyDismissed(1L, "sha3");
+  }
+
+  @Test
+  void everyStandingBotApprovalIsDismissedNewestFirst() {
+    post(
+        "sha3",
+        heldOnCi(),
+        List.of(
+            review(1L, "APPROVED", "sha1", BOT_LOGIN), review(2L, "APPROVED", "sha2", BOT_LOGIN)));
+
+    var order = org.mockito.Mockito.inOrder(reviewClient);
+    order
+        .verify(reviewClient)
+        .dismissReview(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), eq(2L), anyString());
+    order
+        .verify(reviewClient)
+        .dismissReview(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), eq(1L), anyString());
+  }
+
+  @Test
+  void roundThatApprovesAgainKeepsTheEarlierApproval() {
+    var approving =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.APPROVE,
+            false,
+            "summary",
+            List.of(),
+            List.of(),
+            0);
+
+    post("sha2", approving, List.of(review(1L, "APPROVED", "sha1", BOT_LOGIN)));
+
+    verifyNothingDismissed();
+    assertEquals("APPROVE", postedReviewEvent());
+  }
+
+  @Test
+  void roundWithFindingsDismissesWhateverItsVerdictBecauseItPostsNoApproval() {
+    // A round with findings posts COMMENT, so even one carrying an APPROVE verdict (the verdict
+    // builder never pairs the two) leaves no approving review for the head.
+    post(
+        "sha2",
+        withFinding(ReviewState.APPROVE),
+        List.of(review(1L, "APPROVED", "sha1", BOT_LOGIN)));
+
+    verifyDismissed(1L, "sha2");
+    assertEquals("COMMENT", postedReviewEvent());
+  }
+
+  @Test
+  void onlyTheBotsOwnStandingApprovalIsEverDismissed() {
+    post(
+        "sha2",
+        heldOnCi(),
+        List.of(
+            review(8L, "APPROVED", "sha1", BOT_LOGIN),
+            review(1L, "APPROVED", "sha1", "maintainer"),
+            review(2L, "APPROVED", "sha1", "another-app[bot]"),
+            // A review from a since-deleted account serializes as user:null.
+            review(3L, "APPROVED", "sha1", null),
+            review(4L, "DISMISSED", "sha1", BOT_LOGIN),
+            review(5L, "COMMENTED", "sha1", BOT_LOGIN),
+            review(6L, "CHANGES_REQUESTED", "sha1", BOT_LOGIN),
+            review(7L, "PENDING", "sha1", BOT_LOGIN)));
+
+    verify(reviewClient, times(1))
+        .dismissReview(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), anyLong(), anyString());
+    verifyDismissed(8L, "sha2");
+    assertEquals("COMMENT", postedReviewEvent());
+  }
+
+  @Test
+  void refusedDismissalStillPostsTheReviewAndStopsAsking() {
+    when(reviewClient.dismissReview(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), anyLong(), anyString()))
+        .thenThrow(new WebApplicationException(403));
+
+    post(
+        "sha3",
+        heldOnCi(),
+        List.of(
+            review(1L, "APPROVED", "sha1", BOT_LOGIN), review(2L, "APPROVED", "sha2", BOT_LOGIN)));
+
+    // The newest approval is tried first; the refusal would meet the older one too.
+    verify(reviewClient, times(1))
+        .dismissReview(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), anyLong(), anyString());
+    verifyDismissed(2L, "sha3");
+    assertEquals("COMMENT", postedReviewEvent());
+  }
+
+  @Test
+  void dismissalThatFailsWithoutAnAnswerStillPostsTheReview() {
+    when(reviewClient.dismissReview(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), anyLong(), anyString()))
+        .thenThrow(new jakarta.ws.rs.ProcessingException("read timed out"));
+
+    post(
+        "sha2",
+        withFinding(ReviewState.REQUEST_CHANGES),
+        List.of(review(1L, "APPROVED", "sha1", BOT_LOGIN)));
+
+    verifyDismissed(1L, "sha2");
+    assertEquals("REQUEST_CHANGES", postedReviewEvent());
+  }
+
+  @Test
+  void firstRoundHeldOnCiThatPostsNoReviewStillDismissesTheEarlierApproval() {
+    // The summary comment stands in for this round's review, so nothing else would withdraw it.
+    var firstRoundHeldOnCi =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.COMMENT,
+            true,
+            "summary",
+            List.of(),
+            List.of(new ReviewResult.CiCheck("build", "check-run", "pending", null)),
+            0);
+
+    publisher.postReview(
+        new ReviewPublisher.PostReviewRequest(
+            "auth",
+            "o",
+            "r",
+            1,
+            "sha2",
+            firstRoundHeldOnCi,
+            new DiffLineResolver(Map.of()),
+            true,
+            List.of(),
+            "",
+            List.of(review(1L, "APPROVED", "sha1", BOT_LOGIN))));
+
+    verifyDismissed(1L, "sha2");
+    verify(reviewClient, never())
+        .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+  }
+
+  @Test
+  void dismissalMessageNamesTheHeadThatWasNotApproved() {
+    assertEquals(
+        "ThrillhouseBot withdrew this approval: its latest review, of sha2, did not approve the"
+            + " pull request.",
+        ReviewPublisher.approvalWithdrawnMessage("sha2"));
+  }
+
   @Test
   void reviewBodyNamingClosuresIsNotReadBackAsAPreviousFinding() {
     // The section names findings the round just closed, so a later round that falls back to the
