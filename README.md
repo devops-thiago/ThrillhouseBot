@@ -278,6 +278,15 @@ Create the GitHub App before starting the bot; its credentials go in `.env`.
      | java scripts/GenEnv.java --host <your-host>
    ```
 
+   For an app registered on another GitHub address, ask that GitHub for the
+   conversion and pass its web address, so the `.env` gets `GITHUB_URL`
+   (`gh` must be signed in there: `gh auth login --hostname <github-host>`):
+
+   ```bash
+   gh api --hostname <github-host> --method POST /app-manifests/<code>/conversions \
+     | java scripts/GenEnv.java --host <your-host> --github-url https://<github-host>
+   ```
+
 > Once the bot is running, `install.html` on its own URL
 > (`https://<your-host>/install.html`, or `http://localhost:8080/install.html`)
 > detects the URL and builds the manifest for you. It has the same two optional

@@ -5,14 +5,25 @@
 ///
 /// Requires Java 25 (compact source file, JEP 512). Without --host, a
 /// `<your-host>` placeholder is written for you to fill in.
+///
+/// For an app registered on GitHub Enterprise Server or GHE.com, ask that GitHub
+/// for the conversion and pass its web address, so the bot calls the same one:
+///
+///   gh api --hostname github.example.com --method POST /app-manifests/{code}/conversions \
+///     | java scripts/GenEnv.java --host thrillhousebot.example.com \
+///         --github-url https://github.example.com
 
 void main(String[] args) throws Exception {
   String host = null;
+  String githubUrl = null;
   for (int i = 0; i < args.length - 1; i++) {
     if ("--host".equals(args[i])) {
       host = args[i + 1];
+    } else if ("--github-url".equals(args[i])) {
+      githubUrl = args[i + 1].strip().replaceAll("/+$", "");
     }
   }
+  var githubUrlLine = githubUrl == null || githubUrl.isEmpty() ? "" : "GITHUB_URL=" + githubUrl + "\n";
   var dashboardUrl = "https://" + (host != null ? host : "<your-host>");
 
   var json = new String(System.in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
@@ -44,7 +55,7 @@ void main(String[] args) throws Exception {
       GITHUB_APP_ID=%s
       GITHUB_PRIVATE_KEY="%s"
       GITHUB_WEBHOOK_SECRET=%s
-
+      %s
       # --- AI / DeepSeek ---
       AI_API_KEY=
       AI_BASE_URL=https://api.deepseek.com/v1
@@ -70,7 +81,7 @@ void main(String[] args) throws Exception {
       # WEBSOCKET_KEEPALIVE_MS=25000
       """
           .formatted(
-              appId, pemOneLine, nullToEmpty(webhookSecret),
+              appId, pemOneLine, nullToEmpty(webhookSecret), githubUrlLine,
               nullToEmpty(clientId), nullToEmpty(clientSecret), dashboardUrl);
 
   java.nio.file.Files.writeString(java.nio.file.Path.of(".env"), env);
@@ -84,6 +95,9 @@ void main(String[] args) throws Exception {
       : "❌ missing — download from GitHub settings"));
   if (host == null) {
     IO.println("   Host        : ⚠️ no --host given — replace <your-host> in DASHBOARD_URL");
+  }
+  if (!githubUrlLine.isEmpty()) {
+    IO.println("   GitHub      : " + githubUrl);
   }
   IO.println("");
   IO.println("👉 Still needed: AI_API_KEY, DB_PASSWORD");
