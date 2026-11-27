@@ -17,6 +17,8 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import java.util.List;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
@@ -45,5 +47,49 @@ class SourceLineCodeTest {
       })
   void shouldKeepOnlyTheCodeOfALine(String line, String code) {
     assertEquals(code, SourceLineCode.of(line));
+  }
+
+  @Test
+  void aLiteralOrCommentOpenedOnOneLineRunsToTheLineThatClosesIt() {
+    assertEquals(
+        List.of("def f():", "", "", " ", "return 1"),
+        SourceLineCode.ofLines(
+            List.of(
+                "def f():",
+                "    \"\"\"Summary.",
+                "    Defaults to os.getenv(\"HOME\") when unset.",
+                "    \"\"\"",
+                "    return 1")));
+    assertEquals(
+        List.of("x = 1  ", "", " y = 2"),
+        SourceLineCode.ofLines(List.of("x = 1 /* was", "getenv(\"X\")", "*/ y = 2")));
+  }
+
+  @Test
+  void onlyALiteralsInterpolationsAreCodeOnItsInnerLines() {
+    assertEquals(
+        List.of("v = f", "a b ", " "),
+        SourceLineCode.ofLines(List.of("v = f\"\"\"", "text {a} ${b}", "\"\"\"")));
+    assertEquals(
+        List.of("v = ", "b ", " "),
+        SourceLineCode.ofLines(List.of("v = \"\"\"", "text {a} ${b}", "\"\"\"")));
+  }
+
+  @Test
+  void linesThatEndInsideALiteralOrCommentAreEachReadOnTheirOwn() {
+    // The opener may be the closer of a literal that began above the first line.
+    var lines = List.of("    \"\"\"", "    return getenv(\"X\")", "x = '''a''' /* b");
+
+    assertEquals(lines.stream().map(SourceLineCode::of).toList(), SourceLineCode.ofLines(lines));
+    assertEquals("return getenv(  )", SourceLineCode.ofLines(lines).get(1));
+  }
+
+  @Test
+  void linesThatStartInOneLiteralAndEndInAnotherAreBalancedAndMisread() {
+    // A known limit: nothing tells these two quotes from an opener and its closer.
+    assertEquals(
+        List.of("", "", " Next docstring."),
+        SourceLineCode.ofLines(
+            List.of("    \"\"\"", "    return getenv(\"X\")", "    \"\"\"Next docstring.")));
   }
 }

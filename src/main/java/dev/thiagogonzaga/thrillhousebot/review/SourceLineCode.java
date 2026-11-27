@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -24,6 +25,10 @@ import java.util.List;
  * interpolations, which are code: {@code ${...}}, {@code #{...}} and {@code \(...)} in any literal,
  * and a bare {@code {...}} only in an {@code f} or {@code $} literal (Python, C#). A quote with no
  * closing quote on the line, such as a Rust lifetime {@code 'static}, is code too.
+ *
+ * <p>{@link #of} reads one line on its own. {@link #ofLines} reads consecutive lines and carries a
+ * triple-quoted literal or a block comment from the line that opens it to the line that closes it,
+ * so a docstring's inner lines are text.
  */
 final class SourceLineCode {
 
@@ -43,20 +48,96 @@ final class SourceLineCode {
   /** Characters of a string-literal prefix, such as Python's {@code rf} or C#'s {@code $@}. */
   private static final String LITERAL_PREFIX = "fFrRbBuU$@";
 
+  /**
+   * What a line leaves open past its end: the {@code closer} that ends it, whether it is a string
+   * {@code literal} rather than a comment, and whether a bare {@code {...}} interpolates in it.
+   */
+  private record Open(String closer, boolean literal, boolean bareBraces) {}
+
+  /** The code of one line and what the line leaves open, {@code null} when nothing. */
+  private record Read(String code, Open open) {}
+
   private SourceLineCode() {}
 
   /** {@code line} without its comments and string-literal text. */
   static String of(String line) {
+    return read(line).code();
+  }
+
+  /**
+   * The code of each of {@code lines}, consecutive lines of one file. A triple-quoted literal or a
+   * block comment opened on one line runs to the line that closes it: the lines between are text,
+   * and only a literal's interpolations on them are code.
+   *
+   * <p>The lines may start or end inside such a literal or comment, as a hunk does, and then what
+   * reads as its opener may be its closer. So when something is still open after the last line,
+   * every line is read on its own, as {@link #of} reads it. Lines that start inside one literal and
+   * end inside another are balanced and still misread: the code between the two is taken for text.
+   */
+  static List<String> ofLines(List<String> lines) {
+    var codes = new ArrayList<String>(lines.size());
+    Open open = null;
+    for (var line : lines) {
+      var read = open == null ? read(line) : resume(line, open);
+      codes.add(read.code());
+      open = read.open();
+    }
+    return open == null ? codes : lines.stream().map(SourceLineCode::of).toList();
+  }
+
+  private static Read read(String line) {
     var first = firstNonBlank(line);
     if (first == line.length() || isCommentLine(line.substring(first))) {
-      return "";
+      return new Read("", null);
     }
     var code = new StringBuilder(line.length());
+    Open open = null;
     var i = first;
     while (i < line.length()) {
-      i = next(line, first, i, code);
+      var next = next(line, first, i, code);
+      if (next == line.length()) {
+        open = leftOpenAt(line, i);
+      }
+      i = next;
     }
-    return code.toString();
+    return new Read(code.toString(), open);
+  }
+
+  /**
+   * Reads a line that starts inside {@code open}: up to the closer only a literal's interpolations
+   * are code, and what follows the closer is read as a line of its own.
+   */
+  private static Read resume(String line, Open open) {
+    var end = line.indexOf(open.closer());
+    var textEnd = end < 0 ? line.length() : end;
+    // The space stands for the character before the line, which no interpolation starts on.
+    var inside =
+        open.literal() ? interpolations(' ' + line, 1, textEnd + 1, open.bareBraces()) : "";
+    if (end < 0) {
+      return new Read(inside, open);
+    }
+    var after = end + open.closer().length();
+    var rest = read(" ".repeat(after) + line.substring(after));
+    return new Read(inside + ' ' + rest.code(), rest.open());
+  }
+
+  /**
+   * What the token at {@code i}, which runs to the line's end, leaves open: a block comment or a
+   * triple-quoted literal with no closer on the line. {@code null} for any other token.
+   */
+  private static Open leftOpenAt(String line, int i) {
+    for (var comment : BLOCK_COMMENTS) {
+      if (comment.openToLineEnd()
+          && line.startsWith(comment.opener(), i)
+          && line.indexOf(comment.closer(), i + comment.opener().length()) < 0) {
+        return new Open(comment.closer(), false, false);
+      }
+    }
+    var delimiter = delimiterAt(line, i);
+    var bareBraces = bareBracesInterpolate(line, i);
+    return delimiter.length() == 3 && stringEnd(line, i, delimiter, bareBraces) < 0
+        ? new Open(delimiter, true, bareBraces)
+        : null;
   }
 
   /** Appends the token at {@code i} and returns where the next one starts. */

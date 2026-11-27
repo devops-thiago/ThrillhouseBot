@@ -442,15 +442,27 @@ public class ConfigKeyContextResolver {
   }
 
   private static boolean readsEnvironment(String patch) {
+    // Added and context lines only: a hunk header's trailing section text is neither. They are
+    // read a hunk at a time, the consecutive lines of the new file, so a docstring or a block
+    // comment is followed across its lines: a read named only in a comment or a string literal is
+    // not made, so it would spend a fetch slot.
+    var hunk = new ArrayList<String>();
     for (var line : patch.split("\n", -1)) {
-      // Added and context lines only: a hunk header's trailing section text is neither. A read
-      // named only in a comment or a string literal is not made, so it would spend a fetch slot.
-      if ((line.startsWith("+") || line.startsWith(" "))
-          && readsEnvironmentIn(SourceLineCode.of(line.substring(1)))) {
-        return true;
+      if (line.startsWith("@@")) {
+        if (readsEnvironment(hunk)) {
+          return true;
+        }
+        hunk.clear();
+      } else if (line.startsWith("+") || line.startsWith(" ")) {
+        hunk.add(line.substring(1));
       }
     }
-    return false;
+    return readsEnvironment(hunk);
+  }
+
+  private static boolean readsEnvironment(List<String> hunkLines) {
+    return SourceLineCode.ofLines(hunkLines).stream()
+        .anyMatch(ConfigKeyContextResolver::readsEnvironmentIn);
   }
 
   private static boolean readsEnvironmentIn(String code) {
