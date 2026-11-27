@@ -195,6 +195,11 @@ cannot resolve its review threads.
 - **A failed read of a pull request's reviews is logged as a warning**: it was a debug line that
   read as a normal first review. Reaching the limit of 1,000 reviews read per pull request is logged
   too.
+- **A review does not approve when no earlier review of the pull request can be read**: when the
+  stored results of every earlier review were missing or unreadable, a follow-up review had nothing
+  to check them against and approved if it found nothing new. It now ends as `COMMENT`, and the
+  summary, the review body and the check run say that the earlier reviews could not be read. A
+  first review, and a pull request with at least one readable earlier review, are unchanged.
 
 ### Security
 
