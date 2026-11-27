@@ -141,11 +141,13 @@ public final class ChangeSymbols {
     }
     var names = new LinkedHashSet<String>();
     var literals = new LiteralTracker();
+    var inHunk = false;
     for (var line : patch.lines().toList()) {
-      var added = isAddedLine(line);
+      var added = isAddedLine(line, inHunk);
       if (line.startsWith("@@")) {
         // Hunks are disjoint: what lies between them is unknown, so each starts in code.
         literals = new LiteralTracker();
+        inHunk = true;
       } else if (added || line.startsWith(" ")) {
         var code = line.substring(1);
         var inCode = literals.inCode();
@@ -176,15 +178,18 @@ public final class ChangeSymbols {
     var names = new LinkedHashSet<String>();
     var enclosing = "";
     var literals = new LiteralTracker();
+    var inHunk = false;
     for (var line : patch.lines().toList()) {
+      var added = isAddedLine(line, inHunk);
       if (line.startsWith("@@")) {
         enclosing = headerName(line);
         literals = new LiteralTracker();
-      } else if (isAddedLine(line) || line.startsWith(" ")) {
+        inHunk = true;
+      } else if (added || line.startsWith(" ")) {
         var declared = codeDeclaration(literals, line.substring(1));
         if (!declared.isEmpty()) {
           enclosing = declared;
-        } else if (isAddedLine(line) && !enclosing.isEmpty()) {
+        } else if (added && !enclosing.isEmpty()) {
           names.add(enclosing);
         }
       }
@@ -209,8 +214,13 @@ public final class ChangeSymbols {
     return inCode ? declaredName(code) : "";
   }
 
-  private static boolean isAddedLine(String line) {
-    return line.startsWith("+") && !line.startsWith("+++");
+  /**
+   * Whether {@code line} is an added line. Inside a hunk every {@code +} line is one, {@code
+   * +++retries;} included: the marker and then {@code ++retries;}. Before the first hunk header a
+   * {@code +++} line is the file header.
+   */
+  static boolean isAddedLine(String line, boolean inHunk) {
+    return line.startsWith("+") && (inHunk || !line.startsWith("+++"));
   }
 
   /** The name one added line declares, or {@code ""}. */
