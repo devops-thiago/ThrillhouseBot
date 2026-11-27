@@ -175,12 +175,33 @@ test('fetchSigningKeys returns key type and body, and fails on an HTTP error', a
     return { ok: true, json: async () => [{ key: `${maintainer.key} comment` }, {}] };
   };
   assert.deepEqual(await fetchSigningKeys('alice', 'token', ok), [maintainer.key, '']);
-  assert.deepEqual(calls, [['https://api.github.com/users/alice/ssh_signing_keys?per_page=100', 'Bearer token']]);
+  assert.deepEqual(calls, [['https://api.github.com/users/alice/ssh_signing_keys?per_page=100&page=1', 'Bearer token']]);
   await fetchSigningKeys('alice', '', async (url, options) => {
     assert.equal(options.headers.authorization, undefined);
     return { ok: true, json: async () => [] };
   });
   await assert.rejects(fetchSigningKeys('alice', 'token', async () => ({ ok: false, status: 404 })), /HTTP 404/);
+});
+
+test('fetchSigningKeys reads every page of an account with more than one', async () => {
+  const pages = { 1: Array.from({ length: 100 }, (_, n) => ({ key: `ssh-ed25519 first${n}` })), 2: [{ key: `${maintainer.key} late` }] };
+  const urls = [];
+  const paged = async (url) => {
+    urls.push(url);
+    return { ok: true, json: async () => pages[new URL(url).searchParams.get('page')] };
+  };
+  const keys = await fetchSigningKeys('alice', 'token', paged);
+  assert.equal(keys.length, 101);
+  assert.equal(keys.at(-1), maintainer.key);
+  assert.deepEqual(urls.map((url) => new URL(url).searchParams.get('page')), ['1', '2']);
+});
+
+test('fetchSigningKeys fails, rather than cut the list, when an account never runs out of pages', async () => {
+  const full = Array.from({ length: 100 }, () => ({ key: 'ssh-ed25519 same' }));
+  let calls = 0;
+  const endless = async () => { calls++; return { ok: true, json: async () => full }; };
+  await assert.rejects(fetchSigningKeys('alice', 'token', endless), /more than 1000 signing keys/);
+  assert.equal(calls, 10);
 });
 
 test('main writes the tag and commit for the workflow, or an error annotation', async () => {

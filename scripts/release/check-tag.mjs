@@ -40,13 +40,24 @@ export class Git {
   }
 }
 
-/** Reads the signing keys GitHub publishes for an account. */
+const SIGNING_KEYS_PER_PAGE = 100;
+const SIGNING_KEY_PAGES = 10;
+
+/** Reads the signing keys GitHub publishes for an account, page by page. */
 export async function fetchSigningKeys(login, token, fetchImpl = fetch) {
   const headers = { accept: 'application/vnd.github+json', 'user-agent': 'release-check-tag' };
   if (token) headers.authorization = `Bearer ${token}`;
-  const response = await fetchImpl(`https://api.github.com/users/${login}/ssh_signing_keys?per_page=100`, { headers });
-  if (!response.ok) throw new Error(`Reading the signing keys of ${login} failed with HTTP ${response.status}`);
-  return (await response.json()).map((entry) => String(entry.key ?? '').trim().split(/\s+/).slice(0, 2).join(' '));
+  const keys = [];
+  // Every page is read: a key past the first page would otherwise be missing from the allowed
+  // signers and its tag refused as unsigned.
+  for (let page = 1; page <= SIGNING_KEY_PAGES; page++) {
+    const response = await fetchImpl(`https://api.github.com/users/${login}/ssh_signing_keys?per_page=${SIGNING_KEYS_PER_PAGE}&page=${page}`, { headers });
+    if (!response.ok) throw new Error(`Reading the signing keys of ${login} failed with HTTP ${response.status}`);
+    const entries = await response.json();
+    keys.push(...entries.map((entry) => String(entry.key ?? '').trim().split(/\s+/).slice(0, 2).join(' ')));
+    if (entries.length < SIGNING_KEYS_PER_PAGE) return keys;
+  }
+  throw new Error(`${login} lists more than ${SIGNING_KEY_PAGES * SIGNING_KEYS_PER_PAGE} signing keys; the list is not read past that`);
 }
 
 /** The project's own version: the `<version>` directly under `<project>`, not a parent's or a dependency's. */

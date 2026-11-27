@@ -73,13 +73,29 @@ test('CODEOWNERS starts with a default owner for every path', () => {
   assert.equal(patterns.filter((line) => line.startsWith('* ')).length, 1);
 });
 
+/** The restore keys of a workflow: the lines that hold a cache key prefix and nothing else. */
+const restoreKeysIn = (text) => text.split('\n').map((line) => line.trim().replace(/^restore-keys:\s*/, '')).filter((line) => line.startsWith('${{ runner.os }}'));
+
+/** A restore key that ends at `-m2-` matches the Maven cache of every job that shares what precedes it. */
+const sharedMavenPrefixes = (text) => restoreKeysIn(text).filter((key) => key.endsWith('-m2-'));
+
 test('no Maven cache is restored through a prefix shared by every job', () => {
   for (const path of workflows) {
-    const keys = [...read(path).matchAll(/^\s+(\$\{\{ runner\.os \}\}\S*)\s*$/gm)].map((match) => match[1]);
-    for (const key of keys) {
-      assert.doesNotMatch(key, /-m2-$/, `${path}: restore key ${key} matches the Maven cache of any job`);
-    }
+    assert.deepEqual(sharedMavenPrefixes(read(path)), [], `${path}: a restore key matches the Maven cache of any job`);
   }
+});
+
+test('the shared Maven prefix is found in a key with a second expression too', () => {
+  const text = [
+    '          restore-keys: ${{ runner.os }}-sonar',
+    '          restore-keys: ${{ runner.os }}-${{ matrix.arch }}-m2-',
+    '          restore-keys: |',
+    '            ${{ runner.os }}-m2-',
+    '            ${{ runner.os }}-${{ matrix.arch }}-m2-  ',
+    '            ${{ runner.os }}-${{ matrix.arch }}-m2-native-',
+    '            ${{ runner.os }}-m2-release-',
+  ].join('\n');
+  assert.deepEqual(sharedMavenPrefixes(text), ['${{ runner.os }}-${{ matrix.arch }}-m2-', '${{ runner.os }}-m2-', '${{ runner.os }}-${{ matrix.arch }}-m2-']);
 });
 
 test('pull request runs of CI never save the Maven cache', () => {
