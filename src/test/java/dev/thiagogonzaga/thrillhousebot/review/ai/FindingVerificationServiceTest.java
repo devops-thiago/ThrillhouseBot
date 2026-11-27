@@ -31,7 +31,9 @@ import dev.thiagogonzaga.thrillhousebot.review.BlockingStrictness;
 import dev.thiagogonzaga.thrillhousebot.review.Finding;
 import dev.thiagogonzaga.thrillhousebot.review.VerificationCoverage;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -723,6 +725,87 @@ class FindingVerificationServiceTest {
     assertEquals(1, result.findings().size());
     assertEquals("critical", result.findings().get(0).risk());
     assertEquals("medium", result.findings().get(0).confidence());
+  }
+
+  private Map<String, String> outcomesOf(ReviewResponse original, Result<String> answer) {
+    when(verifier.verify(
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(answer);
+    var outcomes = new HashMap<String, String>();
+
+    service.verify(
+        SESSION,
+        original,
+        "",
+        "diff",
+        "stack",
+        "",
+        new FindingVerificationService.FindingEvidence(
+            FindingVerificationService.CitedLocations.NONE,
+            FindingVerificationService.ContextEvidence.NONE,
+            FindingVerificationService.FailingChecks.NONE,
+            (finding, outcome) -> outcomes.put(finding.title(), outcome)),
+        coverage -> {});
+    return outcomes;
+  }
+
+  @Test
+  void recordsWhatTheVerifierDidWithEachFindingItKept() {
+    var claims =
+        new ReviewResponse.Finding(
+            "low",
+            "low",
+            "src/Main.java",
+            10,
+            "Claim",
+            "The loop is off by one. The build passes anyway.",
+            "old",
+            "new");
+    var original =
+        response(
+            finding("medium", "low", "Plain"),
+            finding("high", "medium", "Lowered"),
+            finding("low", "low", "Dropped fix"),
+            finding("low", "low", "Replaced fix"),
+            claims,
+            finding("low", "low", "Rejected"));
+
+    var outcomes =
+        outcomesOf(
+            original,
+            aiOk(
+                """
+                {"verdicts": [
+                  {"id": 1, "verdict": "confirmed"},
+                  {"id": 2, "verdict": "downgraded", "risk": "low", "confidence": "low"},
+                  {"id": 3, "verdict": "confirmed", "suggestion": "drop"},
+                  {"id": 4, "verdict": "confirmed", "suggestion": "replace", "suggestion_new": "better"},
+                  {"id": 5, "verdict": "confirmed", "cut": ["The build passes anyway."]},
+                  {"id": 6, "verdict": "rejected"}
+                ]}"""));
+
+    assertEquals(
+        Map.of(
+            "Plain", "kept by the second pass",
+            "Lowered", "kept by the second pass at a lower grade",
+            "Dropped fix", "kept by the second pass, suggestion removed",
+            "Replaced fix", "kept by the second pass, suggestion replaced",
+            "Claim", "kept by the second pass, a claim removed"),
+        outcomes);
+  }
+
+  @Test
+  void recordsTheVerdictsSalvagedFromACutAnswer() {
+    var outcomes =
+        outcomesOf(
+            response(finding("low", "low", "Closed"), finding("low", "low", "Cut off")),
+            aiTruncated(
+                """
+                {"verdicts": [
+                  {"id": 1, "verdict": "confirmed"},
+                  {"id": 2, "verdict": "confi"""));
+
+    assertEquals(Map.of("Closed", "kept by the second pass"), outcomes);
   }
 
   @Test
