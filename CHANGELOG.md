@@ -198,60 +198,6 @@ cannot resolve its review threads.
   (#1314), with the same tokens and to `GITHUB_API_URL`. A job log's address now costs three
   requests instead of one, as the repository and the job are read first. These calls follow
   `HTTP_CONNECT_TIMEOUT` and `HTTP_REQUEST_TIMEOUT` rather than the REST client's settings.
-
-
-### Fixed
-
-- **A clear or decline comment says what it matched** (#1463): the reply lists the open findings
-  the comment names by `path:line` and title, and gives the title on record for a `path:line` named
-  with another one, where it used to promise to close whatever was named even when nothing was. A
-  title containing a backtick, `<` or `|` now also matches as the summary's source escapes it.
-- **GitHub Enterprise Server can be used.** The bot called `https://api.github.com` and linked to
-  `https://github.com` whatever the deployment: the REST and GraphQL clients, the GitHub App
-  extension, dashboard sign-in and sign-out, pull request links in notifications and learnings, and
-  the App install page were all fixed to github.com. `GITHUB_URL`, `GITHUB_API_URL` and
-  `GITHUB_GRAPHQL_URL` now set the web, REST and GraphQL endpoints (for example
-  `https://ghes.example.com`, `https://ghes.example.com/api/v3` and
-  `https://ghes.example.com/api/graphql`), and `GITHUB_OAUTH_URL` follows `GITHUB_URL` unless set.
-  The defaults are unchanged.
-- **A refused thread resolve says why** (#1471): GitHub's reason is logged instead of being
-  discarded, and a missing permission is named in the reply to a `resolved` directive and to
-  `/resolve`, which no longer answers that there is nothing to resolve.
-- **Dashboard links and issue URLs follow `GITHUB_URL`** (#1491): the two pull request links in the
-  dashboard's session history pointed at `github.com` whatever was configured, and a linked issue
-  written as a full URL was only recognised there. The session payloads now carry
-  `pullRequestUrl`, and only issue URLs on the configured web address are read.
-- **A one-line private key no longer stops the application at start** (#1314): the extension, which
-  reads `GITHUB_PRIVATE_KEY` too, rejected the form `.env.example` asks for (one line with literal
-  `\n` escapes) and a key without its PEM header and footer. Every key the start-up check accepts
-  is now handed to the extension in a form it can read, and a padded `GITHUB_APP_ID` is stripped
-  for it as the bot's own signer did.
-- **The summary comment follows a verdict held on CI** (#1462): when CI turns green and the held
-  approval is posted, the summary no longer says it cannot be approved or lists the checks as
-  pending. While the hold stays, its table shows the checks' current state. The Agent next steps
-  section, when on, follows it too. A summary posted before this change is not rewritten.
-- **A push inside the automatic review window is reviewed when the window closes**: a push that
-  arrived inside `AUTO_REVIEW_MIN_INTERVAL` was skipped and never reviewed, so an approval of the
-  previous commit could stay on code the bot had not read. The bot now keeps the latest pushed head
-  and reviews it when the window closes. Only a reopen or a repeated ready-for-review of the commit
-  just reviewed is skipped. The waiting review is held in memory, so a restart loses it.
-- **A failed read of a pull request's reviews is logged as a warning**: it was a debug line that
-  read as a normal first review. Reaching the limit of 1,000 reviews read per pull request is logged
-  too.
-- **A re-raised finding that quotes unchanged code is a repeat, not a gap (#1397)**: a finding
-  raised again after its fix was kept as "a gap the fix left" even when its quote sat only on lines
-  the pull request did not change. It is now dropped as a repeat of the answered finding.
-- **An added line that starts with `++` is read as added (#1396)**: a line such as `++i;` was
-  mistaken for the diff's file header when the bot collected changed names and configuration keys,
-  so what it declared was missed.
-- **A suggestion's new code loses a copied line number (#1364)**: when the quoted old code kept its
-  diff markers and a new line dropped them, the copied line number stayed in the suggestion.
-- **An environment read named in a docstring is not a read (#1473)**: a read named inside a
-  multi-line docstring or block comment counted as one when the bot chose which changed files to
-  fetch for configuration-key context.
-
-### Security
-
 - **An approval is withdrawn when a later review does not approve**: the bot approved a pull
   request, more commits were pushed, and the review of the new head ended as `COMMENT` (findings,
   an earlier finding still open, a CI hold, a partly reviewed diff). GitHub goes on counting an
@@ -269,23 +215,23 @@ cannot resolve its review threads.
 - **An approval is withdrawn when commits are pushed, and when a later review does not approve**:
   the bot approved a pull request and more commits were pushed. The approval of the old head kept
   satisfying a required-review rule for code the bot had not approved: until the new head was
-  reviewed, for good when it was not (a draft, a filtered or paused pull request, a failed run),
-  and even after a review that ended as `COMMENT` (findings, an earlier finding still open, a CI
-  hold, a partly reviewed diff), because GitHub goes on counting an approval after its author
-  posts a comment review. The bot now dismisses its approvals of earlier commits as soon as the
-  push arrives (or the pull request is reopened on another commit), without a model call and whether or not the new head will be reviewed, with a
-  message saying commits were pushed after the approval and naming the new head. A review that
-  does not end in an approval also dismisses every approval the bot still has before it posts,
-  with a message naming the head it reviewed. Only the bot's own reviews are dismissed. A review
-  that approves posts a new approval, so a pull request that stays clean shows a dismissal and a
-  new approval for each push; a force-push back to the approved commit dismisses nothing. Each
-  push costs one request to list the pull request's reviews. The dismissal uses the
-  `Pull requests: Read & write` permission the App already has. On a protected branch GitHub may
-  refuse it unless the App is allowed to dismiss reviews there (the rule's "Restrict who can
-  dismiss pull request reviews" list): the bot then logs a warning, reviews as usual and the old
+  reviewed, for good when it was not (a draft, a filtered or paused pull request, a failed run), and
+  even after a review that ended as `COMMENT` (findings, an earlier finding still open, a CI hold, a
+  partly reviewed diff), because GitHub goes on counting an approval after its author posts a
+  comment review. The bot now dismisses its approvals of earlier commits as soon as the push arrives
+  (or the pull request is reopened on another commit), without a model call and whether or not the
+  new head will be reviewed, with a message saying commits were pushed after the approval and naming
+  the new head. A review that does not end in an approval also dismisses every approval the bot
+  still has before it posts, with a message naming the head it reviewed. Only the bot's own reviews
+  are dismissed. A review that approves posts a new approval, so a pull request that stays clean
+  shows a dismissal and a new approval for each push; a force-push back to the approved commit
+  dismisses nothing. Each push costs one request to list the pull request's reviews. The dismissal
+  uses the `Pull requests: Read & write` permission the App already has. On a protected branch
+  GitHub may refuse it unless the App is allowed to dismiss reviews there (the rule's "Restrict who
+  can dismiss pull request reviews" list): the bot then logs a warning, reviews as usual and the old
   approval stays. Keep "Dismiss stale pull request approvals when new commits are pushed" on
-  wherever the bot's approval counts, for a push the bot never hears about or cannot act on.
-  Affects every release up to 0.9.3.
+  wherever the bot's approval counts, for a push the bot never hears about or cannot act on. Affects
+  every release up to 0.9.3.
 - **Only someone with write access can get a finding closed or declined.** A reply on a finding's
   thread was shown to the model whoever wrote it, and a finding the model then reported as
   declined (`justified`) no longer held the approval, so a reply from the pull request's author
