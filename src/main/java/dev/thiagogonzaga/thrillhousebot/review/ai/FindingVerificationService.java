@@ -875,7 +875,7 @@ public class FindingVerificationService {
         return markUnscreened(screened);
       }
       var verification = parseOrSalvage(raw, screened.findings());
-      var applied = apply(screened, verification);
+      var applied = apply(screened, verification, evidence.outcomes());
       // Accepted only after apply() succeeded: the fail-open catch below records (N, 0) for any
       // failure, so recording before it could double this attempt's candidates if apply threw.
       coverageSink.accept(
@@ -884,7 +884,7 @@ public class FindingVerificationService {
               (int) candidatesCovered(verification.verdicts(), screened.findings())));
       return applied;
     } catch (AiResponseTruncatedException e) {
-      return salvageTruncatedVerdicts(screened, e, coverageSink);
+      return salvageTruncatedVerdicts(screened, e, evidence.outcomes(), coverageSink);
     } catch (IOException | RuntimeException e) {
       Log.warnf(
           e,
@@ -946,6 +946,7 @@ public class FindingVerificationService {
   private ReviewResponse salvageTruncatedVerdicts(
       ReviewResponse screened,
       AiResponseTruncatedException e,
+      Outcomes outcomes,
       Consumer<VerificationCoverage> coverageSink) {
     var candidates = screened.findings().size();
     var salvaged =
@@ -961,7 +962,7 @@ public class FindingVerificationService {
         "Finding verification was cut at the model's response-length cap; salvaged %d verdict(s)"
             + " covering %d of %d candidate finding(s) — the remaining %d stay unverified. %s",
         salvaged.size(), verified, candidates, candidates - verified, e.getMessage());
-    var applied = apply(screened, new VerificationResponse(salvaged));
+    var applied = apply(screened, new VerificationResponse(salvaged), outcomes);
     coverageSink.accept(new VerificationCoverage(candidates, (int) verified));
     return applied;
   }
@@ -1923,7 +1924,18 @@ public class FindingVerificationService {
    * cannot look up — and because they are charged to one character budget.
    */
   public record FindingEvidence(
-      CitedLocations citedLocations, ContextEvidence contextEvidence, FailingChecks failingChecks) {
+      CitedLocations citedLocations,
+      ContextEvidence contextEvidence,
+      FailingChecks failingChecks,
+      Outcomes outcomes) {
+
+    /** Evidence whose caller keeps no account of the verdicts. */
+    public FindingEvidence(
+        CitedLocations citedLocations,
+        ContextEvidence contextEvidence,
+        FailingChecks failingChecks) {
+      this(citedLocations, contextEvidence, failingChecks, Outcomes.NONE);
+    }
 
     /** Attaches nothing, the honest default for a caller that resolved no evidence. */
     public static final FindingEvidence NONE =
@@ -1933,6 +1945,17 @@ public class FindingVerificationService {
     public FindingEvidence(CitedLocations citedLocations, ContextEvidence contextEvidence) {
       this(citedLocations, contextEvidence, FailingChecks.NONE);
     }
+  }
+
+  /** Takes each verdict that kept a finding, for the review's account of it (#1435). */
+  @FunctionalInterface
+  public interface Outcomes {
+
+    /** Keeps no account. */
+    Outcomes NONE = (finding, outcome) -> {};
+
+    /** What the verifier did with {@code finding}, which it kept, as a fixed phrase. */
+    void record(ReviewResponse.Finding finding, String outcome);
   }
 
   /**
@@ -1959,7 +1982,8 @@ public class FindingVerificationService {
     return mapper.writerWithDefaultPrettyPrinter().writeValueAsString(candidates);
   }
 
-  ReviewResponse apply(ReviewResponse response, VerificationResponse verification) {
+  private ReviewResponse apply(
+      ReviewResponse response, VerificationResponse verification, Outcomes outcomes) {
     var named = namedCandidates(verification.verdicts(), response.findings());
     var byId = byCandidateId(verification.verdicts(), named);
     logUnmatched(verification.verdicts(), named);
@@ -1986,11 +2010,14 @@ public class FindingVerificationService {
           downgraded++;
           var revision = FindingRevisions.revised(finding, verdict);
           revised += revision == finding ? 0 : 1;
-          kept.add(downgrade(revision, verdict));
+          var lowered = downgrade(revision, verdict);
+          outcomes.record(finding, outcomeOf(finding, lowered));
+          kept.add(lowered);
         }
         case "confirmed" -> {
           var revision = FindingRevisions.revised(finding, verdict);
           revised += revision == finding ? 0 : 1;
+          outcomes.record(finding, outcomeOf(finding, revision));
           kept.add(revision);
         }
         // Unknown decision, or no verdict at all — fail open and keep the finding, but not as a
@@ -2017,6 +2044,23 @@ public class FindingVerificationService {
    * Logs each verdict {@link #byCandidateId} read under another candidate's number, or left out
    * because its echoed key names no candidate (#1322, #1402), so neither happens unseen.
    */
+  /** What changed between a finding as raised and as the verifier kept it. */
+  private static String outcomeOf(ReviewResponse.Finding raised, ReviewResponse.Finding kept) {
+    var outcome = new StringBuilder("kept by the second pass");
+    if (!Objects.equals(raised.risk(), kept.risk())
+        || !Objects.equals(raised.confidence(), kept.confidence())) {
+      outcome.append(" at a lower grade");
+    }
+    if (!Objects.equals(raised.suggestionNew(), kept.suggestionNew())) {
+      outcome.append(
+          kept.suggestionNew() == null ? ", suggestion removed" : ", suggestion replaced");
+    }
+    if (!Objects.equals(raised.description(), kept.description())) {
+      outcome.append(", a claim removed");
+    }
+    return outcome.toString();
+  }
+
   private static void logUnmatched(List<VerificationResponse.Verdict> verdicts, int[] named) {
     for (var i = 0; i < verdicts.size(); i++) {
       var verdict = verdicts.get(i);
