@@ -545,7 +545,9 @@ events rewrite the CI lines of the summary comment: the checks still holding it,
 once it is posted.
 
 A follow-up round with no new findings but earlier findings still open says how many remain
-unresolved instead of calling the PR clean. Findings are posted as individual inline comments, with
+unresolved instead of calling the PR clean, and lists them: one row per finding counted, by
+`path:line` and title, linked to its thread or marked as having none (`OpenFindingNames`). With the
+delta section on, a review that raises findings lists the open ones too. Findings are posted as individual inline comments, with
 a committable suggestion where the range resolves. A comment GitHub refuses is retried without the
 suggestion, then as a file-level comment. Low-confidence medium and low findings go to the
 summary's "Things to double-check" list instead. At most `thrillhousebot.review.max-review-comments` (default 50)

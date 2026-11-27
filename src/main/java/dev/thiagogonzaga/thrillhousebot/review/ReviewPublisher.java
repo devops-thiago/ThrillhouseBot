@@ -18,10 +18,12 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.github.CommentBodyLimit;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubApiError;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubGraphQLException;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubUrls;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubWriteBudget;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
@@ -61,6 +63,12 @@ public class ReviewPublisher {
   private static final String CI_PENDING = "pending";
   private static final String REVIEW_PENDING = "PENDING";
   private static final String REVIEW_APPROVED = "APPROVED";
+
+  /**
+   * Room the still-open list leaves under {@link CommentBodyLimit#MAX_LENGTH} for what the write
+   * path puts ahead of a review body, such as {@link #REVIEW_REFUSED_NOTE}.
+   */
+  private static final int BODY_RESERVE = 2_000;
 
   private final GitHubReviewClient reviewClient;
   private final GitHubCommentClient commentClient;
@@ -547,6 +555,8 @@ public class ReviewPublisher {
    * @param priorReviews the PR's reviews as this run's context load fetched them, oldest first; the
    *     summary-only skip reads the bot's latest one to tell whether this head is already approved
    *     (#1144). Empty when the fetch failed, which reads as "not approved", so the review posts.
+   * @param inlineComments the PR's inline comments as this run's context load fetched them, which
+   *     the still-open list links its rows to (#1436)
    */
   record PostReviewRequest(
       String auth,
@@ -560,10 +570,41 @@ public class ReviewPublisher {
       List<ReviewResponse.Finding> previousFindings,
       String followUpDeltaSection,
       List<GitHubReviewClient.ReviewResponse> priorReviews,
-      Function<Finding, String> basis) {
+      Function<Finding, String> basis,
+      List<GitHubReviewClient.PullRequestComment> inlineComments) {
     PostReviewRequest {
       followUpDeltaSection = java.util.Objects.requireNonNullElse(followUpDeltaSection, "");
       priorReviews = List.copyOf(java.util.Objects.requireNonNullElse(priorReviews, List.of()));
+      inlineComments = List.copyOf(java.util.Objects.requireNonNullElse(inlineComments, List.of()));
+    }
+
+    PostReviewRequest(
+        String auth,
+        String owner,
+        String repo,
+        int prNumber,
+        String commitSha,
+        ReviewResult result,
+        DiffLineResolver lineResolver,
+        boolean summaryPosted,
+        List<ReviewResponse.Finding> previousFindings,
+        String followUpDeltaSection,
+        List<GitHubReviewClient.ReviewResponse> priorReviews,
+        Function<Finding, String> basis) {
+      this(
+          auth,
+          owner,
+          repo,
+          prNumber,
+          commitSha,
+          result,
+          lineResolver,
+          summaryPosted,
+          previousFindings,
+          followUpDeltaSection,
+          priorReviews,
+          basis,
+          List.of());
     }
 
     PostReviewRequest(
@@ -772,6 +813,7 @@ public class ReviewPublisher {
     appendPreviousOutcome(bodyParts, result, post);
     bodyParts.addAll(reopenedDeclineNotes(result));
     appendReviewNotice(bodyParts, result, post);
+    appendOpenList(bodyParts, result, post, inline.threaded());
     if (pending.isPresent()) {
       // Inline threads landed ({@code inline.posted() > 0} — the branch above returned otherwise).
       // Ends publishReview; the orchestrator still runs check-run conclusion, thread resolution
@@ -803,7 +845,7 @@ public class ReviewPublisher {
    * finding the round did not thread, then the previous-round outcome, the reopened declines and
    * the coverage notice.
    */
-  private static List<String> listingBodyParts(
+  private List<String> listingBodyParts(
       List<Finding> unpublished,
       InlineCommentResult inline,
       ReviewResult result,
@@ -816,7 +858,40 @@ public class ReviewPublisher {
     appendPreviousOutcome(parts, result, post);
     parts.addAll(reopenedDeclineNotes(result));
     appendReviewNotice(parts, result, post);
+    appendOpenList(parts, result, post, List.of());
     return parts;
+  }
+
+  /**
+   * Names the still-open findings under a review that raised some, when its delta section states
+   * how many there are (#1436). It goes last, so the length limit can only cut this list.
+   */
+  private void appendOpenList(
+      List<String> bodyParts,
+      ReviewResult result,
+      PostReviewRequest post,
+      List<Finding> postedNow) {
+    if (post.followUpDeltaSection().isBlank()) {
+      return;
+    }
+    var used = String.join("\n\n", bodyParts).length();
+    var section = openList(result, post, postedNow, used);
+    if (!section.isEmpty()) {
+      bodyParts.add(section.strip());
+    }
+  }
+
+  /** {@link OpenFindingNames#section}, sized to what a body of {@code used} characters leaves. */
+  private String openList(
+      ReviewResult result, PostReviewRequest post, List<Finding> postedNow, int used) {
+    return OpenFindingNames.section(
+        PromptLabelScrubber.scrubFindings(result.openPreviousFindings()),
+        new OpenFindingNames.Threads(
+            post.inlineComments(),
+            postedNow,
+            botIdentity,
+            GitHubUrls.pullRequest(post.owner(), post.repo(), post.prNumber())),
+        CommentBodyLimit.MAX_LENGTH - BODY_RESERVE - used);
   }
 
   /**
@@ -1217,23 +1292,28 @@ public class ReviewPublisher {
    * "0 … unresolved"), and truncation is disclosed here on follow-up reviews, which post no summary
    * comment to carry the first-review banner.
    *
-   * <p>When anything is still open the body leads with that, and the CI hold follows under a
-   * lead-in that makes no claim about the pull request as a whole (#933). The CI lead-ins open with
-   * "found no issues in this PR", which is true only when nothing earlier is open; a follow-up
-   * round posted it with state CHANGES_REQUESTED over sixteen open threads. The open count is
-   * {@link ReviewResult#unresolvedPreviousCount()}, the same statuses the delta section's "still
-   * open" line and the summary's carried list (#917) are built from.
+   * <p>When anything is still open the body leads with that, names each open finding (#1436), and
+   * the CI hold follows under a lead-in that makes no claim about the pull request as a whole
+   * (#933). The CI lead-ins open with "found no issues in this PR", which is true only when nothing
+   * earlier is open; a follow-up round posted it with state CHANGES_REQUESTED over sixteen open
+   * threads. The open count is {@link ReviewResult#unresolvedPreviousCount()}, the same statuses
+   * the delta section's "still open" line and the summary's carried list (#917) are built from.
    */
   private String noIssuesBody(ReviewResult result, PostReviewRequest post) {
     long unresolved = result.unresolvedPreviousCount();
+    var rest = new StringBuilder();
+    if (unresolved > 0) {
+      appendReopenedDeclineNotes(rest, result);
+    }
+    appendSection(rest, ciHoldSection(result, unresolved > 0));
+    appendSection(rest, previousOutcomeSection(result, post));
+    appendSection(rest, reviewNotice(result, post));
     var sb = new StringBuilder();
     if (unresolved > 0) {
       sb.append(ReviewResult.unresolvedPreviousMessage(unresolved));
-      appendReopenedDeclineNotes(sb, result);
+      appendSection(sb, openList(result, post, List.of(), sb.length() + rest.length()));
     }
-    appendSection(sb, ciHoldSection(result, unresolved > 0));
-    appendSection(sb, previousOutcomeSection(result, post));
-    appendSection(sb, reviewNotice(result, post));
+    appendSection(sb, rest.toString());
     return sb.toString();
   }
 
