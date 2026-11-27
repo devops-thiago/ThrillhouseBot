@@ -84,6 +84,7 @@ class DashboardResourceSummaryTest {
     assertEquals(7L, detail.get("id"));
     assertEquals("422", detail.get("errorMessage"));
     assertEquals("{\"findings\":[]}", detail.get("aiResponseJson"));
+    assertEquals("https://github.com/owner/repo/pull/1", detail.get("pullRequestUrl"));
   }
 
   @Test

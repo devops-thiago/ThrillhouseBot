@@ -111,8 +111,8 @@ public interface ThrillhouseConfig {
 
     /**
      * Base URL of the GitHub web UI: {@code https://github.com}, or a GitHub Enterprise Server host
-     * such as {@code https://github.example.com}. Pull request links, the OAuth endpoints and the
-     * App install page follow it.
+     * such as {@code https://github.example.com}. Pull request links, issue URLs read from a pull
+     * request description, the OAuth endpoints and the App install page follow it.
      */
     @WithName("web-url")
     @WithDefault("https://github.com")

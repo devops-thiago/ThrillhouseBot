@@ -44,7 +44,20 @@ public final class GitHubUrls {
 
   /** The page of pull request {@code prNumber} in {@code owner/repo}. */
   public static String pullRequest(String owner, String repo, int prNumber) {
-    return webUrl() + "/" + owner + "/" + repo + "/pull/" + prNumber;
+    return pullRequest(owner + "/" + repo, prNumber);
+  }
+
+  /**
+   * The page of pull request {@code prNumber} in {@code repository}, written {@code owner/repo}.
+   */
+  public static String pullRequest(String repository, int prNumber) {
+    return webUrl() + "/" + repository + "/pull/" + prNumber;
+  }
+
+  /** {@code url} without its scheme: the host, with any port and path. */
+  public static String withoutScheme(String url) {
+    var separator = url.indexOf("://");
+    return separator < 0 ? url : url.substring(separator + 3);
   }
 
   /** {@code url} without trailing slashes, so a path can be appended to it. */
