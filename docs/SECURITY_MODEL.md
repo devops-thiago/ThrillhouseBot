@@ -53,9 +53,13 @@ security limits. To report a vulnerability, see
   Known limitations in the README). A restart signs dashboard users out.
 - The bot's approval of an earlier commit stays after a push only when the bot
   cannot withdraw it: it did not receive the push event (the bot was down, or
-  the delivery failed and was not redelivered), it could not list the pull
-  request's reviews, or GitHub did not let it dismiss the review, which a
-  branch protection rule that restricts who may dismiss reviews does. The bot
+  the delivery failed and was not redelivered), it restarted or its review
+  executor turned the work away before the dismissal ran (the dismissal is
+  queued in memory), it could not list the pull request's reviews, or GitHub
+  did not let it dismiss the review, which a branch protection rule that
+  restricts who may dismiss reviews does. Only a push to an open pull request
+  starts the dismissal; commits added while it was closed and present when it
+  is reopened do not. The bot
   logs a warning when the reviews could not be listed, saying that earlier
   approvals were not checked, and one for each approval it could not dismiss.
   A refusal for want of permission (a 403 that is not a rate limit) ends that
@@ -65,7 +69,8 @@ security limits. To report a vulnerability, see
   again. The bot reads at most 1,000 reviews per pull request, oldest first,
   and logs a warning when it reaches that limit, since an approval past it is
   not seen. The dismissal waits for a review of the same pull request that is
-  already running, so for that long the old approval still counts. If the
+  already running or waiting for a review slot, so for that long the old
+  approval still counts. If the
   bot's approval counts towards a required review, also turn on "Dismiss stale
   pull request approvals when new commits are pushed" for the branch, so
   GitHub drops it on the push whatever happens to the bot.

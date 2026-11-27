@@ -747,8 +747,11 @@ Each push costs one request that lists the pull request's reviews, one more
 that reads its head when the bot has an approval to withdraw, and one per
 approval dismissed. The dismissal runs after a review of the same pull request
 that is already in progress. The approval stays only when the bot cannot
-withdraw it: it never received the push event, it could not list the pull
-request's reviews (logged as a warning), or GitHub refused the dismissal.
+withdraw it: it never received the push event, it restarted before the queued
+dismissal ran, it could not list the pull request's reviews (logged as a
+warning), or GitHub refused the dismissal. Reopening a pull request whose
+branch gained commits while it was closed does not dismiss the approval by
+itself; the review that the reopening starts does when it does not approve.
 Where the bot's approval counts towards a required review, also turn on
 "Dismiss stale pull request approvals when new commits are pushed" in the
 branch protection rule or ruleset, so GitHub drops it on the push whatever

@@ -379,7 +379,8 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   through `ReviewPublisher.withdrawApprovalsAfterPush`, the walk below with
   `approvalWithdrawnOnPushMessage`: a fixed text, no model or user text. A failure is logged at
   warn and never stops the queued review (`ReviewDispatcher.withdrawApproval`); a rejected
-  executor frees the delivery for a redelivery. Only `synchronize` triggers it.
+  executor frees the delivery for a redelivery. Only `synchronize` triggers it (not `reopened`),
+  and the queued withdrawal is in memory, so a restart before it runs loses it.
 - **A round that does not approve withdraws the bot's standing approvals.** GitHub keeps counting
   an `APPROVED` review after its author posts a `COMMENT` one, so `ReviewPublisher.publishReview`
   calls `withdrawStandingApprovals` before any post unless the round ends in an `APPROVE` review

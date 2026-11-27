@@ -392,8 +392,8 @@ public class WebhookEvents {
    * On a push ({@code synchronize}), queues the withdrawal of the approvals the bot gave earlier
    * heads of the pull request ({@link ApprovalOnPush}). It is queued for a paused pull request, a
    * draft and one a label, author or branch filter excludes as well: those stop the review of the
-   * new head, which is when an approval of the old one would otherwise stay for good. No other
-   * action changes the head.
+   * new head, which is when an approval of the old one would otherwise stay for good. Only this
+   * action does it: a pull request reopened with commits added while it was closed is not covered.
    *
    * @return {@code false} only when the executor rejected the task, so the delivery is forgotten
    *     and a redelivery can retry
