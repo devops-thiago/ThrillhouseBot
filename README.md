@@ -237,7 +237,8 @@ Create the GitHub App before starting the bot; its credentials go in `.env`.
    **Create ThrillhouseBot GitHub App**. For local development with
    [Smee.io](https://smee.io/), enter your Smee channel URL: the webhook is then
    registered at the channel root, and the smee client forwards it to the bot's
-   local `/api/webhook`.
+   local `/api/webhook`. After registration GitHub redirects to
+   `http://localhost:8080` with the one-time code, never to smee.io.
 
    The installer also has two optional fields. **Organization** registers the
    App under that organization instead of your personal account. **GitHub
@@ -980,7 +981,11 @@ token formats are reported wherever they appear. To
 accept a line, put `thrillhousebot:allow-secret` (or `thrillhousebot:allow-iac`)
 in a comment on that line or the line above; above is the only place a
 Dockerfile instruction can take one. JSON cannot hold a comment, so put such a
-JSON file in the skipped globs.
+JSON file in the skipped globs. Anyone who can push to the pull request can
+write the marker, so the summary's review scope note counts the lines it
+exempts and names them by `path:line` and marker (never by content): the first
+30 are named and the rest are given as a count. Check that each one is
+deliberate.
 
 IAM list elements use their file format: YAML ARN/URL slashes, non-whitespace
 `#` fragments, and quotes or parentheses inside plain scalars do not start
@@ -1649,7 +1654,7 @@ Traces and metrics are exported over OTLP (gRPC) to `OTEL_EXPORTER_ENDPOINT`
 | `gen_ai.client.token.usage` | Histogram: input and output tokens |
 | `gen_ai.client.operation.duration` | Histogram: latency in seconds |
 | `thrillhouse.ai.cost.total` | Counter: USD cost by model |
-| `thrillhouse.review.skips` | Counter: automatic reviews skipped, tagged with `reason` and `repository` |
+| `thrillhouse.review.skips` | Counter: automatic reviews skipped, tagged with `reason`. It carried a `repository` label through v0.9.2; that label is gone, so update any dashboard or alert that groups by it |
 | `thrillhouse.reviews.total` | Counter: finished reviews by `outcome` (`completed`/`failed`) |
 
 Spans and metrics carry `gen_ai.provider.name`, derived from `AI_BASE_URL`
@@ -1705,9 +1710,11 @@ Metric names follow the Prometheus conversion of the OTel names above (e.g.
 `thrillhouse_reviews_total`).
 
 The endpoint is off by default because it is unauthenticated and reveals model
-names, token counts, and spend. On an internet-facing deployment, restrict
-`/metrics` at your reverse proxy or firewall before enabling it. While it is
-disabled, scrapes return `404`; OTLP export is unaffected.
+names, token counts, spend, and how many reviews ran, failed or were skipped
+and why. It names no repository, pull request or user. On an internet-facing
+deployment, restrict `/metrics` at your reverse proxy or firewall before
+enabling it. While it is disabled, scrapes return `404`; OTLP export is
+unaffected.
 
 ### Turning telemetry off
 
@@ -1779,8 +1786,9 @@ locally (see **Offline alternative** there). The container images come from
 ### PR opened but no review posted
 
 When a `pull_request` webhook arrives but no review is posted, the bot logs
-`Automatic review skipped [reason=...]`, increments `thrillhouse.review.skips`,
-and counts skips per reason in the dashboard summary
+`Automatic review skipped [reason=...]` with the repository and pull request,
+increments `thrillhouse.review.skips` (by reason only), and counts skips per
+reason in the dashboard summary
 (`GET /api/dashboard/summary`, field `skippedReviewsByReason`). Check in order:
 
 1. **Is the app installed on the repository?** No delivery at all means the app

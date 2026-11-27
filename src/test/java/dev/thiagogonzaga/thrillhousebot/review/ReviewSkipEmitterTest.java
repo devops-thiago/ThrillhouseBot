@@ -18,6 +18,13 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import static org.junit.jupiter.api.Assertions.*;
 
 import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.exporter.prometheus.PrometheusMetricReader;
+import io.opentelemetry.sdk.OpenTelemetrySdk;
+import io.opentelemetry.sdk.metrics.SdkMeterProvider;
+import io.prometheus.metrics.expositionformats.PrometheusTextFormatWriter;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -77,5 +84,36 @@ class ReviewSkipEmitterTest {
     assertEquals(
         List.of("PAUSED", "DRAFT", "RATE_LIMITED"),
         List.copyOf(emitter.countsByReason(java.util.List.of(1L)).keySet()));
+  }
+
+  @Test
+  void theScrapedSkipCounterNamesNoRepository() throws IOException {
+    var reader = PrometheusMetricReader.create();
+    try (var meterProvider = SdkMeterProvider.builder().registerMetricReader(reader).build();
+        var sdk = OpenTelemetrySdk.builder().setMeterProvider(meterProvider).build()) {
+      var scraped = new ReviewSkipEmitter(sdk);
+      scraped.recordSkip(ReviewSkipReason.DRAFT, 1L, "acme", "unreleased-product", 7, "draft");
+      scraped.recordSkip(ReviewSkipReason.DRAFT, 1L, "acme", "payroll", 8, "draft");
+      scraped.recordSkip(ReviewSkipReason.PAUSED, 2L, "globex", "internal-tools", 9, "paused");
+
+      var buffer = new ByteArrayOutputStream();
+      PrometheusTextFormatWriter.create().write(buffer, reader.collect());
+      var text = buffer.toString(StandardCharsets.UTF_8);
+
+      var skipLines =
+          text.lines().filter(line -> line.startsWith("thrillhouse_review_skips_total{")).toList();
+      // One series per reason: the two DRAFT skips of different repositories add up.
+      assertEquals(2, skipLines.size(), text);
+      assertTrue(
+          skipLines.stream().anyMatch(l -> l.contains("reason=\"DRAFT\"") && l.endsWith(" 2.0")),
+          text);
+      assertTrue(
+          skipLines.stream().anyMatch(l -> l.contains("reason=\"PAUSED\"") && l.endsWith(" 1.0")),
+          text);
+      for (var leaked :
+          List.of("repository", "acme", "globex", "unreleased-product", "payroll", "internal")) {
+        assertFalse(text.contains(leaked), leaked + " in:\n" + text);
+      }
+    }
   }
 }

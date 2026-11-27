@@ -68,6 +68,26 @@ public class GitHubAppApi {
     }
   }
 
+  /**
+   * Mints an installation access token that reaches {@code repository} (the name, without the
+   * owner) and no other repository of the installation. GitHub refuses the request when the
+   * installation does not cover that repository.
+   */
+  String createRepositoryToken(long installationId, String repository) {
+    var client = applicationClient();
+    try {
+      return client
+          .getApp()
+          .getInstallationById(installationId)
+          .createToken()
+          .repositories(List.of(repository))
+          .create()
+          .getToken();
+    } catch (IOException e) {
+      throw unreadable(e);
+    }
+  }
+
   /** The ids of every installation of the App, suspended ones included. */
   List<Long> listInstallationIds() {
     var client = applicationClient();

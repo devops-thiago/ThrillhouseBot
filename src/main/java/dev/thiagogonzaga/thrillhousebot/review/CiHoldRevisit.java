@@ -119,7 +119,7 @@ public class CiHoldRevisit {
   }
 
   private void reevaluate(Recheck task, CiHoldRegistry.HeldVerdict verdict) {
-    var auth = authClient.getAuthHeader(task.installationId());
+    var auth = authClient.getAuthHeader(task.installationId(), task.repo());
     var req =
         new ReviewOrchestrator.ReviewRequest(
             task.owner(),

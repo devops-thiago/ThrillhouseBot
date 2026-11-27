@@ -1004,14 +1004,17 @@ public class ReviewPublisher {
       sb.append("- **")
           .append(f.risk().name())
           .append(":** ")
-          .append(f.title())
+          .append(MarkdownSafe.inline(f.title()))
           .append(" (`")
-          .append(f.file())
+          .append(MarkdownSafe.inlineCode(f.file()))
           .append(":")
           .append(f.line())
           .append("`)");
       if (f.description() != null && !f.description().isBlank()) {
-        sb.append("\n  ").append(f.description().strip().replace("\n", "\n  "));
+        sb.append("\n  ")
+            .append(
+                SecurityScan.postedDescription(f.title(), f.description().strip())
+                    .replace("\n", "\n  "));
       }
       sb.append("\n");
     }
@@ -1158,7 +1161,7 @@ public class ReviewPublisher {
             status ->
                 "unresolved".equalsIgnoreCase(status.status())
                     && RebuttalContradiction.explainsKeptFinding(status.note()))
-        .map(status -> status.note().strip())
+        .map(status -> MarkdownSafe.prose(status.note().strip()))
         .toList();
   }
 

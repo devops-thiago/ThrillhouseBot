@@ -329,7 +329,7 @@ public class ReviewOrchestrator {
         "Starting review for %s/%s #%d (sha: %s)",
         request.owner(), request.repo(), request.prNumber(), request.commitSha());
     var repository = request.owner() + "/" + request.repo();
-    var auth = authClient.getAuthHeader(request.installationId());
+    var auth = authClient.getAuthHeader(request.installationId(), request.repo());
 
     ReviewSession session =
         ReviewSession.create(

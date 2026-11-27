@@ -47,20 +47,32 @@ public class VerdictBuilder {
   private final BotIdentity botIdentity;
   private final CiGatingMode ciGating;
   private final BlockingStrictness blockingStrictness;
+  private final SecurityScan securityScan;
 
   @Inject
   public VerdictBuilder(
       PrSummaryGenerator summaryGenerator,
       FollowUpAnalyzer followUpAnalyzer,
       BotIdentity botIdentity,
-      ThrillhouseConfig config) {
+      ThrillhouseConfig config,
+      SecurityScan securityScan) {
     this(
         summaryGenerator,
         followUpAnalyzer,
         botIdentity,
         CiGatingMode.parse(config.review().ciGating()),
         BlockingStrictness.fromString(config.review().blockingStrictness())
-            .orElse(BlockingStrictness.BALANCED));
+            .orElse(BlockingStrictness.BALANCED),
+        securityScan);
+  }
+
+  /** Visible for tests: the configured gating and blocking modes, with the security scan off. */
+  VerdictBuilder(
+      PrSummaryGenerator summaryGenerator,
+      FollowUpAnalyzer followUpAnalyzer,
+      BotIdentity botIdentity,
+      ThrillhouseConfig config) {
+    this(summaryGenerator, followUpAnalyzer, botIdentity, config, SecurityScan.disabled());
   }
 
   /** Visible for tests; defaults to fail-closed CI gating and balanced blocking. */
@@ -94,18 +106,36 @@ public class VerdictBuilder {
     this(summaryGenerator, followUpAnalyzer, botIdentity, CiGatingMode.STRICT, blockingStrictness);
   }
 
+  /** Visible for tests: pins both modes, with the security scan off. */
   VerdictBuilder(
       PrSummaryGenerator summaryGenerator,
       FollowUpAnalyzer followUpAnalyzer,
       BotIdentity botIdentity,
       CiGatingMode ciGating,
       BlockingStrictness blockingStrictness) {
+    this(
+        summaryGenerator,
+        followUpAnalyzer,
+        botIdentity,
+        ciGating,
+        blockingStrictness,
+        SecurityScan.disabled());
+  }
+
+  VerdictBuilder(
+      PrSummaryGenerator summaryGenerator,
+      FollowUpAnalyzer followUpAnalyzer,
+      BotIdentity botIdentity,
+      CiGatingMode ciGating,
+      BlockingStrictness blockingStrictness,
+      SecurityScan securityScan) {
     this.summaryGenerator = summaryGenerator;
     this.followUpAnalyzer = followUpAnalyzer;
     this.botIdentity = botIdentity;
     this.ciGating = ciGating == null ? CiGatingMode.STRICT : ciGating;
     this.blockingStrictness =
         blockingStrictness == null ? BlockingStrictness.BALANCED : blockingStrictness;
+    this.securityScan = securityScan;
   }
 
   /**
@@ -414,6 +444,7 @@ public class VerdictBuilder {
             PatchCoverageResolver.formatScopeNote(ctx.coverageArtifactRefusal()),
             SupersededFindingsCarryover.formatScopeNote(ctx.carried()),
             reasoningStepDownNote(plan.reasoningStepDown()),
+            securityScan.formatWaivers(ctx.reviewableFiles()),
             openPrevious,
             PriorOverviewCarryover.carried(effectiveResponse.summary(), ctx),
             ciCitations,
@@ -889,10 +920,10 @@ public class VerdictBuilder {
   /**
    * Inputs that only shape the summary: the file rows, the pure-rename rollup, the
    * unmatched-ignore-glob note, the refused-coverage-artifact note, the superseded-run carry-over
-   * note, the reasoning step-down note, and the earlier rounds' findings still open. The notes
-   * share the review-scope blockquote — each answers "what did this review look at, or not, and
-   * why". The still-open findings shape the verdict too: it is computed over the same set the
-   * summary lists (#948).
+   * note, the reasoning step-down note, the note listing lines an allow marker exempted from the
+   * security scan, and the earlier rounds' findings still open. The notes share the review-scope
+   * blockquote — each answers "what did this review look at, or not, and why". The still-open
+   * findings shape the verdict too: it is computed over the same set the summary lists (#948).
    */
   private record SummaryInputs(
       List<PrSummaryGenerator.ChangedFile> changedFiles,
@@ -902,6 +933,7 @@ public class VerdictBuilder {
       String coverageArtifactNotRead,
       String carriedFromSupersededRun,
       String reasoningStepDown,
+      String securityScanWaivers,
       List<Finding> openPrevious,
       boolean overviewCarried,
       CiFailureCitations ciCitations,
@@ -921,6 +953,7 @@ public class VerdictBuilder {
         diffStats,
         new SummaryInputs(
             changedFiles,
+            "",
             "",
             "",
             "",
@@ -1067,6 +1100,7 @@ public class VerdictBuilder {
     addScopeNote(notes, summaryInputs.coverageArtifactNotRead());
     addScopeNote(notes, summaryInputs.carriedFromSupersededRun());
     addScopeNote(notes, summaryInputs.reasoningStepDown());
+    addScopeNote(notes, summaryInputs.securityScanWaivers());
     return String.join("\n>\n> ", notes);
   }
 

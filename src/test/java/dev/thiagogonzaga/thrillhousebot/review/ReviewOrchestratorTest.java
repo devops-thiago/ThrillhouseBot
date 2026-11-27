@@ -615,6 +615,43 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void aReasonQuotedInAKeptFindingsNoteCannotNotifyAndTheBotsOwnHintStaysACommand() {
+      // The note quotes a reply and the model's reason; the sentence after it is the bot's own.
+      var note =
+          RebuttalContradiction.REPLY_LEAD_IN
+              + " @octocat said so <!-- x --> and `@Async` runs it."
+              + " A second `@thrillhousebot declined` comment naming this finding is that reply.";
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.COMMENT,
+              false,
+              "",
+              List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", note)),
+              List.of(),
+              0);
+
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      var body = captor.getValue().body();
+      assertTrue(
+          body.contains(
+              " @&#8203;octocat said so &lt;!-- x --> and `@Async` runs it."
+                  + " A second `@thrillhousebot declined` comment naming this finding"),
+          body);
+      // The standing hint in the unresolved line is the bot's own text and is posted as written.
+      assertTrue(body.contains("`@thrillhousebot resolved <path>:<line>"), body);
+    }
+
+    @Test
     void unresolvedBodyOmitsNotesThatAreNotReopenedDeclines() {
       // Only a reopened-decline note (RebuttalContradiction.NOTE_LEAD_IN) is surfaced. An
       // unresolved
@@ -1772,7 +1809,7 @@ class ReviewOrchestratorTest {
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
@@ -2061,7 +2098,7 @@ class ReviewOrchestratorTest {
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
@@ -2113,7 +2150,7 @@ class ReviewOrchestratorTest {
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
@@ -2197,7 +2234,7 @@ class ReviewOrchestratorTest {
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenThrow(new RuntimeException("GitHub check run API error"));
@@ -2239,7 +2276,7 @@ class ReviewOrchestratorTest {
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
@@ -2303,7 +2340,7 @@ class ReviewOrchestratorTest {
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
@@ -2374,7 +2411,7 @@ class ReviewOrchestratorTest {
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
@@ -2435,7 +2472,7 @@ class ReviewOrchestratorTest {
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
@@ -2499,7 +2536,7 @@ class ReviewOrchestratorTest {
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
@@ -2556,7 +2593,7 @@ class ReviewOrchestratorTest {
             .when(
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
@@ -2630,7 +2667,7 @@ class ReviewOrchestratorTest {
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
@@ -2681,7 +2718,7 @@ class ReviewOrchestratorTest {
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
@@ -2768,7 +2805,7 @@ class ReviewOrchestratorTest {
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
@@ -2832,7 +2869,7 @@ class ReviewOrchestratorTest {
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
@@ -2909,7 +2946,7 @@ class ReviewOrchestratorTest {
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
@@ -2974,7 +3011,7 @@ class ReviewOrchestratorTest {
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
@@ -3046,7 +3083,7 @@ class ReviewOrchestratorTest {
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
@@ -3111,7 +3148,7 @@ class ReviewOrchestratorTest {
             .thenReturn(session);
 
         when(reviewConfig.showEvidence()).thenReturn(true);
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
@@ -3182,7 +3219,7 @@ class ReviewOrchestratorTest {
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
@@ -3260,7 +3297,7 @@ class ReviewOrchestratorTest {
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
@@ -3360,7 +3397,7 @@ class ReviewOrchestratorTest {
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
@@ -3669,7 +3706,7 @@ class ReviewOrchestratorTest {
           .when(() -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
           .thenReturn(session);
 
-      when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+      when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
       when(checkRunClient.createCheckRun(anyString(), anyString(), anyString(), anyString(), any()))
           .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
       doNothing()
@@ -3804,7 +3841,7 @@ class ReviewOrchestratorTest {
           .when(() -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
           .thenReturn(session);
 
-      when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+      when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
       when(checkRunClient.createCheckRun(anyString(), anyString(), anyString(), anyString(), any()))
           .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
       doNothing()
@@ -3857,7 +3894,7 @@ class ReviewOrchestratorTest {
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
@@ -3949,7 +3986,7 @@ class ReviewOrchestratorTest {
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
@@ -4034,7 +4071,7 @@ class ReviewOrchestratorTest {
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
@@ -4109,7 +4146,7 @@ class ReviewOrchestratorTest {
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
@@ -4209,7 +4246,7 @@ class ReviewOrchestratorTest {
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
@@ -4341,7 +4378,7 @@ class ReviewOrchestratorTest {
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
@@ -4469,7 +4506,7 @@ class ReviewOrchestratorTest {
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
@@ -4560,7 +4597,7 @@ class ReviewOrchestratorTest {
       mockedStatic
           .when(() -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
           .thenReturn(session);
-      when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+      when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
       when(checkRunClient.createCheckRun(anyString(), anyString(), anyString(), anyString(), any()))
           .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
       when(prClient.getPullRequestFiles(
@@ -6050,6 +6087,43 @@ class ReviewOrchestratorTest {
                       req.body().contains("comment cap was reached")
                           && req.body().contains("Real smell")
                           && !req.body().contains("Things to double-check")));
+    }
+
+    @Test
+    void findingsListedInTheReviewBodyCannotNotifyOrOfferASuggestion() {
+      var finding =
+          new Finding(
+              RiskLevel.MEDIUM,
+              Confidence.LOW,
+              "src/Ma`in.java",
+              10,
+              "Possible NPE, ask @octocat",
+              "cc @acme/security\n```suggestion\nevil();\n```\n<img src=x>",
+              null,
+              null);
+      var result = resultWithFinding(finding, ReviewState.COMMENT);
+      var resolver =
+          new DiffLineResolver(
+              Map.of("src/Main.java", fileDiffWithLine("src/Main.java", 10).patch()));
+
+      reviewPublisher.postReview("Bearer tok", "owner", "repo", 7, "sha", result, resolver);
+
+      verify(reviewClient)
+          .createReview(
+              anyString(),
+              anyString(),
+              anyString(),
+              anyString(),
+              anyInt(),
+              argThat(
+                  req ->
+                      req.body().contains("Possible NPE, ask @&#8203;octocat (`src/Main.java:10`)")
+                          && req.body()
+                              .contains(
+                                  "\n  cc @&#8203;acme/security\n  ```\n  evil();\n  ```\n  &lt;img src=x>")
+                          && !req.body().contains("suggestion")
+                          && !req.body().contains("@octocat")
+                          && !req.body().contains("@acme")));
     }
 
     @Test
@@ -8222,7 +8296,7 @@ class ReviewOrchestratorTest {
       when(session.getPrTitle()).thenReturn("Test PR");
       when(session.getCommitSha()).thenReturn("abcdefgh");
       when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
-      when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+      when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
       when(checkRunClient.createCheckRun(anyString(), anyString(), anyString(), anyString(), any()))
           .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
       doNothing()
@@ -8503,7 +8577,7 @@ class ReviewOrchestratorTest {
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(prClient.getPullRequest(anyString(), anyString(), eq("owner"), eq("repo"), eq(7)))
             .thenThrow(new RuntimeException("PR was deleted"));
 
@@ -8539,7 +8613,7 @@ class ReviewOrchestratorTest {
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
             .thenReturn(
                 new GitHubPullRequestClient.PullRequestDetails(
@@ -8596,7 +8670,7 @@ class ReviewOrchestratorTest {
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
             .thenReturn(
                 new GitHubPullRequestClient.PullRequestDetails(
@@ -8649,7 +8723,7 @@ class ReviewOrchestratorTest {
   class CiGatingThroughReview {
 
     private void stubCommonReviewMocks(GitHubCheckRunClient.CheckRunsResponse checkRuns) {
-      when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+      when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
       when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(42)))
           .thenReturn(
               new GitHubPullRequestClient.PullRequestDetails(
@@ -10074,7 +10148,7 @@ class ReviewOrchestratorTest {
 
     /** The GitHub reads both runs share; the previous-findings machinery is the real analyzer. */
     private void stubTwoRuns() {
-      when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+      when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
       when(checkRunClient.createCheckRun(anyString(), anyString(), anyString(), anyString(), any()))
           .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
       when(prClient.getPullRequestFiles(
@@ -10299,7 +10373,7 @@ class ReviewOrchestratorTest {
             .when(
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(authClient.getAuthHeader(123L, "repo")).thenReturn("Bearer test");
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));

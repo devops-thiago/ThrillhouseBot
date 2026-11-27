@@ -94,6 +94,97 @@ class GitHubAuthClientTest {
   }
 
   @Test
+  void aRepositoryHeaderIsMintedForThatRepositoryAlone() {
+    when(appApi.createRepositoryToken(42L, "widgets")).thenReturn("widgets-token");
+
+    assertEquals("Bearer widgets-token", authClient.getAuthHeader(42L, "widgets"));
+
+    verify(appApi).createRepositoryToken(42L, "widgets");
+    // Nothing reaching every repository of the installation was asked for along the way.
+    verify(appApi, never()).createInstallationToken(anyLong());
+  }
+
+  @Test
+  void eachRepositoryGetsItsOwnTokenAndReusesIt() {
+    when(appApi.createRepositoryToken(42L, "widgets")).thenReturn("widgets-token");
+    when(appApi.createRepositoryToken(42L, "payroll")).thenReturn("payroll-token");
+    when(appApi.createInstallationToken(42L)).thenReturn("installation-token");
+
+    assertEquals("Bearer widgets-token", authClient.getAuthHeader(42L, "widgets"));
+    assertEquals("Bearer payroll-token", authClient.getAuthHeader(42L, "payroll"));
+    assertEquals("Bearer widgets-token", authClient.getAuthHeader(42L, "widgets"));
+    assertEquals("Bearer widgets-token", authClient.getAuthHeader(42L, " widgets "));
+    // The installation-wide token is a third one, and never stands in for a repository's.
+    assertEquals("Bearer installation-token", authClient.getAuthHeader(42L));
+    assertEquals("Bearer payroll-token", authClient.getAuthHeader(42L, "payroll"));
+
+    verify(appApi, times(2)).createRepositoryToken(eq(42L), anyString());
+    verify(appApi, times(1)).createInstallationToken(42L);
+  }
+
+  @Test
+  void aRepositoryHeaderIsNeverWidenedWhenTheNameIsMissingOrTheMintIsRefused() {
+    assertThrows(IllegalArgumentException.class, () -> authClient.getAuthHeader(42L, null));
+    assertThrows(IllegalArgumentException.class, () -> authClient.getAuthHeader(42L, "  "));
+
+    var refused = new jakarta.ws.rs.WebApplicationException(422);
+    when(appApi.createRepositoryToken(eq(42L), anyString())).thenThrow(refused);
+    assertSame(
+        refused,
+        assertThrows(
+            jakarta.ws.rs.WebApplicationException.class,
+            () -> authClient.getAuthHeader(42L, "not-installed")));
+
+    verify(appApi, never()).createInstallationToken(anyLong());
+  }
+
+  @Test
+  void aRejectedRepositoryTokenIsReplacedByOneForTheSameRepository() {
+    when(appApi.createRepositoryToken(42L, "widgets")).thenReturn("expired-token", "minted-token");
+    var dead = authClient.getAuthHeader(42L, "widgets");
+
+    var fresh = authClient.refreshedAuthHeader(dead);
+
+    assertEquals(Optional.of("Bearer minted-token"), fresh);
+    assertEquals("Bearer minted-token", authClient.getAuthHeader(42L, "widgets"));
+    verify(appApi, times(2)).createRepositoryToken(42L, "widgets");
+    verify(appApi, never()).createInstallationToken(anyLong());
+  }
+
+  @Test
+  void aGoneInstallationDropsEveryRepositoryTokenItHad() {
+    when(appApi.createRepositoryToken(anyLong(), anyString())).thenReturn("t");
+    authClient.getAuthHeader(42L, "widgets");
+    authClient.getAuthHeader(42L, "payroll");
+    authClient.getAuthHeader(43L, "widgets");
+
+    authClient.onInstallationChange(
+        new InstallationChange(InstallationChange.Kind.GONE, 42L, java.util.List.of()));
+    authClient.getAuthHeader(42L, "widgets");
+    authClient.getAuthHeader(42L, "payroll");
+    authClient.getAuthHeader(43L, "widgets");
+
+    verify(appApi, times(4)).createRepositoryToken(eq(42L), anyString());
+    verify(appApi, times(1)).createRepositoryToken(eq(43L), anyString());
+  }
+
+  @Test
+  void expiredCacheEntriesOfOtherRepositoriesAreDroppedOnTheNextMint() {
+    var minted = new AtomicInteger();
+    when(appApi.createRepositoryToken(eq(42L), anyString()))
+        .thenAnswer(invocation -> "token-" + minted.incrementAndGet());
+    var first = authClient.getAuthHeader(42L, "widgets");
+
+    advance(GitHubAuthClient.TOKEN_TTL.plusSeconds(1));
+    authClient.getAuthHeader(42L, "payroll");
+
+    // The expired token is out of the cache, and still names its repository for a late 401.
+    assertEquals(Optional.of("Bearer token-3"), authClient.refreshedAuthHeader(first));
+    assertEquals("Bearer token-3", authClient.getAuthHeader(42L, "widgets"));
+    verify(appApi, times(2)).createRepositoryToken(42L, "widgets");
+  }
+
+  @Test
   void shouldGetSeparateTokensForDifferentInstallations() {
     var installId1 = 10L;
     var installId2 = 20L;
@@ -373,6 +464,11 @@ class GitHubAuthClientTest {
         }
       }
       return "token-" + n;
+    }
+
+    @Override
+    String createRepositoryToken(long installationId, String repository) {
+      throw new UnsupportedOperationException("this test mints installation-wide tokens only");
     }
   }
 

@@ -392,7 +392,9 @@ public class PrLabeler {
   private void suggestLabels(LabelRequest request, List<String> resolved) {
     var body =
         "🏷️ **Suggested labels:** "
-            + resolved.stream().map(label -> "`" + label + "`").collect(Collectors.joining(", "))
+            + resolved.stream()
+                .map(label -> "`" + MarkdownSafe.inlineCode(label) + "`")
+                .collect(Collectors.joining(", "))
             + "\n\n*Set `thrillhousebot.review.labels.apply=true` to have ThrillhouseBot add these"
             + " automatically.*";
     commentClient.createComment(

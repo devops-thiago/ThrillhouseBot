@@ -483,9 +483,11 @@ final class DescriptionGapCarryover {
   }
 
   private static void addGap(List<String> gaps, StringBuilder gap) {
-    // A bullet always opens with text: "- " is stripped off a line that has more after it.
+    // A bullet always opens with text: "- " is stripped off a line that has more after it. It is
+    // read back as the model wrote it, without the guards its rendering added, so a carried gap
+    // compares equal to the same gap stated again.
     if (gap != null) {
-      gaps.add(gap.toString());
+      gaps.add(MarkdownSafe.unguarded(gap.toString()));
     }
   }
 

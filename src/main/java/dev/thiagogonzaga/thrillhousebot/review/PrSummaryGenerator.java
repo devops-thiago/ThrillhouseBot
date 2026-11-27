@@ -777,13 +777,13 @@ public class PrSummaryGenerator {
       String statusEmoji = check.isFailing() ? "❌ Failed" : "⏳ Pending";
       String detail = check.conclusion() != null ? check.conclusion() : "-";
       sb.append("| **")
-          .append(MarkdownSafe.tableCell(check.name()))
+          .append(MarkdownSafe.proseCell(check.name()))
           .append("** | ")
-          .append(MarkdownSafe.tableCell(check.type()))
+          .append(MarkdownSafe.proseCell(check.type()))
           .append(" | ")
           .append(statusEmoji)
           .append(" | ")
-          .append(MarkdownSafe.tableCell(detail))
+          .append(MarkdownSafe.proseCell(detail))
           .append(" |\n");
     }
     sb.append("\n");
@@ -917,7 +917,7 @@ public class PrSummaryGenerator {
     for (String gap : gaps) {
       // One line per gap: a gap's own line break could otherwise end the section early, and the
       // next round reads these bullets back as the gaps it carries (#923).
-      sb.append("- ").append(MarkdownSafe.oneLine(gap)).append("\n");
+      sb.append("- ").append(MarkdownSafe.proseLine(gap)).append("\n");
     }
     for (Finding f : findings) {
       sb.append("- ").append(findingBullet(f)).append("\n");
@@ -938,12 +938,12 @@ public class PrSummaryGenerator {
     for (var criterion : met) {
       var cited =
           criterion.citations().stream()
-              .map(c -> "`" + MarkdownSafe.oneLine(c) + "`")
+              .map(c -> "`" + MarkdownSafe.inlineCode(c) + "`")
               .collect(Collectors.joining(", "));
       sb.append("- Linked issue")
           .append(criterion.issues().isEmpty() ? "" : " " + criterion.issues())
           .append(": ")
-          .append(MarkdownSafe.oneLine(criterion.criterion()))
+          .append(MarkdownSafe.proseLine(criterion.criterion()))
           .append(" — cited: ")
           .append(cited)
           .append("\n");
@@ -1047,7 +1047,7 @@ public class PrSummaryGenerator {
     for (ChangedFile file : walkthroughRows(changedFiles, summaryByPath)) {
       String summary = summaryByPath.getOrDefault(file.path(), "");
       sb.append("| `")
-          .append(MarkdownSafe.tableCell(file.path()))
+          .append(MarkdownSafe.tableCell(MarkdownSafe.inlineCode(file.path())))
           .append("` | ")
           .append(changeTypeLabel(file.changeType()))
           .append(" | ")
@@ -1104,7 +1104,7 @@ public class PrSummaryGenerator {
    */
   private static String summaryCell(ChangedFile file, String summary) {
     if (!summary.isBlank()) {
-      return MarkdownSafe.tableCell(summary.strip());
+      return MarkdownSafe.proseCell(summary.strip());
     }
     return file.pureRename() ? PURE_RENAME_SUMMARY : NO_MODEL_SUMMARY;
   }
@@ -1135,7 +1135,7 @@ public class PrSummaryGenerator {
       case "renamed" -> "Renamed";
       case "copied" -> "Copied";
       case "changed", "modified" -> "Modified";
-      default -> MarkdownSafe.tableCell(status);
+      default -> MarkdownSafe.proseCell(status);
     };
   }
 

@@ -50,7 +50,9 @@ gh api --method POST /app-manifests/<code>/conversions \
 
 :::note[Smee setups]
 The hosted installer registers Smee webhooks at the channel root and the
-OAuth callback at `http://localhost:8080/api/auth/callback`. If you use
+OAuth callback at `http://localhost:8080/api/auth/callback`. The redirect that
+carries the one-time `?code=` also goes to `http://localhost:8080`, not to
+smee.io. If you use
 `GenEnv.java`, don't pass the Smee URL as `--host` (that writes
 `DASHBOARD_URL=https://<host>`); run it without `--host` and then set
 `DASHBOARD_URL=http://localhost:8080` in the generated `.env` — dashboard

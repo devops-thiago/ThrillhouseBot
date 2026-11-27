@@ -257,7 +257,7 @@ public class FindingStateLifecycle {
     try {
       var details =
           prClient.getPullRequest(
-              authClient.getAuthHeader(pr.installationId()),
+              authClient.getAuthHeader(pr.installationId(), pr.repository().substring(slash + 1)),
               ACCEPT,
               pr.repository().substring(0, slash),
               pr.repository().substring(slash + 1),

@@ -246,6 +246,36 @@ describe("hosted installer readiness", () => {
   });
 });
 
+describe("hosted installer and a Smee channel", () => {
+  const channel = "https://smee.io/AbCd1234";
+
+  it("keeps the one-time manifest code away from smee.io", async () => {
+    const page = await load("hosted");
+    for (const typed of [channel, `${channel}/`, "smee.io/AbCd1234", "HTTPS://SMEE.IO/AbCd1234"]) {
+      page.host(typed);
+      const manifest = JSON.parse(page.manifest());
+      assert.equal(manifest.redirect_url, "http://localhost:8080", typed);
+      assert.deepEqual(manifest.callback_urls, ["http://localhost:8080/api/auth/callback"], typed);
+      assert.equal(page.disabled(), false, typed);
+    }
+  });
+
+  it("still registers the webhook at the channel root", async () => {
+    const page = await load("hosted");
+    page.host(channel);
+    assert.equal(JSON.parse(page.manifest()).hook_attributes.url, channel);
+    assert.equal(page.el("preview-webhook").textContent, channel);
+  });
+
+  it("redirects to the bot's own host when the host is not a Smee channel", async () => {
+    const page = await load("hosted");
+    page.host("bot.example.com");
+    const manifest = JSON.parse(page.manifest());
+    assert.equal(manifest.redirect_url, BOT_ORIGIN);
+    assert.equal(manifest.hook_attributes.url, `${BOT_ORIGIN}/api/webhook`);
+  });
+});
+
 describe("bundled installer and the configured GitHub address", () => {
   const configured = "https://github.example.com";
 

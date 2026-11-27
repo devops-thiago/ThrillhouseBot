@@ -35,6 +35,8 @@ public class GitHubAuthClient {
 
   private static final String BEARER = "Bearer ";
 
+  private static final String ACCEPT = "application/vnd.github+json";
+
   /**
    * How long GitHub itself honours an installation token. Not ours to choose — every duration below
    * is reasoned against it, so it is written down once rather than repeated as a literal.
@@ -56,10 +58,36 @@ public class GitHubAuthClient {
 
   private final GitHubAppApi appApi;
 
-  // Installation access tokens expire after 1 hour.
-  private record CachedToken(String token, Instant expiresAt, long installationId) {}
+  /**
+   * What a token may reach: one repository of an installation, by its name as the caller has it
+   * (GitHub is sent that spelling), or the whole installation when {@code repository} is {@code
+   * null}.
+   *
+   * <p>A token is minted for the repository the work is about, so one that leaks through a log, a
+   * dependency or a request sent to the wrong place opens that repository and not every other one
+   * the App is installed on. Only work about the installation itself, such as listing its
+   * repositories, takes the unscoped token.
+   */
+  private record TokenScope(long installationId, String repository) {
 
-  private final Map<Long, CachedToken> tokenCache = new ConcurrentHashMap<>();
+    static TokenScope installation(long installationId) {
+      return new TokenScope(installationId, null);
+    }
+
+    static TokenScope repository(long installationId, String repository) {
+      if (repository == null || repository.isBlank()) {
+        // Never widened to the installation: a caller that lost the name must not get more.
+        throw new IllegalArgumentException(
+            "A repository name is required for a repository-scoped installation token");
+      }
+      return new TokenScope(installationId, repository.strip());
+    }
+  }
+
+  // Installation access tokens expire after 1 hour.
+  private record CachedToken(String token, Instant expiresAt) {}
+
+  private final Map<TokenScope, CachedToken> tokenCache = new ConcurrentHashMap<>();
 
   /**
    * The longest a write can still be holding a token it read from the cache. The cache hands one
@@ -90,8 +118,8 @@ public class GitHubAuthClient {
    */
   static final Duration OWNER_RETENTION = Duration.ofHours(6);
 
-  /** A token this process minted: the installation it belongs to, and when it was issued. */
-  private record TokenOwner(long installationId, Instant issuedAt) {}
+  /** A token this process minted: what it was minted for, and when it was issued. */
+  private record TokenOwner(TokenScope scope, Instant issuedAt) {}
 
   /**
    * Which installation a token this process minted belongs to, so a write GitHub answered with 401
@@ -139,27 +167,39 @@ public class GitHubAuthClient {
    * 1 hour per GitHub.
    */
   public String getInstallationToken(long installationId) {
-    return installationToken(installationId);
+    return token(TokenScope.installation(installationId));
   }
 
-  private String installationToken(long installationId) {
-    var cached = tokenCache.get(installationId);
+  private String token(TokenScope scope) {
+    var cached = tokenCache.get(scope);
     if (cached != null && clock.get().isBefore(cached.expiresAt())) {
       log.debug("Using cached installation token (expires at {})", cached.expiresAt());
       return cached.token();
     }
 
-    log.info("Generating new installation token for installation {}", installationId);
-    var token = appApi.createInstallationToken(installationId);
+    var installationId = scope.installationId();
+    String token;
+    if (scope.repository() == null) {
+      log.info("Generating new installation token for installation {}", installationId);
+      token = appApi.createInstallationToken(installationId);
+    } else {
+      log.info(
+          "Generating new installation token for installation {}, limited to one repository",
+          installationId);
+      token = appApi.createRepositoryToken(installationId, scope.repository());
+    }
 
     // Read after the round trip, so the recorded instant is no earlier than GitHub's own issue
     // time and the entry below is never retired sooner than the token it names.
     var issuedAt = clock.get();
-    var newToken = new CachedToken(token, issuedAt.plus(TOKEN_TTL), installationId);
-    tokenCache.put(installationId, newToken);
+    var newToken = new CachedToken(token, issuedAt.plus(TOKEN_TTL));
+    // One entry per repository reviewed would otherwise stay for as long as the process runs.
+    tokenCache.values().removeIf(entry -> !issuedAt.isBefore(entry.expiresAt()));
+    tokenCache.put(scope, newToken);
     // Every token this process hands out stays traceable well past GitHub's expiry, so a write
-    // still holding an older one can always name the installation that has to replace it.
-    tokenOwners.put(newToken.token(), new TokenOwner(installationId, issuedAt));
+    // still holding an older one can always name the installation, and the repository, that has
+    // to replace it.
+    tokenOwners.put(newToken.token(), new TokenOwner(scope, issuedAt));
     forgetOwnersOlderThanRetention(issuedAt);
 
     return newToken.token();
@@ -178,9 +218,13 @@ public class GitHubAuthClient {
     tokenOwners.values().removeIf(owner -> owner.issuedAt().isBefore(cutoff));
   }
 
-  /** Returns an Authorization header value for GitHub API calls. */
+  /**
+   * An Authorization header value whose token reaches every repository of the installation. Only
+   * for calls about the installation itself, such as listing its repositories; work on one
+   * repository takes {@link #getAuthHeader(long, String)}.
+   */
   public String getAuthHeader(long installationId) {
-    return BEARER + installationToken(installationId);
+    return BEARER + token(TokenScope.installation(installationId));
   }
 
   /** The ids of every installation of the App, asked for with the App's own credential. */
@@ -189,12 +233,22 @@ public class GitHubAuthClient {
   }
 
   /**
-   * Drops a gone installation's cached token (#1222), so nothing keeps calling GitHub with it after
-   * the installation was uninstalled or suspended.
+   * An Authorization header value for work on one repository: its token reaches {@code repository}
+   * (the name, without the owner) and no other repository of the installation, with the same
+   * permissions. Minting fails, and nothing wider is handed out in its place, when the installation
+   * does not cover that repository.
+   */
+  public String getAuthHeader(long installationId, String repository) {
+    return BEARER + token(TokenScope.repository(installationId, repository));
+  }
+
+  /**
+   * Drops a gone installation's cached tokens (#1222), so nothing keeps calling GitHub with them
+   * after the installation was uninstalled or suspended.
    */
   void onInstallationChange(@Observes InstallationChange change) {
     if (change.kind() == InstallationChange.Kind.GONE) {
-      tokenCache.remove(change.installationId());
+      tokenCache.keySet().removeIf(scope -> scope.installationId() == change.installationId());
     }
   }
 
@@ -232,16 +286,17 @@ public class GitHubAuthClient {
     if (owner == null) {
       return Optional.empty();
     }
-    var installationId = owner.installationId();
+    var scope = owner.scope();
     log.info(
         "Installation token for installation {} was rejected — minting a replacement",
-        installationId);
+        scope.installationId());
     // Expired in place rather than removed, so the replacement travels the same path a token that
-    // simply aged out does and supersedes this one through the bookkeeping in the mint above.
+    // simply aged out does and supersedes this one through the bookkeeping in the mint above. The
+    // replacement is minted for what the dead token was: a refresh never widens a token.
     tokenCache.computeIfPresent(
-        installationId,
-        (id, cached) ->
-            cached.token().equals(dead) ? new CachedToken(dead, Instant.EPOCH, id) : cached);
-    return Optional.of(BEARER + installationToken(installationId));
+        scope,
+        (key, cached) ->
+            cached.token().equals(dead) ? new CachedToken(dead, Instant.EPOCH) : cached);
+    return Optional.of(BEARER + token(scope));
   }
 }

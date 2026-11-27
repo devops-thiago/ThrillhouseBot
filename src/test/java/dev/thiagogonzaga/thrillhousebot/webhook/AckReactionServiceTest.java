@@ -52,7 +52,7 @@ class AckReactionServiceTest {
   void setUp() {
     lenient().when(config.review()).thenReturn(reviewConfig);
     lenient().when(reviewConfig.ackReactionTimeout()).thenReturn(Duration.ofSeconds(2));
-    lenient().when(authClient.getAuthHeader(42L)).thenReturn("token abc");
+    lenient().when(authClient.getAuthHeader(42L, "repo")).thenReturn("token abc");
   }
 
   @AfterEach
@@ -112,7 +112,8 @@ class AckReactionServiceTest {
 
   @Test
   void shouldSwallowAuthFailureWithoutCallingApi() {
-    when(authClient.getAuthHeader(42L)).thenThrow(new RuntimeException("token exchange failed"));
+    when(authClient.getAuthHeader(42L, "repo"))
+        .thenThrow(new RuntimeException("token exchange failed"));
 
     assertDoesNotThrow(
         () -> service.addEyes(42L, "owner", "repo", 1001L, AckReactionService.CommentKind.REVIEW));
