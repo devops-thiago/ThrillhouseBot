@@ -1883,6 +1883,22 @@ class ReviewDispatcherTest {
   }
 
   @Test
+  void noWithdrawalIsRunInTheSlotWaitWhenNoneIsOwed() {
+    var state = new ReviewDispatcher.PerPrState();
+    var trigger = SpanContext.getInvalid();
+    state.onDispatch(reviewRequest("owner", "repo", 42, "sha2"), trigger);
+    state.takeNext();
+
+    assertNull(state.withdrawalDueInSlotWait());
+
+    // One that already ran in the wait is not handed out a second time there.
+    state.onWithdrawal(push(42, "sha3"), trigger);
+    assertEquals(push(42, "sha3"), state.withdrawalDueInSlotWait().withdrawal());
+    assertNull(state.withdrawalDueInSlotWait());
+    assertEquals(push(42, "sha3"), state.takeNext().withdrawal());
+  }
+
+  @Test
   void withdrawalIsLeftToTheWorkerWhenANewerReviewReplacesTheOneThatWaits() {
     var state = new ReviewDispatcher.PerPrState();
     var trigger = SpanContext.getInvalid();

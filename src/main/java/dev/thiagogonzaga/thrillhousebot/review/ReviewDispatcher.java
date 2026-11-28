@@ -31,6 +31,7 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -375,19 +376,26 @@ public final class ReviewDispatcher {
   public boolean dispatchApprovalWithdrawal(ApprovalOnPush.Push task) {
     var key = new PrKey(task.owner(), task.repo(), task.prNumber());
     var trigger = Span.current().getSpanContext();
-    if (!queueOnWorker(
-        key, "Approval withdrawal", task.headSha(), state -> state.onWithdrawal(task, trigger))) {
-      return false;
-    }
     // The pull request's worker may be waiting for a repository slot with an earlier review. The
-    // withdrawal needs no slot, so the worker is woken to run it now. Read after the withdrawal
-    // is queued: a worker that starts to wait later sees it before it waits.
-    var state = states.get(key);
-    var waiting = state != null ? state.waitingForSlot() : null;
-    if (waiting != null) {
-      autoReviewSlots.recheckWaiters(waiting.installationId(), waiting.repositoryId());
+    // withdrawal needs no slot, so the worker is woken to run it now. The wait is read from the
+    // state the withdrawal was queued on, after it is queued: a worker that starts to wait later
+    // sees the withdrawal before it waits.
+    var waiting = new AtomicReference<ReviewOrchestrator.ReviewRequest>();
+    var queued =
+        queueOnWorker(
+            key,
+            "Approval withdrawal",
+            task.headSha(),
+            state -> {
+              var outcome = state.onWithdrawal(task, trigger);
+              waiting.set(state.waitingForSlot());
+              return outcome;
+            });
+    var review = waiting.get();
+    if (review != null) {
+      autoReviewSlots.recheckWaiters(review.installationId(), review.repositoryId());
     }
-    return true;
+    return queued;
   }
 
   /** Hands work other than a review to the pull request's worker, starting one when none runs. */
