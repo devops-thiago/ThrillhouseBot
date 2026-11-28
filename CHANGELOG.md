@@ -37,6 +37,10 @@ cannot resolve its review threads.
 
 ### Changed
 
+- **The check run title says the verdict** (#1541): `Changes requested: 2 blocking findings`,
+  `3 findings, none blocking`, `Approved ✅`, or what held the approval, in place of a title that
+  repeated the check's name. The name stays `ThrillhouseBot Review`, so branch protection is not
+  affected.
 - **The PR summary folds its long sections** (#1445): **Changes Overview**, **Changed Files** and
   **Previous Findings Status** now open on a click, with their counts in the line you click, and so
   does **Risk Assessment** when there is no critical or high finding. A line above the folded file

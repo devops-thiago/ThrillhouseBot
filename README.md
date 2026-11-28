@@ -685,6 +685,12 @@ HIGH findings stay inline at any confidence. Placement reads the finding's final
 grade, after the verifier and the deterministic confidence floors, the same way
 on every review lane.
 
+The check run's title says the verdict, so a pull request's check list shows why
+a check is red or grey: `Changes requested: 2 blocking findings`,
+`3 findings, none blocking`, `Approved ✅`, or what held the approval, such as
+`Held: required checks not green`. The check's name stays
+`ThrillhouseBot Review`.
+
 ### CI gating
 
 With `REVIEW_CI_GATING=strict`, a review that finds nothing while a required

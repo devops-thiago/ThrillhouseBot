@@ -515,11 +515,70 @@ public class VerdictBuilder {
     return result.reviewState().checkRunConclusion();
   }
 
-  static String checkTitleForResult(ReviewResult result) {
-    if (result.reviewState() == ReviewState.APPROVE) {
-      return CheckRunManager.CHECK_NAME + " ✅";
+  /** The check run's title under this builder's blocking mode. */
+  String checkTitle(ReviewResult result) {
+    return checkTitleForResult(result, blockingStrictness);
+  }
+
+  /**
+   * The verdict and its count, which a pull request's check list shows beside the check's name
+   * (#1541). The name is not repeated: GitHub already prints it, and branch protection matches it.
+   * The count is the summary's: the findings {@link PrSummaryGenerator#currentState} lists.
+   */
+  static String checkTitleForResult(ReviewResult result, BlockingStrictness strictness) {
+    var listed = PrSummaryGenerator.currentState(result).result().findings();
+    return switch (result.reviewState()) {
+      case APPROVE -> "Approved ✅";
+      case REQUEST_CHANGES ->
+          changesRequestedTitle(listed.stream().filter(strictness::isBlocking).count());
+      case COMMENT ->
+          commentTitle(result, Math.max(listed.size(), result.unresolvedPreviousCount()));
+    };
+  }
+
+  private static String changesRequestedTitle(long blocking) {
+    if (blocking == 0) {
+      return "Changes requested";
     }
-    return CheckRunManager.CHECK_NAME;
+    return "Changes requested: " + blocking + " blocking finding" + (blocking == 1 ? "" : "s");
+  }
+
+  /**
+   * Open findings that block nothing, or else what held the approval back. CI is named only when it
+   * is the sole hold: such a title is rewritten once the checks pass, and under a gating mode that
+   * does not hold, offending checks never leave a clean round at Comment.
+   */
+  private static String commentTitle(ReviewResult result, long open) {
+    if (open > 0) {
+      return open + (open == 1 ? " finding" : " findings") + ", none blocking";
+    }
+    if (result.heldOnCiOnly()) {
+      if (result.offendingCiChecks().isEmpty()) {
+        return "Held: CI could not be read";
+      }
+      return result.requiredContextsKnown()
+          ? "Held: required checks not green"
+          : "Held: checks not green";
+    }
+    if (result.truncated()) {
+      return "Held: partial review";
+    }
+    if (result.priorRoundsUnreadable()) {
+      return "Held: earlier rounds could not be read";
+    }
+    return "No new findings";
+  }
+
+  /**
+   * This round's findings and every earlier one still open. An open entry equal to one of the
+   * round's findings is that finding (a replaced item listed as its replacement, #969), so it is
+   * weighed once.
+   */
+  private static List<Finding> outstanding(List<Finding> raised, List<Finding> openPrevious) {
+    var outstanding = new ArrayList<>(raised);
+    var thisRound = new HashSet<>(raised);
+    openPrevious.stream().filter(open -> !thisRound.contains(open)).forEach(outstanding::add);
+    return outstanding;
   }
 
   /**
@@ -1019,13 +1078,8 @@ public class VerdictBuilder {
     var requiredContextsKnown = ciEvaluation.requiredContextsKnown();
     var tally = tallyFindings(aiResponse);
 
-    // This round's findings and every earlier one still open — the set the summary lists (#948).
-    // An open entry equal to one of the round's findings is that finding (a replaced item listed as
-    // its replacement, #969), so it is weighed once.
-    var outstanding = new ArrayList<Finding>(tally.findings());
-    summaryInputs.openPrevious().stream()
-        .filter(open -> !tally.findings().contains(open))
-        .forEach(outstanding::add);
+    // The set the summary lists (#948).
+    var outstanding = outstanding(tally.findings(), summaryInputs.openPrevious());
     ReviewState state = ReviewState.fromFindings(outstanding, blockingStrictness);
     // #645: count the outstanding findings whose severity cleared the mode's bar but whose
     // confidence did not, and only when the review is not requesting changes anyway — that is

@@ -1633,6 +1633,144 @@ class VerdictBuilderTest {
     assertFalse(summary.contains("Note:"), summary);
   }
 
+  private static ReviewResult titled(
+      ReviewState state,
+      List<Finding> findings,
+      List<ReviewResult.CiCheck> checks,
+      int omitted,
+      boolean ciUnreadable,
+      boolean contextsKnown) {
+    return new ReviewResult(
+        findings,
+        0,
+        0,
+        0,
+        0,
+        null,
+        state,
+        false,
+        "",
+        List.of(),
+        checks,
+        omitted,
+        ciUnreadable,
+        contextsKnown,
+        ReviewResult.TruncationDetail.EMPTY);
+  }
+
+  private static String title(ReviewResult result) {
+    return VerdictBuilder.checkTitleForResult(result, BlockingStrictness.BALANCED);
+  }
+
+  @Test
+  void checkTitleCountsTheBlockingFindings() {
+    var high = new Finding(RiskLevel.HIGH, "a.java", 1, "A", "d", null, null);
+    var other = new Finding(RiskLevel.CRITICAL, "a.java", 2, "B", "d", null, null);
+    var low = new Finding(RiskLevel.LOW, "a.java", 3, "C", "d", null, null);
+
+    assertEquals(
+        "Changes requested: 1 blocking finding",
+        title(titled(ReviewState.REQUEST_CHANGES, List.of(high, low), List.of(), 0, false, true)));
+    assertEquals(
+        "Changes requested: 2 blocking findings",
+        title(
+            titled(ReviewState.REQUEST_CHANGES, List.of(high, other), List.of(), 0, false, true)));
+    assertEquals(
+        "Changes requested",
+        title(titled(ReviewState.REQUEST_CHANGES, List.of(), List.of(), 0, false, true)));
+    assertEquals(
+        "1 finding, none blocking",
+        title(titled(ReviewState.COMMENT, List.of(low), List.of(), 0, false, true)));
+    assertEquals(
+        "2 findings, none blocking",
+        title(titled(ReviewState.COMMENT, List.of(low, high), List.of(), 0, false, true)));
+  }
+
+  @Test
+  void checkTitleCountsAReRaisedOpenFindingOnce() {
+    var again = new Finding(RiskLevel.HIGH, "a.java", 1, "A", "reworded", null, null);
+    var earlier = new Finding(RiskLevel.HIGH, "a.java", 1, "A", "d", null, null);
+    var round = titled(ReviewState.REQUEST_CHANGES, List.of(again), List.of(), 0, false, true);
+
+    assertEquals(
+        "Changes requested: 1 blocking finding", title(withOpenPrevious(round, List.of(earlier))));
+  }
+
+  @Test
+  void checkTitleDoesNotBlameCiWhenSomethingElseHoldsToo() {
+    var failing = List.of(new ReviewResult.CiCheck("build", "check_run", "completed", "failure"));
+
+    assertEquals(
+        "Held: partial review",
+        title(titled(ReviewState.COMMENT, List.of(), failing, 2, false, true)));
+  }
+
+  private static ReviewResult withOpenPrevious(ReviewResult round, List<Finding> open) {
+    return new ReviewResult(
+        round.findings(),
+        round.criticalCount(),
+        round.highCount(),
+        round.mediumCount(),
+        round.lowCount(),
+        round.highestRisk(),
+        round.reviewState(),
+        round.isFirstReview(),
+        round.summaryMarkdown(),
+        round.previousStatuses(),
+        round.offendingCiChecks(),
+        round.omittedFiles(),
+        round.ciUnreadable(),
+        round.requiredContextsKnown(),
+        round.truncation(),
+        round.blockingWithheldByConfidence(),
+        open,
+        round.priorRoundsUnreadable());
+  }
+
+  @Test
+  void checkTitleSaysWhatHeldAFindingsFreeComment() {
+    var failing = List.of(new ReviewResult.CiCheck("build", "check_run", "completed", "failure"));
+
+    assertEquals(
+        "Held: required checks not green",
+        title(titled(ReviewState.COMMENT, List.of(), failing, 0, false, true)));
+    assertEquals(
+        "Held: checks not green",
+        title(titled(ReviewState.COMMENT, List.of(), failing, 0, false, false)));
+    assertEquals(
+        "Held: CI could not be read",
+        title(titled(ReviewState.COMMENT, List.of(), List.of(), 0, true, true)));
+    assertEquals(
+        "Held: partial review",
+        title(titled(ReviewState.COMMENT, List.of(), List.of(), 2, false, true)));
+    assertEquals(
+        "No new findings",
+        title(titled(ReviewState.COMMENT, List.of(), List.of(), 0, false, true)));
+    var held = titled(ReviewState.COMMENT, List.of(), List.of(), 0, false, true);
+    assertEquals(
+        "Held: earlier rounds could not be read",
+        title(
+            new ReviewResult(
+                held.findings(),
+                held.criticalCount(),
+                held.highCount(),
+                held.mediumCount(),
+                held.lowCount(),
+                held.highestRisk(),
+                held.reviewState(),
+                held.isFirstReview(),
+                held.summaryMarkdown(),
+                held.previousStatuses(),
+                held.offendingCiChecks(),
+                held.omittedFiles(),
+                held.ciUnreadable(),
+                held.requiredContextsKnown(),
+                held.truncation(),
+                held.blockingWithheldByConfidence(),
+                held.openPreviousFindings(),
+                true)));
+  }
+
   @Test
   void warnModeAllowsApproveButNotesOffendingCi() {
     var result =
@@ -1645,7 +1783,8 @@ class VerdictBuilderTest {
     var summary = VerdictBuilder.checkSummaryForResult(result);
     assertTrue(summary.contains("Note:"), summary);
     assertTrue(summary.contains("still pending or failing"), summary);
-    assertTrue(VerdictBuilder.checkTitleForResult(result).contains("✅"));
+    assertTrue(
+        VerdictBuilder.checkTitleForResult(result, BlockingStrictness.BALANCED).contains("✅"));
     assertEquals("success", VerdictBuilder.conclusionForResult(result));
   }
 

@@ -293,7 +293,7 @@ public class CiHoldRevisit {
             verdict.checkRunId(),
             "completed",
             VerdictBuilder.conclusionForResult(result),
-            VerdictBuilder.checkTitleForResult(result),
+            verdictBuilder.checkTitle(result),
             summary,
             verdict.detailsUrl()));
   }

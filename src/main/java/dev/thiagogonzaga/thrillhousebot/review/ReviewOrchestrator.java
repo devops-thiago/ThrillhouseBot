@@ -455,7 +455,7 @@ public class ReviewOrchestrator {
                   evidence.criterionVerdicts().all()));
 
       String conclusion = VerdictBuilder.conclusionForResult(result);
-      String checkTitle = VerdictBuilder.checkTitleForResult(result);
+      String checkTitle = verdictBuilder.checkTitle(result);
       String checkSummary = VerdictBuilder.checkSummaryForResult(result);
       // #704/#1021: the model call can run for minutes. A push landing in that window supersedes
       // this run (the dispatcher already queued a coalesced run for the new head), and a label
