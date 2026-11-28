@@ -22,6 +22,7 @@ import static org.mockito.Mockito.*;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubLabelClient;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubTokenReads;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
@@ -40,6 +41,7 @@ class PrLabelerTest {
   @Mock private ThrillhouseConfig.ReviewConfig reviewConfig;
   @Mock private ThrillhouseConfig.LabelsConfig labelsConfig;
   @Mock private GitHubLabelClient labelClient;
+  @Mock private GitHubTokenReads reads;
   @Mock private GitHubCommentClient commentClient;
 
   @InjectMocks private PrLabeler labeler;
@@ -289,8 +291,7 @@ class PrLabelerTest {
     void shouldNotAddLabelsWhenPrIsAlreadyAtMax() {
       when(labelsConfig.maxLabels()).thenReturn(3);
       // The PR already carries max labels from earlier reviews — adding more would exceed the cap.
-      when(labelClient.listIssueLabels(
-              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt()))
+      when(reads.issueLabels(anyString(), anyString(), anyString(), anyInt()))
           .thenReturn(List.of(label("a"), label("b"), label("c")));
 
       labeler.applyOrSuggest(request(false, List.of("d"), List.of(label("d"))));
@@ -303,8 +304,7 @@ class PrLabelerTest {
     void shouldOnlyTopUpToMaxAgainstLabelsAlreadyOnThePr() {
       when(labelsConfig.maxLabels()).thenReturn(3);
       // Two labels already present, so only one more may be added regardless of how many match.
-      when(labelClient.listIssueLabels(
-              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt()))
+      when(reads.issueLabels(anyString(), anyString(), anyString(), anyInt()))
           .thenReturn(List.of(label("a"), label("b")));
 
       labeler.applyOrSuggest(request(false, List.of("c", "d"), List.of(label("c"), label("d"))));
@@ -321,8 +321,7 @@ class PrLabelerTest {
       when(labelsConfig.maxLabels()).thenReturn(3);
       // "bug" is already on the PR; re-adding it is a no-op, so its budget slot frees up for
       // "docs".
-      when(labelClient.listIssueLabels(
-              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt()))
+      when(reads.issueLabels(anyString(), anyString(), anyString(), anyInt()))
           .thenReturn(List.of(label("bug")));
 
       labeler.applyOrSuggest(
@@ -339,8 +338,7 @@ class PrLabelerTest {
     void shouldNotCallAddLabelsWhenEverySuggestionIsAlreadyOnThePr() {
       when(labelsConfig.maxLabels()).thenReturn(3);
       // The only matching suggestion is already on the PR, so there is nothing new to add.
-      when(labelClient.listIssueLabels(
-              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt()))
+      when(reads.issueLabels(anyString(), anyString(), anyString(), anyInt()))
           .thenReturn(List.of(label("bug")));
 
       labeler.applyOrSuggest(request(false, List.of("bug"), List.of(label("bug"))));
@@ -353,8 +351,7 @@ class PrLabelerTest {
     void shouldIgnoreCurrentLabelsWithNullOrBlankNames() {
       when(labelsConfig.maxLabels()).thenReturn(3);
       // Defensive: a PR label with a null/blank name must not count against the budget.
-      when(labelClient.listIssueLabels(
-              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt()))
+      when(reads.issueLabels(anyString(), anyString(), anyString(), anyInt()))
           .thenReturn(java.util.Arrays.asList(label(null), label(" "), label("bug")));
 
       labeler.applyOrSuggest(request(false, List.of("docs"), List.of(label("docs"))));
@@ -367,25 +364,8 @@ class PrLabelerTest {
     }
 
     @Test
-    void shouldApplyWhenCurrentLabelLookupReturnsNull() {
-      // GitHub may deserialize an empty body to null; treat it as "no labels yet" and apply.
-      when(labelClient.listIssueLabels(
-              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt()))
-          .thenReturn(null);
-
-      labeler.applyOrSuggest(request(false, List.of("bug"), List.of(label("bug"))));
-
-      var captor = ArgumentCaptor.forClass(GitHubLabelClient.AddLabelsRequest.class);
-      verify(labelClient)
-          .addLabels(
-              anyString(), anyString(), anyString(), anyString(), anyInt(), captor.capture());
-      assertEquals(List.of("bug"), captor.getValue().labels());
-    }
-
-    @Test
     void shouldStillApplyWhenCurrentLabelLookupFails() {
-      when(labelClient.listIssueLabels(
-              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt()))
+      when(reads.issueLabels(anyString(), anyString(), anyString(), anyInt()))
           .thenThrow(new RuntimeException("rate limited"));
 
       labeler.applyOrSuggest(request(false, List.of("bug"), List.of(label("bug"))));
@@ -395,79 +375,6 @@ class PrLabelerTest {
           .addLabels(
               anyString(), anyString(), anyString(), anyString(), anyInt(), captor.capture());
       assertEquals(List.of("bug"), captor.getValue().labels());
-    }
-
-    @Test
-    void shouldTreatLabelsBeyondTheFirstPageAsAlreadyApplied() {
-      // max is set well above the label count so the budget stays positive — this isolates the
-      // pagination check: the suggestion is skipped only because it is recognised as already on the
-      // PR (page 2), not because the cap was hit. Page one must be full (100) or the walk stops
-      // before requesting page two, so the only label the PR could exceed one page with lives
-      // there.
-      when(labelsConfig.maxLabels()).thenReturn(200);
-      var fullFirstPage = new java.util.ArrayList<GitHubLabelClient.Label>();
-      for (int i = 0; i < 100; i++) {
-        fullFirstPage.add(label("page1-" + i));
-      }
-      when(labelClient.listIssueLabels(
-              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), eq(1)))
-          .thenReturn(fullFirstPage);
-      when(labelClient.listIssueLabels(
-              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), eq(2)))
-          .thenReturn(List.of(label("page2-only")));
-
-      labeler.applyOrSuggest(request(false, List.of("page2-only"), List.of(label("page2-only"))));
-
-      // A single-page fetch would miss "page2-only" and re-add it; walking to page 2 sees it as
-      // already present, so nothing new is applied.
-      verify(labelClient, never())
-          .addLabels(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
-      // Both pages were walked to build the current-label set.
-      verify(labelClient, times(2))
-          .listIssueLabels(
-              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt());
-    }
-
-    @Test
-    void shouldStopWalkingCurrentLabelsAtThePageCap() {
-      // Every page of PR labels comes back full, so only the MAX_LABEL_PAGES guard can end the
-      // walk.
-      var fullPage = new java.util.ArrayList<GitHubLabelClient.Label>();
-      for (int i = 0; i < 100; i++) {
-        fullPage.add(label("label-" + i));
-      }
-      when(labelClient.listIssueLabels(
-              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt()))
-          .thenReturn(fullPage);
-
-      labeler.applyOrSuggest(request(false, List.of("bug"), List.of(label("bug"))));
-
-      verify(labelClient, times(PrLabeler.MAX_LABEL_PAGES))
-          .listIssueLabels(
-              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt());
-    }
-
-    @Test
-    void shouldKeepEarlierPageLabelsWhenALaterPageFails() {
-      when(labelsConfig.maxLabels()).thenReturn(3);
-      // Page 1 already fills the budget; a transient failure fetching page 2 must not discard the
-      // page-1 labels, or the current count would collapse to zero and re-open the budget — adding
-      // labels to a PR that already sits well past max. The pages read so far still apply the cap.
-      var fullFirstPage = new java.util.ArrayList<GitHubLabelClient.Label>();
-      for (int i = 0; i < 100; i++) {
-        fullFirstPage.add(label("page1-" + i));
-      }
-      when(labelClient.listIssueLabels(
-              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), eq(1)))
-          .thenReturn(fullFirstPage);
-      when(labelClient.listIssueLabels(
-              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), eq(2)))
-          .thenThrow(new RuntimeException("rate limited"));
-
-      labeler.applyOrSuggest(request(false, List.of("docs"), List.of(label("docs"))));
-
-      verify(labelClient, never())
-          .addLabels(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
     }
   }
 
@@ -478,14 +385,13 @@ class PrLabelerTest {
     void shouldReturnEmptyWhenDisabled() {
       when(labelsConfig.enabled()).thenReturn(false);
       assertTrue(labeler.fetchExistingLabels("token", "octo", "repo").isEmpty());
-      verifyNoInteractions(labelClient);
+      verifyNoInteractions(reads);
     }
 
     @Test
     void blockedLabelsAreNeverOfferedToTheModel() {
       when(labelsConfig.blocked()).thenReturn(Optional.of(List.of(" Review ", "", "wip")));
-      when(labelClient.listLabels(
-              anyString(), anyString(), anyString(), anyString(), eq(100), eq(1)))
+      when(reads.repositoryLabels("token", "octo", "repo", PrLabeler.MAX_LABEL_PAGES))
           .thenReturn(
               List.of(
                   label("bug"),
@@ -502,68 +408,10 @@ class PrLabelerTest {
     }
 
     @Test
-    void shouldStopPagingOnShortPage() {
-      when(labelClient.listLabels(
-              anyString(), anyString(), anyString(), anyString(), eq(100), eq(1)))
-          .thenReturn(List.of(label("bug"), label("docs")));
-      var labels = labeler.fetchExistingLabels("token", "octo", "repo");
-      assertEquals(2, labels.size());
-      verify(labelClient, times(1))
-          .listLabels(anyString(), anyString(), anyString(), anyString(), eq(100), anyInt());
-    }
-
-    @Test
     void shouldReturnEmptyOnFailure() {
-      when(labelClient.listLabels(
-              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt()))
+      when(reads.repositoryLabels("token", "octo", "repo", PrLabeler.MAX_LABEL_PAGES))
           .thenThrow(new RuntimeException("rate limited"));
       assertTrue(labeler.fetchExistingLabels("token", "octo", "repo").isEmpty());
-    }
-
-    @Test
-    void shouldPaginateUntilAShortPage() {
-      var fullPage = new java.util.ArrayList<GitHubLabelClient.Label>();
-      for (int i = 0; i < 100; i++) {
-        fullPage.add(label("label-" + i));
-      }
-      when(labelClient.listLabels(
-              anyString(), anyString(), anyString(), anyString(), eq(100), eq(1)))
-          .thenReturn(fullPage);
-      when(labelClient.listLabels(
-              anyString(), anyString(), anyString(), anyString(), eq(100), eq(2)))
-          .thenReturn(List.of(label("last")));
-
-      var labels = labeler.fetchExistingLabels("token", "octo", "repo");
-
-      assertEquals(101, labels.size());
-      verify(labelClient, times(2))
-          .listLabels(anyString(), anyString(), anyString(), anyString(), eq(100), anyInt());
-    }
-
-    @Test
-    void shouldStopWhenAPageComesBackNull() {
-      when(labelClient.listLabels(
-              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt()))
-          .thenReturn(null);
-      assertTrue(labeler.fetchExistingLabels("token", "octo", "repo").isEmpty());
-    }
-
-    @Test
-    void shouldStopAtThePageCapWhenEveryPageIsFull() {
-      var fullPage = new java.util.ArrayList<GitHubLabelClient.Label>();
-      for (int i = 0; i < 100; i++) {
-        fullPage.add(label("label-" + i));
-      }
-      // Every page comes back full, so only the MAX_LABEL_PAGES guard can end the loop.
-      when(labelClient.listLabels(
-              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt()))
-          .thenReturn(fullPage);
-
-      var labels = labeler.fetchExistingLabels("token", "octo", "repo");
-
-      assertEquals(100 * PrLabeler.MAX_LABEL_PAGES, labels.size());
-      verify(labelClient, times(PrLabeler.MAX_LABEL_PAGES))
-          .listLabels(anyString(), anyString(), anyString(), anyString(), eq(100), anyInt());
     }
   }
 
