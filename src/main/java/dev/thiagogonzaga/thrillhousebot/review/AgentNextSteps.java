@@ -66,9 +66,9 @@ final class AgentNextSteps {
   }
 
   /**
-   * Inserts {@code section} immediately after the summary heading so it precedes the overview
-   * paragraphs. The heading is not necessarily the first line: coverage, degradation and confidence
-   * banners are prepended above it and stay there.
+   * Inserts {@code section} after the summary heading, or after the ribbon when there is one, so it
+   * precedes the overview paragraphs. The heading is not necessarily the first line: coverage,
+   * degradation and confidence banners are prepended above it and stay there.
    */
   static String embedAfterHeading(String summaryMarkdown, String section) {
     if (section == null || section.isBlank()) {
@@ -82,7 +82,10 @@ final class AgentNextSteps {
     if (headingStart < 0) {
       return section + "\n\n" + summaryMarkdown;
     }
-    var headingEnd = headingStart + heading.length();
+    var ribbon = SummaryRibbon.END + "\n\n";
+    var ribbonStart = summaryMarkdown.indexOf(ribbon, headingStart);
+    var headingEnd =
+        ribbonStart < 0 ? headingStart + heading.length() : ribbonStart + ribbon.length();
     return summaryMarkdown.substring(0, headingEnd)
         + section
         + "\n\n"

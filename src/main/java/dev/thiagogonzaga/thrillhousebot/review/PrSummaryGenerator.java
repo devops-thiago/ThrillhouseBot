@@ -49,12 +49,17 @@ public class PrSummaryGenerator {
 
   private final boolean collapseSections;
 
+  private final SummaryRibbon ribbon;
+
   @Inject
   public PrSummaryGenerator(ThrillhouseConfig config) {
     this(
         config.review().diagram().enabled(),
         LargePrNudge.from(config.review().largePrNudge()),
-        config.review().summaryCollapse().enabled());
+        config.review().summaryCollapse().enabled(),
+        new SummaryRibbon(
+            config.review().summaryRibbon().enabled(),
+            config.review().summaryRibbon().impactLine()));
   }
 
   /** Visible for tests; the large-PR nudge stays off, matching its shipped default. */
@@ -69,9 +74,23 @@ public class PrSummaryGenerator {
 
   /** Visible for tests: also pins whether the long sections are folded, as they are by default. */
   PrSummaryGenerator(boolean diagramEnabled, LargePrNudge largePrNudge, boolean collapseSections) {
+    this(diagramEnabled, largePrNudge, collapseSections, new SummaryRibbon(true, false));
+  }
+
+  /** Visible for tests: also pins the ribbon, on without the impact line by default. */
+  PrSummaryGenerator(boolean diagramEnabled, LargePrNudge largePrNudge, SummaryRibbon ribbon) {
+    this(diagramEnabled, largePrNudge, true, ribbon);
+  }
+
+  private PrSummaryGenerator(
+      boolean diagramEnabled,
+      LargePrNudge largePrNudge,
+      boolean collapseSections,
+      SummaryRibbon ribbon) {
     this.diagramEnabled = diagramEnabled;
     this.largePrNudge = largePrNudge;
     this.collapseSections = collapseSections;
+    this.ribbon = ribbon;
   }
 
   private static final int TEASER_FILES = 3;
@@ -355,6 +374,7 @@ public class PrSummaryGenerator {
     var carried = state.carried();
     var sb = new StringBuilder();
     sb.append(SUMMARY_HEADING).append("\n\n");
+    var underHeading = sb.length();
 
     // One observation must be published once. The findings are the most specific surface, so a
     // description-gap bullet — or a walkthrough clause appended after the row's file summary —
@@ -389,12 +409,21 @@ public class PrSummaryGenerator {
     gaps.addAll(criteria.lines());
     // #1148: a criterion the description shows met by code already on the base branch.
     var split = sources.baseCode().split(gaps);
-    appendDescriptionGaps(
-        sb,
-        split.unmet(),
+    var gapFindings =
         descriptionFindings(surfaces.gapFindings(), result.findings(), sources).stream()
             .filter(f -> !criteria.pointed().contains(f))
-            .toList());
+            .toList();
+    sb.insert(
+        underHeading,
+        ribbon.render(
+            new SummaryRibbon.Facts(
+                round,
+                state,
+                split.unmet().size() + gapFindings.size(),
+                changedFiles,
+                largePrNudge.overThreshold(filesChanged, additions, deletions),
+                aiSummary == null ? null : aiSummary.prPurpose())));
+    appendDescriptionGaps(sb, split.unmet(), gapFindings);
     appendMetByExistingCode(sb, split.met());
     appendWalkthroughDiagram(sb, aiSummary);
 

@@ -55,6 +55,11 @@ class PrSummaryGeneratorTest {
     when(review.summaryCollapse()).thenReturn(collapse);
     when(collapse.enabled()).thenReturn(false);
 
+    var ribbon = mock(ThrillhouseConfig.SummaryRibbonConfig.class);
+    when(review.summaryRibbon()).thenReturn(ribbon);
+    when(ribbon.enabled()).thenReturn(true);
+    when(ribbon.impactLine()).thenReturn(true);
+
     var fromConfig = new PrSummaryGenerator(config);
     var result =
         new ReviewResult(
@@ -66,6 +71,8 @@ class PrSummaryGeneratorTest {
 
     assertTrue(summary.contains("### Control-Flow Diagram"));
     assertTrue(summary.contains("### Risk Assessment\n| Risk | Count |"), summary);
+
+    assertTrue(summary.contains("Impact: **none** (no open findings)"), summary);
     // The same config wiring carries the nudge policy; this 1-file PR is under both bounds.
     assertFalse(summary.contains(LargePrNudge.NUDGE_HEADING), summary);
     assertTrue(

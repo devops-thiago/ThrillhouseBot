@@ -749,6 +749,16 @@ findings and the checks that are not green are never folded, and a green CI adds
 no section. Set `REVIEW_SUMMARY_COLLAPSE_ENABLED=false` to keep every section
 open.
 
+A ribbon under the title answers the first questions without scrolling: what the
+review posts (**Approve**, **Comment** or **Request changes**), the open
+findings by severity with the double-check and description-gap counts, whether
+tests were touched, whether this is a first review or a follow-up, whether the PR
+is over the large-PR thresholds, and the first sentence of what it does. It costs
+no model call. `REVIEW_SUMMARY_IMPACT_LINE_ENABLED=true` adds an **Impact** line
+naming the highest severity still open; it is derived from the findings, not a
+model's confidence score. `REVIEW_SUMMARY_RIBBON_ENABLED=false` leaves the
+ribbon out.
+
 With `REVIEW_AGENT_NEXT_STEPS_ENABLED` on, the summary also carries a short
 **Agent next steps** block at the top (under the heading, above the overview): head SHA and
 whether it changed since the last edit, how many findings are still open, names of required checks

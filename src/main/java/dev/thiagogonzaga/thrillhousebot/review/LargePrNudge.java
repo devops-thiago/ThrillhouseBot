@@ -140,7 +140,7 @@ record LargePrNudge(boolean enabled, int minFiles, int minChangedLines) {
    * the shape this heuristic is for — and a non-positive bound switches its dimension off rather
    * than matching every PR.
    */
-  private boolean overThreshold(int filesChanged, int additions, int deletions) {
+  boolean overThreshold(int filesChanged, int additions, int deletions) {
     return (minFiles > 0 && filesChanged >= minFiles)
         || (minChangedLines > 0 && additions + deletions >= minChangedLines);
   }
