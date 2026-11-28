@@ -75,7 +75,8 @@ public final class SummaryVerifierPrompts {
             Respond with exactly this JSON object:
             {"contradicted": [{"id": "S1", "source": "diff", "evidence": "the line or finding that shows it is false"}]}
             Use an empty array when no statement is contradicted.
-            """;
+            """
+          + PrReviewPrompts.ENGLISH_PROSE_RULE;
 
   /**
    * The user message. Every slot holds untrusted or model-written text; {@code statements} arrive
