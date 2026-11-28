@@ -55,21 +55,46 @@ const PARAGRAPH_END = /^ {0,3}(?:#{1,6}(?:[ \t]|$)|>|[-*+][ \t]+\S|1[.)][ \t]+\S
  * A list marker takes the spaces and tabs after it when they are one to four columns wide. With
  * five or more the item's text starts one column after the marker and the rest of the line is an
  * indented code block, so it is returned with that indentation and reads as no heading or fence.
+ * A quote marker takes one column after it, and a tab there is as wide as the column it starts in
+ * makes it, so the text is returned with the columns left over as spaces.
  */
 export function withoutContainers(line) {
+  return containers(line).text;
+}
+
+/**
+ * {@code line} without its markers, as {@link withoutContainers} gives it, and how many of its
+ * characters the markers and the spaces and tabs counted with them take.
+ */
+function containers(line) {
   let text = line;
   let column = 0;
+  let taken = 0;
   for (let match = CONTAINER.exec(text); match; match = CONTAINER.exec(text)) {
-    column += indentOf(match[0], column) + match[0].trimStart().length;
-    text = text.slice(match[0].length);
-    if (match[1]) continue;
-    const rest = text.replace(/^[ \t]*/, '');
-    const gap = indentOf(text, column);
-    if (rest !== '' && gap >= 5) return ' '.repeat(gap - 1) + rest;
-    column += gap;
+    const marker = match[0].trim();
+    const after = column + indentOf(match[0], column) + marker.length;
+    const space = /^[ \t]*/.exec(text.slice(match[0].trimEnd().length))[0];
+    const gap = indentOf(space, after);
+    const rest = text.slice(match[0].trimEnd().length + space.length);
+    if (match[1]) {
+      if (!space.includes('\t')) {
+        // Spaces alone: the marker takes the first, and the rest are read with what follows.
+        taken += match[0].length;
+        text = text.slice(match[0].length);
+        column = after + (match[0].length - match[0].trimEnd().length);
+        continue;
+      }
+      taken += match[0].trimEnd().length + space.length;
+      text = ' '.repeat(gap - 1) + rest;
+      column = after + 1;
+      continue;
+    }
+    if (rest !== '' && gap >= 5) return { text: ' '.repeat(gap - 1) + rest, taken: taken + match[0].length };
+    taken += match[0].length + space.length;
+    column = after + gap;
     text = rest;
   }
-  return text;
+  return { text, taken };
 }
 
 /** {@code line} without the block quote markers it starts with. */
@@ -108,22 +133,22 @@ function closesFence(line, opener) {
 /**
  * The code fence {@code line} opens, or null. A fence that opens a block quote or a list item
  * belongs to it: {@code leftBy} tells whether a later line is outside the quote or the item, which
- * ends the fence with no closing line, and {@code within} gives a later line as the quote or the
+ * ends the fence with no closing line (a blank line is outside a quote and inside an item), and {@code within} gives a later line as the quote or the
  * item holds it. A fence behind both kinds of marker, or behind a marker followed by a tab, is not
  * read as a fence, so nothing after it is hidden.
  */
 function fenceAt(line) {
-  const text = withoutContainers(line);
+  const { text, taken } = containers(line);
   const run = fenceOpener(text);
   if (run === undefined) return null;
-  const prefix = line.slice(0, line.length - text.length);
+  const prefix = line.slice(0, taken);
   if (prefix === '') return { run, leftBy: () => false, within: (next) => next };
   if (/^[ >]*$/.test(prefix)) return { run, leftBy: (next) => !QUOTE.test(next), within: withoutQuotes };
   if (/[>\t]/.test(prefix)) return null;
   const width = prefix.length;
   return {
     run,
-    leftBy: (next) => indentOf(next) < width,
+    leftBy: (next) => !BLANK.test(next) && indentOf(next) < width,
     within: (next) => ' '.repeat(Math.max(0, indentOf(next) - width)) + next.replace(/^[ \t]*/, ''),
   };
 }
@@ -140,7 +165,7 @@ export function fenceReader() {
   return {
     /** Whether {@code line} opens, is inside or closes a fenced code block. */
     inFence(line) {
-      if (fence !== null && !BLANK.test(line) && fence.leftBy(line)) fence = null;
+      if (fence?.leftBy(line)) fence = null;
       if (fence === null) {
         fence = fenceAt(line);
         return fence !== null;

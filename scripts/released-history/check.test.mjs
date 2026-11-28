@@ -137,6 +137,12 @@ test('a second released section is found in every form Markdown reads as a level
     ['-\t## [1.0.0] - 2026-01-01'],
     ['1.\t## [1.0.0] - 2026-01-01'],
     ['> -  ## [1.0.0] - 2026-01-01'],
+    // A quote marker takes one column, so a tab after it leaves at most three before the heading.
+    ['>\t## [1.0.0] - 2026-01-01'],
+    ['> \t## [1.0.0] - 2026-01-01'],
+    ['>  \t## [1.0.0] - 2026-01-01'],
+    ['>> \t## [1.0.0] - 2026-01-01'],
+    ['> \t- ## [1.0.0] - 2026-01-01'],
     // A list item that holds only a code block has no paragraph for the next line to continue.
     ['-     code', '[1.0.0] - 2026-01-01', '---'],
     // A line of equals signs makes the paragraph above it a title and ends it.
@@ -172,6 +178,12 @@ test('a line Markdown does not read as a level-two heading is no section', () =>
     ['1.     ## [1.0.0] - 2026-01-01'],
     ['- \t\t## [1.0.0] - 2026-01-01'],
     ['> -     ## [1.0.0] - 2026-01-01'],
+    // Two tabs after a quote marker, or five spaces, leave four columns or more: a code block.
+    ['>\t\t## [1.0.0] - 2026-01-01'],
+    ['> \t\t## [1.0.0] - 2026-01-01'],
+    ['>   \t## [1.0.0] - 2026-01-01'],
+    ['> > \t## [1.0.0] - 2026-01-01'],
+    ['>      ## [1.0.0] - 2026-01-01'],
     ['- -      ## [1.0.0] - 2026-01-01'],
     ['##[1.0.0] - 2026-01-01'],
     ['# [1.0.0] - 2026-01-01'],
@@ -214,6 +226,9 @@ test('a fenced example in the unreleased section adds no section', () => {
     ['- ~~~md', '  ## [1.0.0] - 2026-01-01', '', '  - ~~~', '  ~~~'],
     ['1. ~~~', '\t## [1.0.0] - 2026-01-01', '   ~~~'],
     ['> ~~~', '> ## [1.0.0] - 2026-01-01', '> ~~~'],
+    // An empty quoted line is inside the quote, and a blank line is inside a list item.
+    ['> ~~~', '>', '> ## [1.0.0] - 2026-01-01', '> ~~~'],
+    ['- ~~~', '', '  ## [1.0.0] - 2026-01-01', '  ~~~'],
     // A marked line inside a fence that is in no list item is text of the block.
     ['~~~', '- ~~~', '## [1.0.0] - 2026-01-01', '~~~'],
   ];
@@ -244,6 +259,12 @@ test('a line that only looks like a code fence hides no section', () => {
     ['  - ~~~', ' ## [1.0.0] - 2026-01-01', '', '- Rewritten.'],
     ['> ~~~', ...second],
     ['> ~~~', '- ## [1.0.0] - 2026-01-01', '', '- Rewritten.'],
+    // A blank line ends a block quote and the fence in it, so the quote after it is a new one,
+    // even when that one ends with a line that would have closed the fence.
+    ['> ~~~', '', '> ## [1.0.0] - 2026-01-01', '>', '> - Rewritten.', '> ~~~', '> ~~~'],
+    ['> ~~~', '  ', '> ## [1.0.0] - 2026-01-01', '', '- Rewritten.'],
+    // A tab after the quote marker: the line is not read as a fence.
+    ['> \t~~~', '> ## [1.0.0] - 2026-01-01', '', '- Rewritten.', '> ~~~'],
     // A marked line does not close a fence that is in no list item.
     ['~~~', '- ~~~', '~~~', '', ...second, '- ~~~'],
     // Behind both kinds of marker, or five spaces after one, the line is not read as a fence.
