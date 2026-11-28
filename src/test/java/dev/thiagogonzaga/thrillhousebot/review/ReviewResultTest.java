@@ -522,7 +522,7 @@ class ReviewResultTest {
   }
 
   // A file's name is the pull request author's text: in a code span it mentions and renders
-  // nothing.
+  // nothing, and one holding a pipe, which gets no span, is escaped text.
   @Test
   void coverageGapClausePutsEachFileNameInACodeSpan() {
     var names = new java.util.ArrayList<String>();
@@ -543,6 +543,16 @@ class ReviewResultTest {
                 + " +1 more)"),
         clause);
     assertTrue(clause.contains("only partially analyzed (`a # b`)"), clause);
+    assertTrue(
+        ReviewResult.coverageGapClause(
+                2,
+                new ReviewResult.TruncationDetail(
+                    List.of("x/@victim|y", "a|b.txt"),
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    SummaryDegradation.NONE))
+            .contains("(x\\/\\@&#8203;victim\\|y, a\\|b\\.txt)"));
   }
 
   @Test

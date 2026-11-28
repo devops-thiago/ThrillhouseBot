@@ -420,7 +420,9 @@ public class WebhookEvents {
 
   /**
    * Whether the rate window holds the event back. A head the last automatic review did not cover is
-   * kept and reviewed when the window closes; an event for the head it covered is a recorded skip.
+   * kept to be reviewed when the window closes. An event for the head it covered is a recorded
+   * skip, and so is one for another head that could not be kept ({@link
+   * ReviewDispatcher.RateWindowHold#NOT_KEPT}).
    */
   private boolean heldByRateWindow(String action, ReviewOrchestrator.ReviewRequest request) {
     // A draft marked ready is reviewed inside the window once per head; a second

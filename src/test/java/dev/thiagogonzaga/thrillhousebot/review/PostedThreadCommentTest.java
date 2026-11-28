@@ -176,7 +176,25 @@ class PostedThreadCommentTest {
 
   @Test
   void aFileLevelThreadNamesTheFileInACodeSpan() {
-    var file = "x/@victim<img src=x>.txt";
+    assertTrue(
+        fileLevelBody("x/@victim<img src=x>.txt")
+            .startsWith(
+                "_Filed on the file: ThrillhouseBot could not open a thread on"
+                    + " `x/@victim<img src=x>.txt:1`, so this finding"));
+  }
+
+  // A name holding a pipe would split its span in a table row, so it is escaped text instead.
+  @Test
+  void aFileLevelThreadNamesAFileHoldingAPipeAsEscapedText() {
+    assertTrue(
+        fileLevelBody("x/@victim|<img src=x>.txt")
+            .startsWith(
+                "_Filed on the file: ThrillhouseBot could not open a thread on"
+                    + " x\\/\\@&#8203;victim\\|&lt;img src\\=x\\>\\.txt\\:1, so this finding"));
+  }
+
+  /** The body of the thread posted on {@code file} as a whole once its line is refused. */
+  private String fileLevelBody(String file) {
     when(reviewClient.createPullRequestComment(any(), any(), any(), any(), eq(8), any()))
         .thenAnswer(
             inv -> {
@@ -189,16 +207,11 @@ class PostedThreadCommentTest {
             });
     var finding = new Finding(RiskLevel.HIGH, file, 1, "Bug", "desc", "old", "new");
 
-    var fileLevel =
-        post(finding, "").stream().filter(req -> req.line() == null).findFirst().orElseThrow();
-
-    assertTrue(
-        fileLevel
-            .body()
-            .startsWith(
-                "_Filed on the file: ThrillhouseBot could not open a thread on"
-                    + " `x/@victim<img src=x>.txt:1`, so this finding"),
-        fileLevel.body());
+    return post(finding, "").stream()
+        .filter(req -> req.line() == null)
+        .findFirst()
+        .orElseThrow()
+        .body();
   }
 
   @Test
