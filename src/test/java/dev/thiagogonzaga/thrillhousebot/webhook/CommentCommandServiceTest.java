@@ -647,6 +647,40 @@ class CommentCommandServiceTest {
   }
 
   @Test
+  void resolveCountsTheThreadsItResolvedBeforeGitHubRefusedOne() {
+    authorize(true);
+    when(reviewClient.listPullRequestComments(any(), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(
+            List.of(
+                comment(100L, null, "thrillhousebot[bot]"),
+                comment(101L, null, "thrillhousebot[bot]"),
+                comment(102L, null, "thrillhousebot[bot]"),
+                comment(103L, null, "thrillhousebot[bot]")));
+    when(reviewThreadService.threadsByRootComment(any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(
+            Map.of(
+                100L, new ReviewThreadService.ThreadRef("T100", false),
+                101L, new ReviewThreadService.ThreadRef("T101", false),
+                102L, new ReviewThreadService.ThreadRef("T102", false),
+                103L, new ReviewThreadService.ThreadRef("T103", false)));
+    when(reviewThreadService.resolve(any(), eq("T100"))).thenReturn(true);
+    when(reviewThreadService.resolve(any(), eq("T101"))).thenReturn(true);
+    var errors = JsonNodeFactory.instance.arrayNode();
+    errors.addObject().put("message", "Resource not accessible by integration");
+    when(reviewThreadService.resolve(any(), eq("T102")))
+        .thenThrow(GitHubGraphQLException.from(errors));
+
+    service.handle(ctx(CommentCommand.RESOLVE));
+
+    var body = postedBody();
+    assertTrue(body.startsWith("✅ Resolved 2 ThrillhouseBot finding thread(s). ⚠️ "), body);
+    assertTrue(body.contains("the rest stay open"), body);
+    assertTrue(body.contains(ReviewThreadService.RESOLVE_PERMISSION), body);
+    // The refusal holds for every thread, so the one after it is not tried.
+    verify(reviewThreadService, never()).resolve(any(), eq("T103"));
+  }
+
+  @Test
   void resolveContinuesAfterARefusalThatIsNotAboutPermissions() {
     authorize(true);
     when(reviewClient.listPullRequestComments(any(), any(), eq("owner"), eq("repo"), eq(7)))
