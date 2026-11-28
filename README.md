@@ -444,7 +444,7 @@ the bot bounds them without any setting:
   other automatic review of that PR starts. A push inside the window is kept
   instead of skipped: the bot holds the latest head and reviews it when the
   window closes, so several pushes in a row cost one review. The cases where a
-  kept review does not run are listed below the table. A reopen or a repeated
+  kept review does not run are listed below this list. A reopen or a repeated
   ready-for-review of the commit that was just reviewed is skipped
   (`reason=RATE_LIMITED`). A longer window saves more model spend and makes a
   new head wait longer for its review and check run. Marking a draft ready is
