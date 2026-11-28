@@ -28,7 +28,7 @@ import java.util.List;
  *
  * <p>{@link #of} reads one line on its own. {@link #ofLines} reads consecutive lines and carries a
  * triple-quoted literal or a block comment from the line that opens it to the line that closes it,
- * so a docstring's inner lines are text.
+ * so a docstring's inner lines are text. The lines may start or end inside one, as a hunk does.
  */
 final class SourceLineCode {
 
@@ -54,8 +54,26 @@ final class SourceLineCode {
    */
   private record Open(String closer, boolean literal, boolean bareBraces) {}
 
-  /** The code of one line and what the line leaves open, {@code null} when nothing. */
-  private record Read(String code, Open open) {}
+  /**
+   * The code of one line, what the line leaves open ({@code null} when nothing), and whether a
+   * triple quote on it does not fit the part it was read in: one read as a closer with a word right
+   * after it, as in {@code """Summary}, or one read as an opener right after a full stop, as in
+   * {@code unset."""}.
+   */
+  private record Read(String code, Open open, boolean misfit) {}
+
+  /**
+   * Consecutive lines read from one starting state.
+   *
+   * @param codes the code of each line
+   * @param end what the last line leaves open, {@code null} when nothing
+   * @param openedAt the line that opened {@code end}, -1 when no line did
+   * @param misfit whether a triple quote did not fit the part it was read in
+   * @param firstQuote the triple quote of the first literal a line left open, {@code null} when
+   *     none did
+   */
+  private record Reading(
+      List<String> codes, Open end, int openedAt, boolean misfit, String firstQuote) {}
 
   private SourceLineCode() {}
 
@@ -69,38 +87,98 @@ final class SourceLineCode {
    * block comment opened on one line runs to the line that closes it: the lines between are text,
    * and only a literal's interpolations on them are code.
    *
-   * <p>The lines may start or end inside such a literal or comment, as a hunk does, and then what
-   * reads as its opener may be its closer. So when something is still open after the last line,
-   * every line is read on its own, as {@link #of} reads it. Lines that start inside one literal and
-   * end inside another are balanced and still misread: the code between the two is taken for text.
+   * <p>The lines may start inside a triple-quoted literal, as a hunk does, and then every quote
+   * that reads as an opener is a closer and the text and the code change places. So the lines are
+   * read both ways, as starting outside any literal and as starting inside one, and a quote that
+   * cannot play its part rules a reading out: a closer has no word right after it, and an opener
+   * does not follow a full stop. The reading left is taken, to the last line, so a docstring the
+   * lines cut at either end is text. When both readings are ruled out every line is read on its
+   * own, as {@link #of} reads it.
+   *
+   * <p>When no quote rules a reading out, the lines are taken to start outside if that leaves no
+   * literal open after the last line, and are otherwise each read on their own: reading text as
+   * code can only name a read that is not made, and reading code as text can miss one that is. Bare
+   * quotes around code that sits between two docstrings are therefore still misread: the code
+   * between them is taken for text.
+   *
+   * <p>A block comment left open after the last line may not be one ({@code build/*} in a shell
+   * line), so the lines after the one that opens it are each read on their own. The lines before it
+   * keep their reading.
    */
   static List<String> ofLines(List<String> lines) {
+    var outside = reading(lines, null);
+    if (outside.firstQuote() == null) {
+      return withOpenCommentUnfollowed(outside, lines);
+    }
+    // The opening quote is not seen, so a bare brace is read as an interpolation: that can only
+    // name a read that is not made.
+    var inside = reading(lines, new Open(outside.firstQuote(), true, true));
+    if (outside.misfit() != inside.misfit()) {
+      return withOpenCommentUnfollowed(outside.misfit() ? inside : outside, lines);
+    }
+    var endsInLiteral = outside.end() != null && outside.end().literal();
+    return outside.misfit() || endsInLiteral
+        ? lines.stream().map(SourceLineCode::of).toList()
+        : withOpenCommentUnfollowed(outside, lines);
+  }
+
+  /** Reads {@code lines} as starting inside {@code start}, or outside anything when null. */
+  private static Reading reading(List<String> lines, Open start) {
     var codes = new ArrayList<String>(lines.size());
-    Open open = null;
-    for (var line : lines) {
+    var open = start;
+    var openedAt = -1;
+    var misfit = false;
+    String firstQuote = null;
+    for (var i = 0; i < lines.size(); i++) {
+      var line = lines.get(i);
+      var carried = open != null && !line.contains(open.closer());
       var read = open == null ? read(line) : resume(line, open);
       codes.add(read.code());
+      misfit |= read.misfit();
       open = read.open();
+      if (open != null && !carried) {
+        openedAt = i;
+        if (firstQuote == null && open.literal()) {
+          firstQuote = open.closer();
+        }
+      }
     }
-    return open == null ? codes : lines.stream().map(SourceLineCode::of).toList();
+    return new Reading(codes, open, openedAt, misfit, firstQuote);
+  }
+
+  /**
+   * The codes of {@code reading}, with the lines after one that leaves a block comment open each
+   * read on their own.
+   */
+  private static List<String> withOpenCommentUnfollowed(Reading reading, List<String> lines) {
+    if (reading.end() == null || reading.end().literal()) {
+      return reading.codes();
+    }
+    var codes = new ArrayList<>(reading.codes());
+    for (var i = reading.openedAt() + 1; i < lines.size(); i++) {
+      codes.set(i, of(lines.get(i)));
+    }
+    return codes;
   }
 
   private static Read read(String line) {
     var first = firstNonBlank(line);
     if (first == line.length() || isCommentLine(line.substring(first))) {
-      return new Read("", null);
+      return new Read("", null, false);
     }
     var code = new StringBuilder(line.length());
     Open open = null;
+    var misfit = false;
     var i = first;
     while (i < line.length()) {
       var next = next(line, first, i, code);
       if (next == line.length()) {
         open = leftOpenAt(line, i);
+        misfit = open != null && open.literal() && i > 0 && line.charAt(i - 1) == '.';
       }
       i = next;
     }
-    return new Read(code.toString(), open);
+    return new Read(code.toString(), open, misfit);
   }
 
   /**
@@ -114,11 +192,13 @@ final class SourceLineCode {
     var inside =
         open.literal() ? interpolations(' ' + line, 1, textEnd + 1, open.bareBraces()) : "";
     if (end < 0) {
-      return new Read(inside, open);
+      return new Read(inside, open, false);
     }
     var after = end + open.closer().length();
     var rest = read(" ".repeat(after) + line.substring(after));
-    return new Read(inside + ' ' + rest.code(), rest.open());
+    var wordFollows =
+        open.literal() && after < line.length() && Character.isLetterOrDigit(line.charAt(after));
+    return new Read(inside + ' ' + rest.code(), rest.open(), wordFollows || rest.misfit());
   }
 
   /**

@@ -20,6 +20,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.review.DiffLineResolver.FileChange;
 import io.quarkus.logging.Log;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -59,7 +60,7 @@ final class RoundFileChanges implements DiffLineResolver.RoundChanges {
   private final String repo;
   private final String head;
   private final List<String> roundHeads;
-  private final Map<String, Optional<Set<String>>> changedByBase = new ConcurrentHashMap<>();
+  private final Map<String, Optional<Changed>> changedByBase = new ConcurrentHashMap<>();
   private final AtomicInteger comparisons = new AtomicInteger();
 
   private RoundFileChanges(
@@ -101,6 +102,14 @@ final class RoundFileChanges implements DiffLineResolver.RoundChanges {
   }
 
   /**
+   * What one comparison lists.
+   *
+   * @param paths the paths that differ, a renamed file under both its names
+   * @param patches each listed file's patch by its current name, for the files GitHub gave one
+   */
+  private record Changed(Set<String> paths, Map<String, String> patches) {}
+
+  /**
    * The prior rounds a review read.
    *
    * @param heads each prior round's head, newest first, beside the prior responses
@@ -123,8 +132,48 @@ final class RoundFileChanges implements DiffLineResolver.RoundChanges {
     }
     return changedByBase
         .computeIfAbsent(base.toLowerCase(Locale.ROOT), this::changedFiles)
-        .map(changed -> changes(changed, path))
+        .map(changed -> changes(changed.paths(), path))
         .orElse(FileChange.UNKNOWN);
+  }
+
+  /**
+   * The added lines of {@code path}'s patch in the comparison with the round's head. The head is
+   * ahead of the round's head, so the patch's new side is the head file and its line numbers are
+   * the ones the review's diff uses. A file the comparison lists with no patch (binary, or too
+   * large to diff) is not known, and neither is a path variant that fits two listed files: another
+   * file's lines would say nothing about this one.
+   */
+  @Override
+  public Optional<Set<Integer>> addedLinesSince(int round, String path) {
+    return switch (since(round, path)) {
+      case UNCHANGED -> Optional.of(Set.of());
+      case UNKNOWN -> Optional.empty();
+      case CHANGED ->
+          changedByBase
+              .get(roundHeads.get(round).toLowerCase(Locale.ROOT))
+              .flatMap(changed -> patchOf(changed.patches(), path))
+              .map(RoundFileChanges::addedLines);
+    };
+  }
+
+  /** The patch listed under {@code path}, or under the one listed name that is a variant of it. */
+  private static Optional<String> patchOf(Map<String, String> patches, String path) {
+    var exact = patches.get(path);
+    if (exact != null) {
+      return Optional.of(exact);
+    }
+    var variants = patches.keySet().stream().filter(name -> FilePaths.same(name, path)).toList();
+    return variants.size() == 1 ? Optional.of(patches.get(variants.get(0))) : Optional.empty();
+  }
+
+  private static Set<Integer> addedLines(String patch) {
+    var added = new HashSet<Integer>();
+    for (var line : PatchIndex.parse(patch).rightSide()) {
+      if (line.added()) {
+        added.add(line.rightLine());
+      }
+    }
+    return added;
   }
 
   /** A path the comparison lists, under its own name or a model's shorter or longer variant. */
@@ -135,7 +184,7 @@ final class RoundFileChanges implements DiffLineResolver.RoundChanges {
   }
 
   /** The paths that differ between {@code base} and the head, or empty when that is not known. */
-  private Optional<Set<String>> changedFiles(String base) {
+  private Optional<Changed> changedFiles(String base) {
     if (comparisons.incrementAndGet() > MAX_COMPARISONS) {
       return Optional.empty();
     }
@@ -152,6 +201,7 @@ final class RoundFileChanges implements DiffLineResolver.RoundChanges {
         return Optional.empty();
       }
       var changed = new HashSet<String>();
+      var patches = new HashMap<String, String>();
       for (var file : comparison.files()) {
         if ("renamed".equals(file.status()) && file.changes() == 0) {
           // A pure rename moves the content without changing it.
@@ -161,8 +211,11 @@ final class RoundFileChanges implements DiffLineResolver.RoundChanges {
         if (file.previousFilename() != null) {
           changed.add(file.previousFilename());
         }
+        if (file.patch() != null) {
+          patches.put(file.filename(), file.patch());
+        }
       }
-      return Optional.of(changed);
+      return Optional.of(new Changed(changed, patches));
     } catch (RuntimeException e) {
       Log.warnf(
           "Could not compare %s with the head; file changes since that round are unknown: %s",

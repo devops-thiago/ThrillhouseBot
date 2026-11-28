@@ -163,6 +163,12 @@ cannot resolve its review threads.
   token skipped its labels with only a warning. Label writes, check-run creation, reactions and the
   read of an installation's repository are now repeated once with the replacement token, as the
   other calls are. Label writes also take their turn with the bot's other writes, one second apart.
+- **A finding raised again on unchanged lines no longer opens a second thread (#1553)**: when a
+  round resolved a finding and raised one like it, the new one was kept as a gap the fix left
+  without a check that the quoted lines had changed since the earlier finding. One that quotes only
+  lines unchanged since then is now dropped as already answered; when that cannot be established the
+  finding is kept. A round that raised nothing also keeps its place among the rounds, so a finding
+  is compared with its own round.
 
 ### Security
 

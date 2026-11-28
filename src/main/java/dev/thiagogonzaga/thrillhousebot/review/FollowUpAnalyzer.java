@@ -791,7 +791,7 @@ public class FollowUpAnalyzer {
       return response;
     }
     List<List<ReviewResponse.Finding>> priorRounds = parseAllFindings(priorAiResponseJsons);
-    if (priorRounds.isEmpty()) {
+    if (priorRounds.stream().allMatch(List::isEmpty)) {
       return response;
     }
 
@@ -823,18 +823,16 @@ public class FollowUpAnalyzer {
         FindingVerificationService.recount(response.summary(), kept));
   }
 
+  /**
+   * Each prior round's findings, in the order of {@code aiResponseJsons} (newest first). A round
+   * that raised none, or that cannot be read, keeps its place with no findings, so a round's
+   * position here is the one {@link DiffLineResolver#fileChangeSince} reads.
+   */
   private List<List<ReviewResponse.Finding>> parseAllFindings(List<String> aiResponseJsons) {
-    if (aiResponseJsons == null || aiResponseJsons.isEmpty()) {
+    if (aiResponseJsons == null) {
       return List.of();
     }
-    var rounds = new ArrayList<List<ReviewResponse.Finding>>();
-    for (String json : aiResponseJsons) {
-      var findings = parsePreviousFindings(json);
-      if (!findings.isEmpty()) {
-        rounds.add(findings);
-      }
-    }
-    return rounds;
+    return aiResponseJsons.stream().map(this::parsePreviousFindings).toList();
   }
 
   private static ReviewResponse.Finding findRepliedDuplicate(
@@ -844,9 +842,9 @@ public class FollowUpAnalyzer {
       BotIdentity botIdentity,
       VerifiedWriters writers,
       Fixes fixes) {
-    for (List<ReviewResponse.Finding> previous : priorRounds) {
-      for (var prior : previous) {
-        if (!isSameFinding(finding, prior) || leftByFix(finding, prior, fixes)) {
+    for (var round = 0; round < priorRounds.size(); round++) {
+      for (var prior : priorRounds.get(round)) {
+        if (!isSameFinding(finding, prior) || leftByFix(finding, prior, round, fixes)) {
           continue;
         }
         // Marker indices are only meaningful within their own round; across rounds the same index
@@ -888,16 +886,20 @@ public class FollowUpAnalyzer {
    * quoted: neither quote holds the other, so a larger snippet around the prior code, or a part of
    * it, is still the prior code. The quote must also reach code the pull request adds ({@link
    * DiffLineResolver#quotesOnlyUnchangedLines}): a fix leaves its gap in the code it wrote, so a
-   * quote of a neighbouring unchanged line is the prior finding again. A quote the diff cannot
-   * place is not held against the finding. The fix replaced the flagged code, and the replacement
-   * can carry the same defect class through another mechanism, as the {@code madeOn} rewrite on
-   * #1342 matched names by substring where the code it replaced attributed every call to every
-   * file. That finding names the same defect and so reads as a re-raise, yet it is about other
-   * code, and the prior's thread is about to close. A finding with no quote cannot show it is about
-   * other code, so it is still read as a re-raise.
+   * quote of a neighbouring unchanged line is the prior finding again. Nor is the code a fix wrote
+   * older than the finding it fixes: a quote that sits only on lines unchanged since the head of
+   * the round that raised {@code prior}, the prior round at {@code priorRound} (newest first), is
+   * the prior finding again too, though the pull request added those lines ({@link
+   * DiffLineResolver#quotesOnlyLinesUnchangedSince}). A quote the diff cannot place is not held
+   * against the finding, and neither is a round whose changed lines are not known. The fix replaced
+   * the flagged code, and the replacement can carry the same defect class through another
+   * mechanism, as the {@code madeOn} rewrite on #1342 matched names by substring where the code it
+   * replaced attributed every call to every file. That finding names the same defect and so reads
+   * as a re-raise, yet it is about other code, and the prior's thread is about to close. A finding
+   * with no quote cannot show it is about other code, so it is still read as a re-raise.
    */
   static boolean leftByFix(
-      ReviewResponse.Finding finding, ReviewResponse.Finding prior, Fixes fixes) {
+      ReviewResponse.Finding finding, ReviewResponse.Finding prior, int priorRound, Fixes fixes) {
     if (finding.suggestionOld() == null || finding.suggestionOld().isBlank()) {
       return false;
     }
@@ -910,9 +912,10 @@ public class FollowUpAnalyzer {
     if (!priorQuoted.isEmpty() && (quoted.contains(priorQuoted) || priorQuoted.contains(quoted))) {
       return false;
     }
-    return !fixes
-        .lineResolver()
-        .quotesOnlyUnchangedLines(finding.file(), finding.suggestionOld(), finding.line());
+    var diff = fixes.lineResolver();
+    return !diff.quotesOnlyUnchangedLines(finding.file(), finding.suggestionOld(), finding.line())
+        && !diff.quotesOnlyLinesUnchangedSince(
+            priorRound, finding.file(), finding.suggestionOld(), finding.line());
   }
 
   /** {@code quote} with its whitespace runs collapsed, so a re-indented quote is the same code. */
