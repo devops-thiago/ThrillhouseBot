@@ -759,8 +759,10 @@ that reads its head when the bot has an approval to withdraw, and one per
 approval dismissed. The dismissal runs after a review of the same pull request
 that is already in progress. The approval stays only when the bot cannot
 withdraw it: it never received the push event, it restarted before the queued
-dismissal ran, it could not list the pull request's reviews (logged as a
-warning), or GitHub refused the dismissal. Reopening a pull request whose
+dismissal ran, the repository's account was removed from
+`GITHUB_ALLOWED_ACCOUNTS` after the approval (its events are then ignored), it
+could not list the pull request's reviews (logged as a warning), or GitHub
+refused the dismissal. Reopening a pull request whose
 branch gained commits while it was closed dismisses the approval the same way.
 
 A dismissal on a push also makes the bot forget that it reviewed the approved

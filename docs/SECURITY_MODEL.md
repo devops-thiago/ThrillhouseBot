@@ -55,9 +55,13 @@ security limits. To report a vulnerability, see
   cannot withdraw it: it did not receive the push event (the bot was down, or
   the delivery failed and was not redelivered), it restarted or its review
   executor turned the work away before the dismissal ran (the dismissal is
-  queued in memory), it could not list the pull request's reviews, or GitHub
+  queued in memory), the repository's account was taken off
+  `GITHUB_ALLOWED_ACCOUNTS` after the approval (the bot then ignores every
+  event from it), it could not list the pull request's reviews, or GitHub
   did not let it dismiss the review, which a branch protection rule that
-  restricts who may dismiss reviews does. A pull request reopened with commits
+  restricts who may dismiss reviews does. An event that arrives late or is
+  redelivered and names a commit the bot approved dismisses nothing by itself;
+  the event for the newer head does. A pull request reopened with commits
   added while it was closed is treated like a push. The bot
   logs a warning when the reviews could not be listed, saying that earlier
   approvals were not checked, and one for each approval it could not dismiss.
