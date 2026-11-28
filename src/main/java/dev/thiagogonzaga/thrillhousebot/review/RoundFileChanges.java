@@ -91,10 +91,7 @@ final class RoundFileChanges implements DiffLineResolver.RoundChanges {
       String repo,
       String head,
       Rounds rounds) {
-    if (rounds.carried()
-        || rounds.heads().size() != rounds.count()
-        || head == null
-        || head.isBlank()) {
+    if (rounds.heads().size() != rounds.count() || head == null || head.isBlank()) {
       return DiffLineResolver.RoundChanges.NONE;
     }
     return new RoundFileChanges(prClient, auth, owner, repo, head, rounds.heads());
@@ -105,9 +102,8 @@ final class RoundFileChanges implements DiffLineResolver.RoundChanges {
    *
    * @param heads each prior round's head, newest first, beside the prior responses
    * @param count how many prior responses the review read
-   * @param carried whether findings were carried from a run that stood down
    */
-  record Rounds(List<String> heads, int count, boolean carried) {}
+  record Rounds(List<String> heads, int count) {}
 
   @Override
   public FileChange since(int round, String path) {

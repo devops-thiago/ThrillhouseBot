@@ -150,6 +150,10 @@ cannot resolve its review threads.
 
 ### Fixed
 
+- **Findings from a superseded review are now posted** (#1411): the review that replaces it posts
+  the ones whose code its diff still holds, as its own findings. Before, they were never posted but
+  were counted as "open since an earlier review", and some stayed open without appearing anywhere on
+  the pull request.
 - **A review no longer drifts into another language** (#1467): no prompt said which language to
   write in, so a model could answer an English pull request with a summary in another one. Every
   prompt now asks for English prose, with code, identifiers, paths and quotations left as they are.

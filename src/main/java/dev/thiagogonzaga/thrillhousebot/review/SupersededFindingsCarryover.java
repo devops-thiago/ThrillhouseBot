@@ -15,15 +15,16 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.inject.Inject;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Hands the verified findings of a run that stood down for {@link ReviewSkipReason#HEAD_MOVED} to
@@ -35,9 +36,9 @@ import java.util.Map;
  * nothing about a fresh pass guarantees it finds them again. On a pull request pushed to while
  * under review, every run that found something was discarded and the only outcome that reached
  * GitHub was an approval from the one run that found nothing. The superseded run's findings are
- * stashed here instead, and the replacement folds them into its previous-round context, where the
- * model is asked to confirm or resolve each one against the new head and the vanish, decline and
- * backstop passes treat them exactly as findings from a posted round.
+ * stashed here instead, and the replacement adds those whose code the new diff still holds to its
+ * own findings, where they are screened, verified and posted like any finding it raised. No reader
+ * has seen them, so they are never listed to the model, or counted, as previous findings (#1411).
  *
  * <p>The hand-off is keyed by pull request and holds one entry per pull request, so it can neither
  * leak across pull requests nor accumulate across pushes: a later abandon replaces the entry, and
@@ -50,10 +51,7 @@ import java.util.Map;
 @ApplicationScoped
 public class SupersededFindingsCarryover {
 
-  /**
-   * Findings kept per superseded run. A longer set loses its tail, which is the run's own newest
-   * findings: the ones it was itself carrying, already confirmed once, lead the list.
-   */
+  /** Findings kept per superseded run. A longer set loses its tail. */
   static final int MAX_FINDINGS = 50;
 
   /** Pull requests held at once; the entry least recently stashed is evicted past this. */
@@ -80,17 +78,10 @@ public class SupersededFindingsCarryover {
 
   private record PrKey(String owner, String repo, int prNumber) {}
 
-  private final ObjectMapper mapper;
-
   private final Object lock = new Object();
 
   /** Insertion-ordered so eviction past the cap drops the least recently stashed pull request. */
   private final Map<PrKey, Carried> entries = new LinkedHashMap<>();
-
-  @Inject
-  public SupersededFindingsCarryover(ObjectMapper mapper) {
-    this.mapper = mapper;
-  }
 
   /**
    * Records the verified findings of a run that stood down because {@code supersedingSha} displaced
@@ -159,7 +150,7 @@ public class SupersededFindingsCarryover {
     }
     Log.infof(
         "Carrying %d findings from the superseded review of %s/%s #%d on head %s into the review"
-            + " of %s as previous findings",
+            + " of %s",
         carried.findings().size(),
         owner,
         repo,
@@ -169,52 +160,92 @@ public class SupersededFindingsCarryover {
     return carried;
   }
 
-  /** The persisted prior rounds of a review with a superseded run's findings folded in. */
-  public record PriorRounds(List<String> jsons, List<ReviewResponse> parsed) {
-    public PriorRounds {
-      jsons = List.copyOf(jsons);
-      parsed = List.copyOf(parsed);
-    }
+  /**
+   * The carried findings whose flagged code the current diff still holds, among the lines the head
+   * has or the ones the pull request removes, each on the path the diff has it at. One whose code
+   * the superseding push removed or rewrote is left behind.
+   */
+  static List<ReviewResponse.Finding> stillInDiff(
+      Carried carried, DiffLineResolver lineResolver, Map<String, String> renameTargets) {
+    return carried.findings().stream()
+        .map(finding -> onCurrentPath(finding, renameTargets))
+        .filter(
+            finding ->
+                lineResolver.isFindingPresent(finding.file(), finding.suggestionOld())
+                    || lineResolver
+                        .locateRemovedQuote(finding.file(), finding.suggestionOld(), finding.line())
+                        .isPresent())
+        .toList();
   }
 
   /**
-   * Folds the carried findings into the round the review reports on — the newest persisted round
-   * that raised findings ({@link FollowUpAnalyzer#effectivePreviousRoundIndex}), or a round of
-   * their own when no persisted round did. Appended after that round's own findings, so every
-   * posted finding keeps the id its inline comment marker carries and the carried ones take the ids
-   * after them; the raw JSON is rebuilt alongside the parsed round so the rendered context, the id
-   * space and the JSON the supersede pass re-reads still describe one round.
+   * {@code response} with the {@code carried} findings on one of {@code files} ahead of its own, so
+   * the call that saw the file screens them like the findings it raised. A carried finding the
+   * response raises again itself is left out: the fresh one was written against the current head.
    */
-  public PriorRounds merge(
-      List<String> priorAiResponseJsons,
-      List<ReviewResponse> priorAiResponses,
-      List<ReviewResponse.Finding> carried) {
-    var index = Math.max(FollowUpAnalyzer.effectivePreviousRoundIndex(priorAiResponses), 0);
-    var jsons = new ArrayList<>(priorAiResponseJsons);
-    var parsed = new ArrayList<>(priorAiResponses);
-    if (parsed.isEmpty()) {
-      var own = new ReviewResponse(carried, List.of(), null);
-      jsons.add(toJson(own));
-      parsed.add(own);
-    } else {
-      var base = parsed.get(index);
-      var findings = new ArrayList<>(base.findings());
-      findings.addAll(carried);
-      // #1409: the round keeps the earlier rounds' closes it recorded, or the replay would carry
-      // those findings again and this run would close and count them a second time.
-      var merged = base.withFindings(findings);
-      jsons.set(index, toJson(merged));
-      parsed.set(index, merged);
-    }
-    return new PriorRounds(jsons, parsed);
+  static ReviewResponse joined(
+      ReviewResponse response,
+      List<ReviewResponse.Finding> carried,
+      List<GitHubPullRequestClient.FileDiff> files) {
+    var names = namesOf(files);
+    return ahead(
+        response,
+        carried.stream()
+            .filter(f -> names.contains(f.file()) && !raisedAgain(response, f))
+            .toList());
+  }
+
+  private static boolean raisedAgain(ReviewResponse response, ReviewResponse.Finding carried) {
+    return response.findings().stream()
+        .anyMatch(
+            own ->
+                FilePaths.same(own.file(), carried.file())
+                    && DefectIdentity.sameDefect(own, carried));
   }
 
   /**
-   * The same JSON shape {@code FindingPipeline} persists, built through the tree model: a record of
-   * plain fields cannot fail to serialize, and the tree route has no checked exception to swallow.
+   * {@code response} with the {@code carried} findings on none of {@code screened}, the files a
+   * review call saw: no call can screen them, so they stand as the superseded run verified them.
    */
-  private String toJson(ReviewResponse response) {
-    return mapper.valueToTree(response).toString();
+  static ReviewResponse joinedUnscreened(
+      ReviewResponse response,
+      List<ReviewResponse.Finding> carried,
+      List<GitHubPullRequestClient.FileDiff> screened) {
+    var names = namesOf(screened);
+    return ahead(response, carried.stream().filter(f -> !names.contains(f.file())).toList());
+  }
+
+  private static Set<String> namesOf(List<GitHubPullRequestClient.FileDiff> files) {
+    return files.stream()
+        .map(GitHubPullRequestClient.FileDiff::filename)
+        .collect(Collectors.toSet());
+  }
+
+  private static ReviewResponse ahead(
+      ReviewResponse response, List<ReviewResponse.Finding> carried) {
+    if (carried.isEmpty()) {
+      return response;
+    }
+    var findings = new ArrayList<>(carried);
+    findings.addAll(response.findings());
+    return response.withFindings(findings);
+  }
+
+  private static ReviewResponse.Finding onCurrentPath(
+      ReviewResponse.Finding finding, Map<String, String> renameTargets) {
+    var path = renameTargets.getOrDefault(finding.file(), finding.file());
+    if (path == null || path.equals(finding.file())) {
+      return finding;
+    }
+    return new ReviewResponse.Finding(
+        finding.risk(),
+        finding.confidence(),
+        path,
+        finding.line(),
+        finding.title(),
+        finding.description(),
+        finding.suggestionOld(),
+        finding.suggestionNew());
   }
 
   /**
@@ -233,8 +264,8 @@ public class SupersededFindingsCarryover {
         + shortSha(carried.supersededSha())
         + "`, abandoned when the pull request head moved, "
         + (count == 1 ? "was" : "were")
-        + " carried into this review as previous findings and re-checked against the current"
-        + " head";
+        + " carried into this review and checked against the current head. What still holds is"
+        + " posted with this review's findings";
   }
 
   private static String shortSha(String sha) {

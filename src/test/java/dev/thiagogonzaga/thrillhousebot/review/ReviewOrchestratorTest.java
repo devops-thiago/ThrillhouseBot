@@ -143,7 +143,7 @@ class ReviewOrchestratorTest {
   private final ReviewSkipEmitter skipEmitter =
       new ReviewSkipEmitter(io.opentelemetry.api.OpenTelemetry.noop());
 
-  private final SupersededFindingsCarryover carryover = new SupersededFindingsCarryover(mapper);
+  private final SupersededFindingsCarryover carryover = new SupersededFindingsCarryover();
 
   /** Finished-review counter; a spy so a test can tell a failure from a quiet supersede. */
   private final ReviewOutcomeMetrics outcomeMetrics =
@@ -10207,13 +10207,15 @@ class ReviewOrchestratorTest {
     }
 
     /**
-     * #806: a run that stands down for HEAD_MOVED has already generated and verified its findings.
-     * The coalesced run for the new head must be shown them as previous findings and asked to
-     * confirm or resolve them against the new head, instead of starting from nothing and publishing
-     * whatever a fresh pass happens to find.
+     * #806, #1411: a run that stands down for HEAD_MOVED has already generated and verified its
+     * findings. The run for the new head posts them as its own, at the grade the superseded run
+     * verified them at, and never lists them to the model as previous findings: no reader has seen
+     * them.
      */
     @Test
-    void replacementRunIsShownTheSupersededRunsVerifiedFindingsAsPreviousFindings() {
+    void theReplacementPostsTheSupersededRunsFindingAsItsOwn() {
+      when(suggestionFormatter.formatReviewComment(any(), anyBoolean(), anyInt()))
+          .thenAnswer(invocation -> invocation.<Finding>getArgument(0).title());
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = stubbedSession();
         mockedStatic
@@ -10224,58 +10226,46 @@ class ReviewOrchestratorTest {
 
         assertFalse(orchestrator.review(requestFor("abcdefgh")));
         assertEquals(1L, skipEmitter.countsByReason(java.util.List.of(123L)).get("HEAD_MOVED"));
-
         assertTrue(orchestrator.review(requestFor("d4389d2aa")));
 
         var prompts = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
         verify(aiReviewService, times(2)).review(any(ReviewSession.class), prompts.capture());
-        var replacementPrompt = prompts.getAllValues().get(1);
+        assertEquals("", prompts.getAllValues().get(1).previousFindings());
+        var comment =
+            ArgumentCaptor.forClass(GitHubReviewClient.CreatePullRequestCommentRequest.class);
+        verify(reviewClient)
+            .createPullRequestComment(
+                anyString(), anyString(), eq("owner"), eq("repo"), eq(42), comment.capture());
         assertTrue(
-            replacementPrompt.previousFindings().contains("Carried null dereference"),
-            () ->
-                "the replacement run was not shown the superseded run's verified finding;"
-                    + " its previous-findings context was: '"
-                    + replacementPrompt.previousFindings()
-                    + "'");
+            comment.getValue().body().contains("Carried null dereference"),
+            comment.getValue().body());
+        var posted = reviewPostedByTheReplacement();
+        assertEquals("REQUEST_CHANGES", posted.event());
+        assertFalse(posted.body().contains("remain unresolved"), posted.body());
+        var ctx = ArgumentCaptor.forClass(ReviewContextLoader.ReviewContext.class);
+        var result = ArgumentCaptor.forClass(ReviewResult.class);
+        verify(findingStates).prepare(any(), ctx.capture(), result.capture());
+        var rows =
+            FindingLedger.afterRound(
+                    java.util.Map.of(),
+                    new FindingLedger.Round(
+                        "d4389d2aa",
+                        result.getValue().findings(),
+                        FindingLedger.statuses(
+                            result.getValue().previousStatuses(),
+                            ctx.getValue().previousFindingsList()),
+                        java.util.Map.of(),
+                        ctx.getValue().lineResolver(),
+                        java.util.Map.of()))
+                .rows()
+                .values();
+        assertEquals(
+            result.getValue().totalFindings() + result.getValue().unresolvedPreviousCount(),
+            rows.stream().filter(row -> FindingLedger.OPEN.equals(row.status().value())).count());
+        assertEquals(1, rows.size());
         // Consumed by the replacement: a third run of the pull request starts clean.
         assertTrue(carryover.take("owner", "repo", 42, "d4389d2aa").isEmpty());
       }
-    }
-
-    /** The verdict passes the carried statuses go through, on the real analyzer. */
-    private void delegateVerdictPasses() {
-      when(followUpAnalyzer.supersedeVanished(any(), any(), any(), any(), any(), anyInt()))
-          .thenAnswer(
-              inv ->
-                  realAnalyzer.supersedeVanished(
-                      inv.getArgument(0),
-                      inv.getArgument(1),
-                      inv.getArgument(2),
-                      inv.getArgument(3),
-                      inv.getArgument(4),
-                      inv.<Integer>getArgument(5)));
-      when(followUpAnalyzer.addUnreportedVanished(any(), any(), any(), any(), any(), anyInt()))
-          .thenAnswer(
-              inv ->
-                  realAnalyzer.addUnreportedVanished(
-                      inv.getArgument(0),
-                      inv.getArgument(1),
-                      inv.getArgument(2),
-                      inv.getArgument(3),
-                      inv.getArgument(4),
-                      inv.<Integer>getArgument(5)));
-      when(followUpAnalyzer.recheckDeclines(any(), any(), any(), any(), any(), any(), any()))
-          .thenAnswer(inv -> inv.getArgument(1));
-      when(followUpAnalyzer.unresolvedFindings(
-              ArgumentMatchers.<List<ReviewResponse.Finding>>any(), any()))
-          .thenAnswer(
-              inv ->
-                  realAnalyzer.unresolvedFindings(
-                      inv.<List<ReviewResponse.Finding>>getArgument(0), inv.getArgument(1)));
-      when(followUpAnalyzer.toStatuses(any()))
-          .thenAnswer(inv -> realAnalyzer.toStatuses(inv.getArgument(0)));
-      when(followUpAnalyzer.hasUnresolved(any()))
-          .thenAnswer(inv -> realAnalyzer.hasUnresolved(inv.getArgument(0)));
     }
 
     private GitHubReviewClient.CreateReviewRequest reviewPostedByTheReplacement() {
@@ -10287,13 +10277,11 @@ class ReviewOrchestratorTest {
     }
 
     /**
-     * A carried finding the replacement confirms is held like any unresolved previous finding, at
-     * the risk and confidence the superseded run verified it at: a high-confidence high-risk one
-     * blocks the replacement outright. That is the ratchet toward silence #806 describes, undone —
-     * the quiet run no longer wins by default.
+     * A carried finding whose code is no longer on the new head is left behind: a finding about a
+     * line the push removed is never posted as if the line were still there.
      */
     @Test
-    void aCarriedFindingTheReplacementConfirmsHoldsItsApproval() {
+    void aCarriedFindingWhoseCodeLeftTheNewHeadIsNotPosted() {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = stubbedSession();
         mockedStatic
@@ -10301,48 +10289,6 @@ class ReviewOrchestratorTest {
                 () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
         stubTwoRuns();
-        delegateVerdictPasses();
-        when(aiReviewService.review(any(ReviewSession.class), any()))
-            .thenReturn(new ReviewResponse(List.of(VERIFIED_BY_SUPERSEDED_RUN), List.of(), null))
-            .thenReturn(
-                new ReviewResponse(
-                    List.of(),
-                    List.of(
-                        new ReviewResponse.PreviousFindingStatus(
-                            1,
-                            "unresolved",
-                            "the guard is still gone",
-                            SuggestionFormatter.findingKey(
-                                VERIFIED_BY_SUPERSEDED_RUN.file(),
-                                VERIFIED_BY_SUPERSEDED_RUN.line(),
-                                VERIFIED_BY_SUPERSEDED_RUN.title()))),
-                    null));
-
-        assertFalse(orchestrator.review(requestFor("abcdefgh")));
-        assertTrue(orchestrator.review(requestFor("d4389d2aa")));
-
-        var posted = reviewPostedByTheReplacement();
-        assertEquals("REQUEST_CHANGES", posted.event());
-        assertTrue(
-            posted.body().contains("1 previous finding(s) remain unresolved"), posted.body());
-      }
-    }
-
-    /**
-     * A carried finding whose code is no longer on the new head is superseded by the vanish pass,
-     * not held: the anchoring every previous-round finding gets applies to a carried one too, so a
-     * finding about a line the push removed is never posted as if the line were still there.
-     */
-    @Test
-    void aCarriedFindingWhoseCodeLeftTheNewHeadIsSupersededNotHeld() {
-      try (var mockedStatic = mockStatic(ReviewSession.class)) {
-        var session = stubbedSession();
-        mockedStatic
-            .when(
-                () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
-            .thenReturn(session);
-        stubTwoRuns();
-        delegateVerdictPasses();
         // The new head rewrote the line the finding anchored on.
         when(prClient.getPullRequestFiles(
                 anyString(), anyString(), anyString(), anyString(), anyInt()))
@@ -10351,20 +10297,14 @@ class ReviewOrchestratorTest {
                 List.of(
                     new GitHubPullRequestClient.FileDiff(
                         "src/Main.java", "modified", 1, 1, 2, "@@ -10,1 +10,1 @@\n-old\n+other")));
-        when(aiReviewService.review(any(ReviewSession.class), any()))
-            .thenReturn(new ReviewResponse(List.of(VERIFIED_BY_SUPERSEDED_RUN), List.of(), null))
-            .thenReturn(
-                new ReviewResponse(
-                    List.of(),
-                    List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still")),
-                    null));
-
         assertFalse(orchestrator.review(requestFor("abcdefgh")));
         assertTrue(orchestrator.review(requestFor("d4389d2aa")));
 
         var posted = reviewPostedByTheReplacement();
         assertEquals("APPROVE", posted.event());
-        assertFalse(posted.body().contains("remain unresolved"), posted.body());
+        verify(reviewClient, never())
+            .createPullRequestComment(
+                anyString(), anyString(), anyString(), anyString(), anyInt(), any());
       }
     }
   }

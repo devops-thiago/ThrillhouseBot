@@ -17,12 +17,14 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.logging.Handler;
 import java.util.logging.Level;
@@ -35,8 +37,7 @@ class SupersededFindingsCarryoverTest {
   private static final String SUPERSEDED = "23e277100000000000000000000000000000abcd";
   private static final String SUPERSEDING = "c957198000000000000000000000000000000abcd";
 
-  private final SupersededFindingsCarryover carryover =
-      new SupersededFindingsCarryover(new ObjectMapper());
+  private final SupersededFindingsCarryover carryover = new SupersededFindingsCarryover();
 
   private static ReviewResponse.Finding finding(String title) {
     return new ReviewResponse.Finding(
@@ -223,39 +224,78 @@ class SupersededFindingsCarryoverTest {
     assertFalse(carryover.take("owner", "repo", cap + 1, SUPERSEDING).isEmpty());
   }
 
-  @Test
-  void mergeGivesCarriedFindingsARoundOfTheirOwnWhenNothingWasPersisted() {
-    var rounds = carryover.merge(List.of(), List.of(), List.of(finding("Lost")));
+  private static ReviewResponse.Finding quoting(String file, String quote) {
+    return new ReviewResponse.Finding("high", "high", file, 2, "Quotes " + quote, "d", quote, "");
+  }
 
-    assertEquals(1, rounds.parsed().size());
-    assertEquals(List.of(finding("Lost")), rounds.parsed().get(0).findings());
-    assertEquals(1, rounds.jsons().size());
-    // The JSON is the same shape the pipeline persists, so the supersede pass re-reads it.
-    var reparsed = new FollowUpAnalyzer(new ObjectMapper()).parseResponse(rounds.jsons().get(0));
-    assertEquals(rounds.parsed().get(0), reparsed);
+  private static GitHubPullRequestClient.FileDiff file(String name) {
+    return new GitHubPullRequestClient.FileDiff(name, "modified", 1, 1, 2, "@@ -1 +1 @@\n-a\n+b");
   }
 
   @Test
-  void mergeAppendsCarriedFindingsAfterTheRoundTheReviewReportsOn() {
-    var posted = new ReviewResponse(List.of(finding("Posted")), List.of(), null);
-    var quiet =
-        new ReviewResponse(
-            List.of(),
-            List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still")),
-            null);
-    var analyzer = new FollowUpAnalyzer(new ObjectMapper());
-    var jsons = List.of("{\"findings\":[]}", "{\"findings\":[{\"title\":\"Posted\"}]}");
+  void onlyFindingsWhoseCodeTheDiffStillHoldsStayOnTheirCurrentPath() {
+    var resolver =
+        new DiffLineResolver(
+            Map.of("New.java", "@@ -1,3 +1,3 @@\n context();\n-removed();\n+added();\n tail();"));
+    var added = quoting("Old.java", "added();");
+    var removed = quoting("New.java", "removed();");
+    var rewritten = quoting("New.java", "gone();");
+    var carried =
+        new SupersededFindingsCarryover.Carried(
+            SUPERSEDED, SUPERSEDING, List.of(added, removed, rewritten));
 
-    var rounds = carryover.merge(jsons, List.of(quiet, posted), List.of(finding("Lost")));
+    var kept =
+        SupersededFindingsCarryover.stillInDiff(carried, resolver, Map.of("Old.java", "New.java"));
 
-    // The quiet newer round is skipped, as the effective-round rule already does: the posted
-    // finding keeps id 1 (its inline marker), the carried one takes id 2.
-    assertEquals(List.of(quiet, rounds.parsed().get(1)), rounds.parsed());
+    assertEquals(List.of(quoting("New.java", "added();"), removed), kept);
+  }
+
+  @Test
+  void aCallScreensTheCarriedFindingsOnItsFilesAheadOfItsOwnAndTheRestStand() {
+    var seen = quoting("A.java", "a");
+    var unseen = quoting("B.java", "b");
+    var own = quoting("A.java", "own");
+    var response = new ReviewResponse(List.of(own), List.of(), null);
+    var files = List.of(file("A.java"));
+
     assertEquals(
-        List.of(finding("Posted"), finding("Lost")),
-        FollowUpAnalyzer.effectivePreviousFindings(rounds.parsed()));
-    assertEquals(jsons.get(0), rounds.jsons().get(0));
-    assertEquals(rounds.parsed().get(1), analyzer.parseResponse(rounds.jsons().get(1)));
+        List.of(seen, own),
+        SupersededFindingsCarryover.joined(response, List.of(seen, unseen), files).findings());
+    assertEquals(
+        List.of(unseen, own),
+        SupersededFindingsCarryover.joinedUnscreened(response, List.of(seen, unseen), files)
+            .findings());
+    assertSame(response, SupersededFindingsCarryover.joined(response, List.of(unseen), files));
+  }
+
+  @Test
+  void aCarriedFindingTheCallRaisesAgainIsNotJoinedEvenWhenItsCodeMoved() {
+    var carried =
+        new ReviewResponse.Finding(
+            "high",
+            "high",
+            "A.java",
+            10,
+            "Null dereference in lookup",
+            "d",
+            "var name = lookup(id).name();",
+            "");
+    var again =
+        new ReviewResponse.Finding(
+            "medium",
+            "high",
+            "A.java",
+            42,
+            "Lookup result may be null",
+            "d",
+            "var name = lookup(id).name();",
+            "");
+    var response = new ReviewResponse(List.of(again), List.of(), null);
+
+    var joined =
+        SupersededFindingsCarryover.joined(response, List.of(carried), List.of(file("A.java")));
+
+    assertEquals(List.of(again), joined.findings());
   }
 
   @Test
@@ -270,13 +310,13 @@ class SupersededFindingsCarryoverTest {
         "", SupersededFindingsCarryover.formatScopeNote(SupersededFindingsCarryover.Carried.NONE));
     assertEquals(
         "1 finding from the review of superseded head `23e2771`, abandoned when the pull request"
-            + " head moved, was carried into this review as previous findings and re-checked"
-            + " against the current head",
+            + " head moved, was carried into this review and checked against the current head."
+            + " What still holds is posted with this review's findings",
         SupersededFindingsCarryover.formatScopeNote(one));
     assertEquals(
         "2 findings from the review of superseded head `23e2771`, abandoned when the pull request"
-            + " head moved, were carried into this review as previous findings and re-checked"
-            + " against the current head",
+            + " head moved, were carried into this review and checked against the current head."
+            + " What still holds is posted with this review's findings",
         SupersededFindingsCarryover.formatScopeNote(two));
   }
 }

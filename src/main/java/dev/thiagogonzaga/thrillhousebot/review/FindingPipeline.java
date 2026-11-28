@@ -318,6 +318,7 @@ public class FindingPipeline {
       // Budgeting off: the call reviews the whole pull request, whose routing the assembler set.
       logDimensionRouting(session, "single review call", ctx.reviewableFiles());
     }
+    var callFiles = budgetedBatch == null ? ctx.reviewableFiles() : budgetedBatch.files();
     ReviewResponse aiResponse;
     try {
       aiResponse = aiReviewService.review(session, singleInputs);
@@ -346,10 +347,14 @@ public class FindingPipeline {
     }
     // #60: the deterministic scan's findings join after verification, so no model grades them.
     var mentions = pathMentions(ctx, promptInputs, evidence);
+    aiResponse =
+        SupersededFindingsCarryover.joined(
+            aiResponse, carriedStillInDiff(ctx, lineResolver), callFiles);
     var refined =
         finish(
             refine(
                 session, aiResponse, quoteSource, singleInputs, ctx, lineResolver, plan, evidence),
+            callFiles,
             ctx,
             lineResolver,
             promptInputs.linkedIssues(),
@@ -578,7 +583,10 @@ public class FindingPipeline {
             ctx.verifiedWriters());
     // #60: as in the single-call lane, after every model stage and before the summary call.
     var mentions = pathMentions(ctx, promptInputs, evidence);
-    refined = finish(refined, ctx, lineResolver, promptInputs.linkedIssues(), evidence, mentions);
+    var screened = outcomes.stream().flatMap(o -> batches.get(o.index()).files().stream()).toList();
+    refined =
+        finish(
+            refined, screened, ctx, lineResolver, promptInputs.linkedIssues(), evidence, mentions);
     return withSummary(session, refined, promptInputs, ctx, plan, mentions);
   }
 
@@ -597,11 +605,15 @@ public class FindingPipeline {
    */
   private ReviewResponse finish(
       ReviewResponse refined,
+      List<GitHubPullRequestClient.FileDiff> screened,
       ReviewContextLoader.ReviewContext ctx,
       DiffLineResolver lineResolver,
       String linkedIssues,
       ReviewEvidence evidence,
       PathMentions mentions) {
+    refined =
+        SupersededFindingsCarryover.joinedUnscreened(
+            refined, carriedStillInDiff(ctx, lineResolver), screened);
     refined =
         DeclineLearningGuard.apply(
             refined,
@@ -623,6 +635,22 @@ public class FindingPipeline {
             lineResolver,
             VerdictBuilder.renameTargets(ctx.files()),
             botIdentity));
+  }
+
+  /**
+   * The findings a superseded run carried whose code this review's diff still holds (#1411), each
+   * placed on the line the current head has that code at.
+   */
+  private List<ReviewResponse.Finding> carriedStillInDiff(
+      ReviewContextLoader.ReviewContext ctx, DiffLineResolver lineResolver) {
+    if (ctx.carried().isEmpty()) {
+      return List.of();
+    }
+    var present =
+        SupersededFindingsCarryover.stillInDiff(
+            ctx.carried(), lineResolver, VerdictBuilder.renameTargets(ctx.files()));
+    return populateMissingAnchors(new ReviewResponse(present, List.of(), null), lineResolver)
+        .findings();
   }
 
   /**
@@ -1136,9 +1164,12 @@ public class FindingPipeline {
       AiReviewService.PromptInputs batchInputs,
       ReviewResponse batchResponse,
       BatchRun run) {
+    var withCarried =
+        SupersededFindingsCarryover.joined(
+            batchResponse, carriedStillInDiff(run.ctx(), run.lineResolver()), batch.files());
     var verified =
         findingScreen.screenBatch(
-            run.session(), batchResponse, batch.text(), batchInputs, run.plan(), run.evidence());
+            run.session(), withCarried, batch.text(), batchInputs, run.plan(), run.evidence());
     return new BatchOutcome(
         index,
         verified.findings(),
@@ -1231,6 +1262,7 @@ public class FindingPipeline {
         session,
         finish(
             new ReviewResponse(List.of(), List.of(), null),
+            List.of(),
             ctx,
             ctx.lineResolver(),
             promptInputs.linkedIssues(),

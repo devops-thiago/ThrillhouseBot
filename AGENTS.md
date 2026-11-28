@@ -453,8 +453,8 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   `DiffLineResolver.fileChangeSince(round, path)` with the round's position newest first. The
   comparison is three-dot, so it is read only when the head is `ahead` of the round's head or
   `identical` to it; a diverged (force-pushed) history, a failed call, a listing at GitHub's
-  300-file cap, a history whose heads do not line up with its responses, and carried findings
-  (#806) all answer `UNKNOWN`, and then everything behaves as before. A pure rename (no changes)
+  300-file cap and a history whose heads do not line up with its responses all answer
+  `UNKNOWN`, and then everything behaves as before. A pure rename (no changes)
   is unchanged. The order: a file `UNCHANGED` since the raising round is open, never superseded,
   never model-resolved and never asked about (`isStillOpen`, `unchangedSince`, `hasVanished`,
   `addUnreportedVanished`), unless another changed file its title or description names (by path,
@@ -595,6 +595,9 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   verified findings to the next run through `SupersededFindingsCarryover`, so two runs never edit
   the summary at once and nothing is posted against a diff that changed. This is `HeadMovedGuard`,
   run by `ReviewStandDown` before `LabelGateGuard`; the orchestrator only closes out the session.
+  The next run adds the carried findings whose code its diff still holds to its own findings,
+  ahead of the screens, never to the previous ones: no reader has seen them, so they have no
+  thread, status or "still open" count (#1411).
 - **The label gates read the labels the pull request carries now, not only the payload's** (#1021).
   Dependabot labels a pull request a second or two after opening it, so `WebhookEvents` reads
   them from the API on `opened`, `reopened` and `ready_for_review` (payload fallback on a failed

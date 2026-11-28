@@ -101,9 +101,6 @@ class RoundFinalStatusReplayTest {
   private static final ReviewResponse.Finding ROUND_FOUR =
       finding(14, "Log line concatenates the whole entry", "log.info(\"posted \" + entry);");
 
-  private static final ReviewResponse.Finding ROUND_FIVE =
-      finding(15, "Total read outside the ledger lock", "return ledger.total();");
-
   private static final GitHubCommentClient.IssueComment CLEAR =
       new GitHubCommentClient.IssueComment(
           900L,
@@ -254,32 +251,6 @@ class RoundFinalStatusReplayTest {
 
     var r4 = replay(List.of(r3.stored(), r2.stored(), ROUND_ONE), DELETED, List.of(ROUND_FOUR));
     assertEquals(0, r4.result().supersededPreviousCount());
-  }
-
-  /**
-   * Round 7 recorded {@code 0ed70eff} in {@code closed_earlier_round}, and round 8 closed it a
-   * third time: a run that stood down before round 8 carried its findings into round 8, and folding
-   * them into round 7 dropped round 7's record of what it closed.
-   */
-  @Test
-  void aCloseRecordedWithARoundSurvivesFindingsCarriedIntoThatRound() {
-    var r2 = replay(List.of(ROUND_ONE), QUIET, List.of(ROUND_TWO));
-    var r3 = replay(List.of(r2.stored(), ROUND_ONE), CLEARED, List.of(ROUND_THREE));
-    assertEquals(1, r3.result().resolvedPreviousCount(), "round 3 closes the round-1 finding");
-    assertEquals(List.of(SETTLED), r3.stored().closedEarlierRound());
-
-    var priors = List.of(r3.stored(), r2.stored(), ROUND_ONE);
-    var carried =
-        new SupersededFindingsCarryover(MAPPER)
-            .merge(
-                priors.stream().map(round -> MAPPER.valueToTree(round).toString()).toList(),
-                priors,
-                List.of(ROUND_FIVE));
-    assertEquals(List.of(SETTLED), carried.parsed().get(0).closedEarlierRound());
-
-    var r4 = replay(carried.parsed(), CLEARED, List.of(ROUND_FOUR));
-    assertEquals(0, r4.result().resolvedPreviousCount());
-    assertTrue(r4.stored().closedEarlierRound().isEmpty());
   }
 
   /** A round the code reopened stays open for the next: the stored status is the final one. */
