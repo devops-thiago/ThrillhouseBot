@@ -89,7 +89,8 @@ public final class DocGeneratorPrompts {
             }
 
             If nothing needs documentation, return {"docs": []}.
-            """;
+            """
+          + PrReviewPrompts.ENGLISH_PROSE_RULE;
 
   public static final String USER =
       """
