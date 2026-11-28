@@ -79,6 +79,8 @@ class ReviewDispatcherTest {
   @BeforeEach
   void setUp() {
     MockitoAnnotations.openMocks(this);
+    when(rateLimiter.hold(anyString(), anyString(), anyInt(), any()))
+        .thenReturn(AutoReviewRateLimiter.Hold.NONE);
     reviewExecutor = Executors.newSingleThreadExecutor();
     dispatcher =
         new ReviewDispatcher(
@@ -152,9 +154,8 @@ class ReviewDispatcherTest {
 
   @Test
   void shouldWithdrawTheApprovalWhenTheRateWindowHoldsTheReviewBack() {
-    when(rateLimiter.isThrottled("owner", "repo", 42)).thenReturn(true);
-    when(rateLimiter.reviewDueAt("owner", "repo", 42, "sha2"))
-        .thenReturn(OptionalLong.of(now.get() + WINDOW_MS));
+    when(rateLimiter.hold("owner", "repo", 42, "sha2"))
+        .thenReturn(new AutoReviewRateLimiter.Hold(true, OptionalLong.of(now.get() + WINDOW_MS)));
     var push = push(42, "sha2");
 
     assertTrue(dispatcher.dispatchApprovalWithdrawal(push));
@@ -356,7 +357,8 @@ class ReviewDispatcherTest {
     dispatcher.dispatch(reviewRequest("owner", "repo", 42, "sha1"));
     started.await(2, TimeUnit.SECONDS);
     // The window closes while the first review runs, so the queued review is skipped at drain.
-    when(rateLimiter.isThrottled("owner", "repo", 42)).thenReturn(true);
+    when(rateLimiter.hold(eq("owner"), eq("repo"), eq(42), any()))
+        .thenReturn(AutoReviewRateLimiter.Hold.SKIP);
     dispatcher.dispatch(reviewRequest("owner", "repo", 42, "sha2"));
     assertTrue(dispatcher.dispatchCiRecheck(task));
 
@@ -810,8 +812,12 @@ class ReviewDispatcherTest {
   void shouldSkipCoalescedAutomaticReviewWithinWindow() throws InterruptedException {
     // Simulate the real limiter: throttled from the moment a completion is recorded.
     var throttled = new java.util.concurrent.atomic.AtomicBoolean(false);
-    when(rateLimiter.isThrottled(anyString(), anyString(), anyInt()))
-        .thenAnswer(invocation -> throttled.get());
+    when(rateLimiter.hold(anyString(), anyString(), anyInt(), any()))
+        .thenAnswer(
+            invocation ->
+                throttled.get()
+                    ? AutoReviewRateLimiter.Hold.SKIP
+                    : AutoReviewRateLimiter.Hold.NONE);
     doAnswer(
             invocation -> {
               throttled.set(true);
@@ -848,7 +854,8 @@ class ReviewDispatcherTest {
   void shouldSkipAutomaticReviewWhenWindowClosedAfterDispatchGate() {
     // Pins the dispatch race: the controller gate passed before a prior worker recorded its
     // completion, so this fresh worker's very first batch must hit the re-check and skip.
-    when(rateLimiter.isThrottled("owner", "repo", 19)).thenReturn(true);
+    when(rateLimiter.hold(eq("owner"), eq("repo"), eq(19), any()))
+        .thenReturn(AutoReviewRateLimiter.Hold.SKIP);
 
     dispatcher.dispatch(reviewRequest("owner", "repo", 19, "sha1"));
 
@@ -870,7 +877,8 @@ class ReviewDispatcherTest {
   void shouldRunCoalescedManualReviewWithinWindow() throws InterruptedException {
     // Even a closed window must not hold back an explicit /review that coalesced behind an
     // in-flight automatic run.
-    when(rateLimiter.isThrottled(anyString(), anyString(), anyInt())).thenReturn(true);
+    when(rateLimiter.hold(anyString(), anyString(), anyInt(), any()))
+        .thenReturn(AutoReviewRateLimiter.Hold.SKIP);
 
     var started = new CountDownLatch(1);
     var release = new CountDownLatch(1);
@@ -1371,6 +1379,37 @@ class ReviewDispatcherTest {
   }
 
   @Test
+  void aPushThatArrivesAsTheWindowClosesIsKeptAndNotSkipped() {
+    // The clock passes the end of the window right after the first time it is read.
+    var readings = new AtomicLong(WINDOW_MS - 1);
+    var limiter = new AutoReviewRateLimiter(WINDOW_MS, 10_000, readings::getAndIncrement);
+    limiter.deadlines.put("owner/repo#42", new AutoReviewRateLimiter.Window(WINDOW_MS, "sha1"));
+    var atTheBoundary =
+        new ReviewDispatcher(
+            reviewExecutor,
+            orchestrator,
+            limiter,
+            slots,
+            deferred,
+            skipEmitter,
+            ciHoldRevisit,
+            approvalOnPush,
+            coverage,
+            OpenTelemetry.noop());
+    var push = reviewRequest("owner", "repo", 42, "sha2");
+
+    assertEquals(ReviewDispatcher.RateWindowHold.KEPT, atTheBoundary.holdForRateWindow(push));
+
+    // The head the last review did not cover is reviewed when the window closes.
+    now.set(WINDOW_MS);
+    assertEquals(List.of(push), deferred.takeDue());
+    // The next event finds the window closed and is reviewed at once.
+    assertEquals(
+        ReviewDispatcher.RateWindowHold.NOT_HELD,
+        atTheBoundary.holdForRateWindow(reviewRequest("owner", "repo", 42, "sha3")));
+  }
+
+  @Test
   void anEventForTheHeadJustReviewedIsSkippedAndNotKept() {
     var windowed = dispatcherWithRealWindow();
     when(orchestrator.review(any(ReviewOrchestrator.ReviewRequest.class))).thenReturn(true);
@@ -1546,7 +1585,8 @@ class ReviewDispatcherTest {
     limited.dispatch(reviewRequest("owner", "repo", 2, "sha2"));
     awaitWaiting(limits, 1);
     // While it waited, a manual review of the same pull request completed and opened its window.
-    when(rateLimiter.isThrottled("owner", "repo", 2)).thenReturn(true);
+    when(rateLimiter.hold(eq("owner"), eq("repo"), eq(2), any()))
+        .thenReturn(AutoReviewRateLimiter.Hold.SKIP);
 
     release.countDown();
 

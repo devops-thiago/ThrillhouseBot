@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
@@ -38,6 +39,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
 import jakarta.ws.rs.WebApplicationException;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -259,6 +261,59 @@ class FindingsManifestThreadTest {
     assertEquals(
         Map.of(2, false, 4, true, 5, true),
         threadsIn(ManifestThreads.openFindings(result, posted).entries(), false));
+  }
+
+  // The correction compares the line the summary wrote, which is rendered from scrubbed findings,
+  // so a title the scrubber rewrites (#918) must not keep the edit from finding that line.
+  @Test
+  void aRefusedThreadIsCorrectedWhenTheScrubberRewroteAFindingTitle() throws Exception {
+    var resolver = new DiffLineResolver(Map.of("src/A.java", LONG_PATCH));
+    var result =
+        result(
+            List.of(
+                labelled(2, "Comment-contradiction (dimension 4)"),
+                labelled(4, "Stale cache (dimension 5)"),
+                labelled(5, "Unbounded loop (dimension 1)")),
+            List.of());
+    assertNotEquals(
+        manifestKeys(PrSummaryGenerator.currentState(result)),
+        manifestKeys(PrSummaryGenerator.currentState(PromptLabelScrubber.scrub(result))),
+        "the scrubber changes the keys of this round");
+    var summary = publishedSummary(result, resolver);
+    assertEquals(Map.of(2, true, 4, true, 5, false), threadsIn(summary, true));
+    refuseTheFindingOn(2);
+
+    var posted = post(result, resolver);
+
+    var edited = editedSummary();
+    assertEquals(Map.of(2, false, 4, true, 5, true), threadsIn(edited, true));
+    assertEquals(keysIn(summary), keysIn(edited), "the edit keeps the keys the summary wrote");
+    assertEquals(
+        keysIn(summary),
+        keysOf(ManifestThreads.openFindings(result, posted).entries()),
+        "the notification lists the same keys");
+  }
+
+  private static Finding labelled(int line, String title) {
+    return new Finding(RiskLevel.HIGH, Confidence.HIGH, "src/A.java", line, title, "d", null, null);
+  }
+
+  private static List<String> manifestKeys(PrSummaryGenerator.CurrentState state) throws Exception {
+    return keysIn(FindingsManifest.render(state, Finding::postsInline));
+  }
+
+  private static List<String> keysIn(String body) throws Exception {
+    var matcher = LINE.matcher(body);
+    assertTrue(matcher.find(), body);
+    return keysOf(matcher.group(1));
+  }
+
+  private static List<String> keysOf(String entries) throws Exception {
+    var keys = new ArrayList<String>();
+    for (JsonNode entry : new ObjectMapper().readTree(entries)) {
+      keys.add(entry.get("key").asText());
+    }
+    return keys;
   }
 
   @Test

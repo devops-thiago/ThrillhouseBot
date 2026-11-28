@@ -39,16 +39,16 @@ class AutoReviewRateLimiterTest {
 
     var limiter = new AutoReviewRateLimiter(config);
 
-    assertFalse(limiter.isThrottled("owner", "repo", 1));
+    assertFalse(limiter.hold("owner", "repo", 1, null).throttled());
     limiter.recordCompletion("owner", "repo", 1, "reviewed");
-    assertTrue(limiter.isThrottled("owner", "repo", 1));
+    assertTrue(limiter.hold("owner", "repo", 1, null).throttled());
   }
 
   @Test
   void prWithoutRecordedReviewIsNotThrottled() {
     var limiter = new AutoReviewRateLimiter(INTERVAL_MS, BIG_THRESHOLD, new MutableClock(0));
 
-    assertFalse(limiter.isThrottled("owner", "repo", 1));
+    assertFalse(limiter.hold("owner", "repo", 1, null).throttled());
   }
 
   @Test
@@ -57,8 +57,8 @@ class AutoReviewRateLimiterTest {
 
     limiter.recordCompletion("owner", "repo", 1, "reviewed");
 
-    assertTrue(limiter.isThrottled("owner", "repo", 1));
-    assertTrue(limiter.isThrottled("owner", "repo", 1));
+    assertTrue(limiter.hold("owner", "repo", 1, null).throttled());
+    assertTrue(limiter.hold("owner", "repo", 1, null).throttled());
   }
 
   @Test
@@ -67,10 +67,10 @@ class AutoReviewRateLimiterTest {
 
     limiter.recordCompletion("owner", "repo", 1, "reviewed");
 
-    assertTrue(limiter.isThrottled("owner", "repo", 1));
-    assertFalse(limiter.isThrottled("owner", "repo", 2));
-    assertFalse(limiter.isThrottled("owner", "other-repo", 1));
-    assertFalse(limiter.isThrottled("other-owner", "repo", 1));
+    assertTrue(limiter.hold("owner", "repo", 1, null).throttled());
+    assertFalse(limiter.hold("owner", "repo", 2, null).throttled());
+    assertFalse(limiter.hold("owner", "other-repo", 1, null).throttled());
+    assertFalse(limiter.hold("other-owner", "repo", 1, null).throttled());
   }
 
   @Test
@@ -79,10 +79,10 @@ class AutoReviewRateLimiterTest {
     var limiter = new AutoReviewRateLimiter(INTERVAL_MS, BIG_THRESHOLD, clock);
 
     limiter.recordCompletion("owner", "repo", 1, "reviewed");
-    assertTrue(limiter.isThrottled("owner", "repo", 1));
+    assertTrue(limiter.hold("owner", "repo", 1, null).throttled());
 
     clock.advance(INTERVAL_MS + 1);
-    assertFalse(limiter.isThrottled("owner", "repo", 1));
+    assertFalse(limiter.hold("owner", "repo", 1, null).throttled());
   }
 
   @Test
@@ -92,7 +92,7 @@ class AutoReviewRateLimiterTest {
 
     limiter.recordCompletion("owner", "repo", 1, "reviewed");
     clock.advance(INTERVAL_MS - 1);
-    assertTrue(limiter.isThrottled("owner", "repo", 1));
+    assertTrue(limiter.hold("owner", "repo", 1, null).throttled());
   }
 
   @Test
@@ -102,7 +102,7 @@ class AutoReviewRateLimiterTest {
 
     limiter.recordCompletion("owner", "repo", 1, "reviewed");
     clock.advance(INTERVAL_MS);
-    assertFalse(limiter.isThrottled("owner", "repo", 1));
+    assertFalse(limiter.hold("owner", "repo", 1, null).throttled());
   }
 
   @Test
@@ -110,10 +110,10 @@ class AutoReviewRateLimiterTest {
     var limiter = new AutoReviewRateLimiter(INTERVAL_MS, BIG_THRESHOLD, new MutableClock(0));
 
     limiter.recordCompletion("owner", "repo", 1, "reviewed");
-    assertTrue(limiter.isThrottled("owner", "repo", 1));
+    assertTrue(limiter.hold("owner", "repo", 1, null).throttled());
 
     assertTrue(limiter.clearForReadyHead("owner", "repo", 1, "sha-a"));
-    assertFalse(limiter.isThrottled("owner", "repo", 1));
+    assertFalse(limiter.hold("owner", "repo", 1, null).throttled());
   }
 
   @Test
@@ -123,11 +123,11 @@ class AutoReviewRateLimiterTest {
     limiter.recordCompletion("owner", "repo", 1, "reviewed");
 
     assertFalse(limiter.clearForReadyHead("owner", "repo", 1, "SHA-A"));
-    assertTrue(limiter.isThrottled("owner", "repo", 1));
+    assertTrue(limiter.hold("owner", "repo", 1, null).throttled());
 
     // A new head gets its own lift, and so does the same head on another pull request.
     assertTrue(limiter.clearForReadyHead("owner", "repo", 1, "sha-b"));
-    assertFalse(limiter.isThrottled("owner", "repo", 1));
+    assertFalse(limiter.hold("owner", "repo", 1, null).throttled());
     assertTrue(limiter.clearForReadyHead("owner", "repo", 2, "sha-a"));
   }
 
@@ -138,7 +138,7 @@ class AutoReviewRateLimiterTest {
 
     assertFalse(limiter.clearForReadyHead("owner", "repo", 1, null));
     assertFalse(limiter.clearForReadyHead("owner", "repo", 1, " "));
-    assertTrue(limiter.isThrottled("owner", "repo", 1));
+    assertTrue(limiter.hold("owner", "repo", 1, null).throttled());
     assertEquals(0, limiter.readyHeads.size());
   }
 
@@ -147,7 +147,7 @@ class AutoReviewRateLimiterTest {
     var limiter = new AutoReviewRateLimiter(0, BIG_THRESHOLD, new MutableClock(0));
 
     assertFalse(limiter.clearForReadyHead("owner", "repo", 1, "sha-a"));
-    assertFalse(limiter.isThrottled("owner", "repo", 1));
+    assertFalse(limiter.hold("owner", "repo", 1, null).throttled());
     assertEquals(0, limiter.readyHeads.size());
   }
 
@@ -168,7 +168,7 @@ class AutoReviewRateLimiterTest {
     // PR 1 is past the interval with no window; PR 2 still has a window; PR 3 was just lifted.
     assertEquals(2, limiter.readyHeads.size());
     assertFalse(limiter.clearForReadyHead("owner", "repo", 2, "sha-2"));
-    assertTrue(limiter.isThrottled("owner", "repo", 2));
+    assertTrue(limiter.hold("owner", "repo", 2, null).throttled());
     assertFalse(limiter.clearForReadyHead("owner", "repo", 3, "sha-3"));
   }
 
@@ -202,7 +202,7 @@ class AutoReviewRateLimiterTest {
       assertFalse(limiter.clearForReadyHead("owner", "repo", 1, "sha-a"));
       assertFalse(limiter.clearForReadyHead("owner", "repo", 1, "sha-b"));
     }
-    assertTrue(limiter.isThrottled("owner", "repo", 1));
+    assertTrue(limiter.hold("owner", "repo", 1, null).throttled());
   }
 
   @Test
@@ -229,12 +229,13 @@ class AutoReviewRateLimiterTest {
     clock.advance(10);
 
     assertEquals(
-        OptionalLong.of(1_000 + INTERVAL_MS), limiter.reviewDueAt("owner", "repo", 1, "sha-b"));
+        OptionalLong.of(1_000 + INTERVAL_MS),
+        limiter.hold("owner", "repo", 1, "sha-b").reviewDueAt());
     // The head that review covered needs no second review, whatever its case.
-    assertEquals(OptionalLong.empty(), limiter.reviewDueAt("owner", "repo", 1, "SHA-A"));
+    assertEquals(OptionalLong.empty(), limiter.hold("owner", "repo", 1, "SHA-A").reviewDueAt());
     // Neither does an event with no head to review.
-    assertEquals(OptionalLong.empty(), limiter.reviewDueAt("owner", "repo", 1, null));
-    assertEquals(OptionalLong.empty(), limiter.reviewDueAt("owner", "repo", 1, " "));
+    assertEquals(OptionalLong.empty(), limiter.hold("owner", "repo", 1, null).reviewDueAt());
+    assertEquals(OptionalLong.empty(), limiter.hold("owner", "repo", 1, " ").reviewDueAt());
   }
 
   @Test
@@ -246,9 +247,9 @@ class AutoReviewRateLimiterTest {
 
     limiter.forgetCoveredHead("owner", "repo", 1);
 
-    assertTrue(limiter.isThrottled("owner", "repo", 1));
-    assertEquals(
-        OptionalLong.of(1_000 + INTERVAL_MS), limiter.reviewDueAt("owner", "repo", 1, "sha-a"));
+    var hold = limiter.hold("owner", "repo", 1, "sha-a");
+    assertTrue(hold.throttled());
+    assertEquals(OptionalLong.of(1_000 + INTERVAL_MS), hold.reviewDueAt());
     // The ready-for-review lift is remembered apart from the window: no second lift for sha-a.
     assertFalse(limiter.clearForReadyHead("owner", "repo", 1, "sha-a"));
   }
@@ -259,7 +260,7 @@ class AutoReviewRateLimiterTest {
 
     limiter.forgetCoveredHead("owner", "repo", 1);
 
-    assertFalse(limiter.isThrottled("owner", "repo", 1));
+    assertEquals(AutoReviewRateLimiter.Hold.NONE, limiter.hold("owner", "repo", 1, "sha-a"));
     assertTrue(limiter.deadlines.isEmpty());
   }
 
@@ -268,15 +269,30 @@ class AutoReviewRateLimiterTest {
     var clock = new MutableClock(0);
     var limiter = new AutoReviewRateLimiter(INTERVAL_MS, BIG_THRESHOLD, clock);
 
-    assertEquals(OptionalLong.empty(), limiter.reviewDueAt("owner", "repo", 1, "sha-b"));
+    assertEquals(OptionalLong.empty(), limiter.hold("owner", "repo", 1, "sha-b").reviewDueAt());
 
     limiter.recordCompletion("owner", "repo", 1, "sha-a");
     clock.advance(INTERVAL_MS);
-    assertEquals(OptionalLong.empty(), limiter.reviewDueAt("owner", "repo", 1, "sha-b"));
+    assertEquals(OptionalLong.empty(), limiter.hold("owner", "repo", 1, "sha-b").reviewDueAt());
 
     var off = new AutoReviewRateLimiter(0, BIG_THRESHOLD, clock);
     off.recordCompletion("owner", "repo", 1, "sha-a");
-    assertEquals(OptionalLong.empty(), off.reviewDueAt("owner", "repo", 1, "sha-b"));
+    assertEquals(OptionalLong.empty(), off.hold("owner", "repo", 1, "sha-b").reviewDueAt());
+  }
+
+  @Test
+  void anEventThatArrivesAsTheWindowClosesIsHeldFromOneReadingOfTheClock() {
+    // The clock passes the deadline right after it is first read, as it can between two reads.
+    var readings = new AtomicLong(INTERVAL_MS - 1);
+    var limiter = new AutoReviewRateLimiter(INTERVAL_MS, BIG_THRESHOLD, readings::getAndIncrement);
+    limiter.deadlines.put("owner/repo#1", new AutoReviewRateLimiter.Window(INTERVAL_MS, "sha-a"));
+
+    var hold = limiter.hold("owner", "repo", 1, "sha-b");
+
+    // Held, and with the time to review it at: never held with nothing to keep it by.
+    assertTrue(hold.throttled());
+    assertEquals(OptionalLong.of(INTERVAL_MS), hold.reviewDueAt());
+    assertEquals(AutoReviewRateLimiter.Hold.NONE, limiter.hold("owner", "repo", 1, "sha-b"));
   }
 
   @Test
@@ -284,7 +300,8 @@ class AutoReviewRateLimiterTest {
     var limiter = new AutoReviewRateLimiter(INTERVAL_MS, BIG_THRESHOLD, new MutableClock(0));
     limiter.recordCompletion("owner", "repo", 1, null);
 
-    assertEquals(OptionalLong.of(INTERVAL_MS), limiter.reviewDueAt("owner", "repo", 1, "sha-b"));
+    assertEquals(
+        OptionalLong.of(INTERVAL_MS), limiter.hold("owner", "repo", 1, "sha-b").reviewDueAt());
   }
 
   @Test
@@ -294,11 +311,11 @@ class AutoReviewRateLimiterTest {
 
     limiter.recordCompletion("owner", "repo", 1, "reviewed");
     clock.advance(INTERVAL_MS + 1);
-    assertFalse(limiter.isThrottled("owner", "repo", 1));
+    assertFalse(limiter.hold("owner", "repo", 1, null).throttled());
 
     limiter.recordCompletion("owner", "repo", 1, "reviewed");
     clock.advance(INTERVAL_MS - 1);
-    assertTrue(limiter.isThrottled("owner", "repo", 1));
+    assertTrue(limiter.hold("owner", "repo", 1, null).throttled());
   }
 
   @Test
@@ -307,7 +324,7 @@ class AutoReviewRateLimiterTest {
 
     limiter.recordCompletion("owner", "repo", 1, "reviewed");
 
-    assertFalse(limiter.isThrottled("owner", "repo", 1));
+    assertFalse(limiter.hold("owner", "repo", 1, null).throttled());
     assertEquals(0, limiter.deadlines.size());
   }
 
@@ -317,7 +334,7 @@ class AutoReviewRateLimiterTest {
 
     limiter.recordCompletion("owner", "repo", 1, "reviewed");
 
-    assertFalse(limiter.isThrottled("owner", "repo", 1));
+    assertFalse(limiter.hold("owner", "repo", 1, null).throttled());
     assertEquals(0, limiter.deadlines.size());
   }
 
@@ -351,7 +368,8 @@ class AutoReviewRateLimiterTest {
 
     assertEquals(count, limiter.deadlines.size());
     for (int i = 0; i < count; i++) {
-      assertTrue(limiter.isThrottled("owner", "repo", i), "live PR #" + i + " was forgotten");
+      assertTrue(
+          limiter.hold("owner", "repo", i, null).throttled(), "live PR #" + i + " was forgotten");
     }
   }
 

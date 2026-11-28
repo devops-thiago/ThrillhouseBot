@@ -43,7 +43,10 @@ public enum ReviewSkipReason {
    * DeferredReviews}), and counted here only when it could not be kept.
    */
   RATE_LIMITED,
-  /** The review executor rejected the task (saturated or shutting down). */
+  /**
+   * The review executor rejected the task (saturated or shutting down), or a review a limit held
+   * back kept failing to be handed back until {@link DeferredReviews} gave it up.
+   */
   DISPATCH_REJECTED,
   /**
    * The PR head moved while the review ran, so the finished run abandoned its post — the coalesced

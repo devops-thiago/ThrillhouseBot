@@ -144,10 +144,11 @@ class ApprovalOnPushTest {
 
     approvalOnPush.withdraw(PUSH);
 
-    assertTrue(limiter.isThrottled("o", "r", 1), "the window itself stays");
+    var hold = limiter.hold("o", "r", 1, "sha1");
+    assertTrue(hold.throttled(), "the window itself stays");
     assertEquals(
         OptionalLong.of(1_000 + WINDOW_MS),
-        limiter.reviewDueAt("o", "r", 1, "sha1"),
+        hold.reviewDueAt(),
         "a return to sha1 is reviewed when the window closes");
   }
 
@@ -162,7 +163,7 @@ class ApprovalOnPushTest {
     approvalOnPush.withdraw(PUSH);
 
     // The approval of sha1 still stands, so a return to sha1 needs no review.
-    assertEquals(OptionalLong.empty(), limiter.reviewDueAt("o", "r", 1, "sha1"));
+    assertEquals(AutoReviewRateLimiter.Hold.SKIP, limiter.hold("o", "r", 1, "sha1"));
   }
 
   @Test
@@ -194,7 +195,8 @@ class ApprovalOnPushTest {
       // B is pushed inside the window: the approval of A goes at once, B waits for the window.
       headIs("shaB");
       assertTrue(dispatcher.dispatchApprovalWithdrawal(push("shaB")));
-      assertTrue(dispatcher.deferThrottled(request("shaB")));
+      assertEquals(
+          ReviewDispatcher.RateWindowHold.KEPT, dispatcher.holdForRateWindow(request("shaB")));
       verify(reviewClient, timeout(5000))
           .dismissReview(
               "auth",
@@ -211,7 +213,8 @@ class ApprovalOnPushTest {
       // event is kept in place of B's instead of being skipped as already reviewed.
       headIs("shaA");
       assertTrue(dispatcher.dispatchApprovalWithdrawal(push("shaA")));
-      assertTrue(dispatcher.deferThrottled(request("shaA")));
+      assertEquals(
+          ReviewDispatcher.RateWindowHold.KEPT, dispatcher.holdForRateWindow(request("shaA")));
       awaitIdle(dispatcher);
 
       now.addAndGet(WINDOW_MS + 1);

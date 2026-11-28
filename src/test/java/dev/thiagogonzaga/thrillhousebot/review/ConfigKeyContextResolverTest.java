@@ -454,6 +454,42 @@ class ConfigKeyContextResolverTest {
     }
 
     /**
+     * The file header a patch may carry before its first hunk names a path, not a line of the file,
+     * so a path that spells a read is not one. Inside a hunk the same prefix is content.
+     */
+    @Test
+    void shouldNotReadTheFileHeaderBeforeTheFirstHunkAsContent() {
+      var pathOnly =
+          new FileDiff(
+              "src/process.env.ts",
+              "modified",
+              1,
+              0,
+              1,
+              """
+              --- a/src/process.env.ts
+              +++ b/src/process.env.ts
+              @@ -1 +1,2 @@
+               const x = 1;
+              +const y = 2;""");
+      var inHunk =
+          new FileDiff(
+              "counter.js",
+              "modified",
+              1,
+              0,
+              1,
+              """
+              @@ -1 +1,2 @@
+               let n = 0;
+              +++n; const cap = process.env.CAP;""");
+
+      assertEquals(
+          java.util.Set.of("counter.js"),
+          ConfigKeyContextResolver.environmentReaders(List.of(pathOnly, inHunk)));
+    }
+
+    /**
      * A read named only in a comment, a trailing comment or a string literal is named, not made.
      */
     @ParameterizedTest
