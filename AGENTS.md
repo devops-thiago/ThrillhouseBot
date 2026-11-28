@@ -580,9 +580,13 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   to a finding past the cap. `postReview` therefore returns the threads that landed
   (`ManifestThreads.PostedThreads`; none when a batched review was never submitted), and when they
   differ from the announced ones `ReviewPublisher.correctManifest` rewrites the line in a second
-  summary edit. It replaces only the exact line this round wrote, so another run's summary is
-  never touched, a round that posted as announced reads and writes nothing, and a failed edit is
-  logged and never re-posts the summary. The webhook's `review.open_findings` is built from the
+  summary edit. The edit goes only to the comment this round's `publishSummary` wrote, by the id
+  the publisher keeps from that write until the review has posted, and replaces only the exact
+  line it wrote there. Another run's summary is never touched, even one carrying the same line: a
+  round whose summary was not written (a blank one, a failed post) holds no id and edits nothing,
+  and so does one whose comment is no longer the newest summary. The id is only for this edit;
+  the summary itself is still found by its marker. A round that posted as announced reads and
+  writes nothing, and a failed edit is logged and never re-posts the summary. The webhook's `review.open_findings` is built from the
   same `PostedThreads` (`ManifestThreads.openFindings`). A review
   post that throws leaves the announced line. The path is the only free text and is escaped so it
   can never write `-->`; the line stays one line. An empty set renders `[]` (so "nothing open" differs
