@@ -112,31 +112,45 @@ public class DeferredReviewRelease {
 
   /**
    * Hands every due request back to the dispatcher. One that could not be handed back waits again,
-   * and is counted as skipped once {@link DeferredReviews} refuses to keep it any longer.
+   * and is counted as skipped once {@link DeferredReviews} refuses to keep it any longer. Whatever
+   * one request throws, the rest of the due requests are still handed back: {@link
+   * DeferredReviews#takeDue} hands each out once, so a request this pass left behind would wait
+   * until it is given up.
    */
   void release() {
     for (var request : deferred.takeDue()) {
       try {
-        handBack(request);
+        handBackOrWaitAgain(request);
       } catch (RuntimeException e) {
-        boolean waitsAgain = deferred.deferFor(request, RETRY);
-        Log.warnf(
-            "Could not hand back the deferred review of %s/%s #%d, %s: %s",
+        Log.errorf(
+            "Could not record what became of the deferred review of %s/%s #%d: %s",
+            request.owner(), request.repo(), request.prNumber(), LogSafe.oneLine(e.toString()));
+      }
+    }
+  }
+
+  private void handBackOrWaitAgain(ReviewOrchestrator.ReviewRequest request) {
+    try {
+      handBack(request);
+    } catch (RuntimeException e) {
+      // Put back without displacing a newer head an event deferred since this one was handed out.
+      boolean waitsAgain = deferred.requeueFor(request, RETRY);
+      Log.warnf(
+          "Could not hand back the deferred review of %s/%s #%d, %s: %s",
+          request.owner(),
+          request.repo(),
+          request.prNumber(),
+          waitsAgain ? "trying again" : "giving it up",
+          LogSafe.oneLine(e.toString()));
+      if (!waitsAgain) {
+        skipEmitter.recordSkip(
+            ReviewSkipReason.DISPATCH_REJECTED,
+            request.installationId(),
             request.owner(),
             request.repo(),
             request.prNumber(),
-            waitsAgain ? "trying again" : "giving it up",
-            LogSafe.oneLine(e.toString()));
-        if (!waitsAgain) {
-          skipEmitter.recordSkip(
-              ReviewSkipReason.DISPATCH_REJECTED,
-              request.installationId(),
-              request.owner(),
-              request.repo(),
-              request.prNumber(),
-              "the deferred review could not be handed back and is no longer kept; a later push"
-                  + " or a manual /review reviews it");
-        }
+            "the deferred review could not be handed back and is no longer kept; a later push"
+                + " or a manual /review reviews it");
       }
     }
   }
