@@ -12,6 +12,10 @@
 ///   gh api --hostname github.example.com --method POST /app-manifests/{code}/conversions \
 ///     | java scripts/GenEnv.java --host thrillhousebot.example.com \
 ///         --github-url https://github.example.com
+///
+/// --github-url must be an https address with no user name or password, the same
+/// rule the bot applies to GITHUB_URL when it starts. Anything else is refused
+/// and no .env is written.
 
 void main(String[] args) throws Exception {
   String host = null;
@@ -22,6 +26,14 @@ void main(String[] args) throws Exception {
     } else if ("--github-url".equals(args[i])) {
       githubUrl = args[i + 1].strip().replaceAll("/+$", "");
     }
+  }
+  var refused = githubUrl == null || githubUrl.isEmpty() ? null : githubUrlProblem(githubUrl);
+  if (refused != null) {
+    System.err.println(
+        "❌ --github-url must be an https address, like https://github.example.com: found "
+            + refused
+            + ". No .env was written.");
+    System.exit(1);
   }
   var githubUrlLine = githubUrl == null || githubUrl.isEmpty() ? "" : "GITHUB_URL=" + githubUrl + "\n";
   var dashboardUrl = "https://" + (host != null ? host : "<your-host>");
@@ -101,6 +113,31 @@ void main(String[] args) throws Exception {
   }
   IO.println("");
   IO.println("👉 Still needed: AI_API_KEY, DB_PASSWORD");
+}
+
+/// What keeps the bot from starting on this GITHUB_URL, or null when it would accept it.
+/// The value is never repeated, since it can hold a password.
+String githubUrlProblem(String value) {
+  java.net.URI uri;
+  try {
+    uri = new java.net.URI(value);
+  } catch (java.net.URISyntaxException e) {
+    return "text that is not a URL";
+  }
+  if (uri.getScheme() == null) {
+    return "no scheme";
+  }
+  var scheme = uri.getScheme().toLowerCase(java.util.Locale.ROOT);
+  if (scheme.equals("http")) {
+    return "the scheme http";
+  }
+  if (!scheme.equals("https")) {
+    return "a scheme other than https";
+  }
+  if (uri.getHost() == null) {
+    return "no valid host name";
+  }
+  return uri.getRawUserInfo() == null ? null : "a user name or password in the address";
 }
 
 /// First numeric value for the key (the conversion response has the app id first).
