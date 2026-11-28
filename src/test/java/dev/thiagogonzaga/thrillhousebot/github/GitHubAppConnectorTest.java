@@ -17,11 +17,13 @@ package dev.thiagogonzaga.thrillhousebot.github;
 
 import static dev.thiagogonzaga.thrillhousebot.github.GitHubStub.gzipped;
 import static dev.thiagogonzaga.thrillhousebot.github.GitHubStub.json;
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -30,6 +32,7 @@ import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.net.URI;
 import java.net.http.HttpClient;
+import java.net.http.HttpHeaders;
 import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
 import java.nio.ByteBuffer;
@@ -37,6 +40,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Flow;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -232,6 +236,57 @@ class GitHubAppConnectorTest {
 
     var body = subscriber.getBody().toCompletableFuture().join();
     assertEquals(kept, new String(body, StandardCharsets.UTF_8));
+  }
+
+  /**
+   * What {@code send} keeps of the body GitHub answers {@code path} with: the HTTP client here
+   * feeds the body to whatever handler the connector asks for and records what comes out of it.
+   */
+  private static String keptBy(String path, int status) throws IOException {
+    var kept = new AtomicReference<byte[]>();
+    var client = mock(HttpClient.class);
+    when(client.sendAsync(any(), any()))
+        .thenAnswer(
+            call -> {
+              HttpResponse.BodyHandler<byte[]> handler = call.getArgument(1);
+              var info = mock(HttpResponse.ResponseInfo.class);
+              when(info.statusCode()).thenReturn(status);
+              var subscriber = handler.apply(info);
+              subscriber.onSubscribe(mock(Flow.Subscription.class));
+              subscriber.onNext(List.of(ByteBuffer.wrap("the body".getBytes(UTF_8))));
+              subscriber.onComplete();
+              kept.set(subscriber.getBody().toCompletableFuture().join());
+              var answer = mock(HttpResponse.class);
+              when(answer.statusCode()).thenReturn(status);
+              when(answer.headers()).thenReturn(HttpHeaders.of(Map.of(), (_, _) -> true));
+              when(answer.body()).thenReturn(kept.get());
+              return CompletableFuture.completedFuture(answer);
+            });
+    var request = mock(GitHubConnectorRequest.class);
+    when(request.url()).thenReturn(URI.create("https://github.test/api/v3" + path).toURL());
+    when(request.method()).thenReturn("GET");
+    when(request.allHeaders()).thenReturn(Map.of());
+
+    try (var response = new GitHubAppConnector(client, TIMEOUT).send(request)) {
+      assertEquals(status, response.statusCode());
+    } catch (GitHubAppConnector.DownloadRedirect | ClientWebApplicationException _) {
+      // How a download and a refusal end; the body kept is what is under test.
+    }
+    return new String(kept.get(), UTF_8);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"/repos/o/r/actions/artifacts/99/zip", "/repos/o/r/actions/jobs/7/logs"})
+  void sendDoesNotKeepTheBodyOfADownloadGitHubDidNotRefuse(String path) throws IOException {
+    assertEquals("", keptBy(path, 200));
+    assertEquals("", keptBy(path, 302));
+    assertEquals("the body", keptBy(path, 404));
+  }
+
+  @Test
+  void sendKeepsTheBodyOfEveryOtherAnswer() throws IOException {
+    assertEquals("the body", keptBy("/repos/o/r/actions/artifacts/99", 200));
+    assertEquals("the body", keptBy("/repos/o/r", 404));
   }
 
   @Test

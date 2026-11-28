@@ -129,12 +129,15 @@ public class GitHubTokenReads {
   }
 
   /**
-   * Every repository the installation token can access.
+   * Every repository the installation token can access, healing a rejected credential once.
    *
    * @throws IllegalStateException past {@value #MAX_REPOSITORY_PAGES} pages
    */
   public List<InstallationRepository> installationRepositories(String auth) {
-    return allRepositories(auth, connector, MAX_REPOSITORY_PAGES);
+    return GitHubTokenRefresh.SHARED.retrying(
+        "installation repositories",
+        auth,
+        credential -> allRepositories(credential, connector, MAX_REPOSITORY_PAGES));
   }
 
   /**

@@ -1264,7 +1264,12 @@ public class ReviewPublisher {
           .append("\n");
       for (var check : result.offendingCiChecks()) {
         String status = check.isFailing() ? "failed" : CI_PENDING;
-        sb.append("- Check **").append(check.name()).append("** is ").append(status).append("\n");
+        // A check's name is whatever the workflow calls its job, so it is posted as untrusted text.
+        sb.append("- Check **")
+            .append(MarkdownSafe.inline(check.name()))
+            .append("** is ")
+            .append(status)
+            .append("\n");
       }
     }
     if (result.ciUnreadable()) {

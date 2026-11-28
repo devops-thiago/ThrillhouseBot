@@ -30,15 +30,12 @@ import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 @RegisterProvider(GitHubErrorLogger.class)
 public interface GitHubLabelClient {
 
-  /**
-   * Adds labels to a PR (PRs are issues for the labels API). Idempotent — labels already present
-   * are left untouched. Names must already exist in the repo or GitHub rejects the request.
-   */
+  /** One HTTP attempt at adding labels to a PR. Callers want {@link #addLabels} instead. */
   @POST
   @Path("/repos/{owner}/{repo}/issues/{issueNumber}/labels")
   @Produces(MediaType.APPLICATION_JSON)
   @Consumes(MediaType.APPLICATION_JSON)
-  List<Label> addLabels(
+  List<Label> addLabelsOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
@@ -46,16 +43,53 @@ public interface GitHubLabelClient {
       @PathParam("issueNumber") int issueNumber,
       AddLabelsRequest request);
 
+  /**
+   * Adds labels to a PR (PRs are issues for the labels API). Idempotent — labels already present
+   * are left untouched. Names must already exist in the repo or GitHub rejects the request.
+   *
+   * <p>The labels are written at the end of a review, with the token the review read when it
+   * started, so the call goes through {@link GitHubWriteRetry} like the review's other writes: a
+   * token GitHub rejects is replaced and the call repeated once, and a throttled call is repeated
+   * after the wait GitHub asks for.
+   */
+  default List<Label> addLabels(
+      String auth,
+      String accept,
+      String owner,
+      String repo,
+      int issueNumber,
+      AddLabelsRequest request) {
+    return GitHubWriteRetry.DEFAULT.call(
+        "labels on " + owner + "/" + repo + " #" + issueNumber,
+        auth,
+        credential -> addLabelsOnce(credential, accept, owner, repo, issueNumber, request));
+  }
+
+  /** One HTTP attempt at creating a repository label. Callers want {@link #createLabel} instead. */
   @POST
   @Path("/repos/{owner}/{repo}/labels")
   @Produces(MediaType.APPLICATION_JSON)
   @Consumes(MediaType.APPLICATION_JSON)
-  Label createLabel(
+  Label createLabelOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
       @PathParam("repo") String repo,
       CreateLabelRequest request);
+
+  /**
+   * Creates a repository label, through {@link GitHubWriteRetry} for the same reason as {@link
+   * #addLabels}. Only a rejected token or a throttle is repeated, and GitHub applied neither, so a
+   * label is never created twice. Any other refusal, a name that already exists included, is thrown
+   * to the caller.
+   */
+  default Label createLabel(
+      String auth, String accept, String owner, String repo, CreateLabelRequest request) {
+    return GitHubWriteRetry.DEFAULT.call(
+        "label creation on " + owner + "/" + repo,
+        auth,
+        credential -> createLabelOnce(credential, accept, owner, repo, request));
+  }
 
   @RegisterForReflection
   record Label(String name, String description, String color) {}

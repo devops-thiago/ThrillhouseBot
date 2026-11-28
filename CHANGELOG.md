@@ -164,9 +164,26 @@ cannot resolve its review threads.
   the review of that pull request failed. A file with a key that is not plain text is now ignored
   with a warning, like any other file that cannot be read, and the review runs on the global
   settings. Affects every release up to 0.9.3.
+- **Label writes are repeated with a fresh token (#1551)**: adding or creating a label sent the
+  token the review read at its start and was not repeated after a 401, so a review that outlived its
+  token skipped its labels with only a warning. Label writes, check-run creation, reactions and the
+  read of an installation's repository are now repeated once with the replacement token, as the
+  other calls are. Label writes also take their turn with the bot's other writes, one second apart.
 
 ### Security
 
+- **A declined secret finding no longer covers a different secret**: a decline is matched on later
+  rounds by the hidden marker at the end of the finding, and the comparison also accepted the
+  unkeyed value that v0.7.0 wrote. Anyone can compute that value, so a pull request's author could
+  look for another line that gives the same one and have the earlier decline cover it. A marker now
+  names its scheme (`scan-content=v2:…`), a stored marker is compared only under the scheme it was
+  written with, and the unkeyed one is no longer accepted. **A decline recorded on v0.7.0 lapses
+  once**: the finding is raised again and can be declined again. Declines recorded on v0.7.1 to
+  v0.9.3 keep matching.
+- **A CI check's name is escaped in the review body**: the list of failing or pending checks under a
+  held approval printed each check's name as GitHub returned it. A workflow job's name is chosen by
+  the pull request's author, so a name could `@`-mention users and teams, or open an HTML comment
+  that hid the rest of the review. The name now gets the same escaping there as in the summary.
 - **Text a model wrote can no longer notify people, post raw HTML or offer its own suggestion**:
   a finding's title and description, a status note, a file summary, a description gap, a reply and
   the `/describe` and `/changelog` drafts were posted as the model wrote them, so text steered by a

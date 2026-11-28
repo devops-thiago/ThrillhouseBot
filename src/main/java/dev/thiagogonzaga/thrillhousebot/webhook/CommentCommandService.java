@@ -74,12 +74,16 @@ public class CommentCommandService {
       "🔒 This pull request is closed or merged, so `/review` did nothing. "
           + "Reopen it and comment `/review` again to get a review.";
 
-  /** Posted when GitHub refuses {@code /resolve} because the App lacks the permission (#1471). */
-  static final String RESOLVE_NOT_PERMITTED_NOTICE =
-      "⚠️ GitHub does not let this App resolve review threads, so they stay open. Whoever runs the"
-          + " bot needs to grant it "
+  /** What the operator has to do before {@code /resolve} can work, as the end of a notice. */
+  private static final String RESOLVE_GRANT_HINT =
+      " Whoever runs the bot needs to grant it "
           + ReviewThreadService.RESOLVE_PERMISSION
           + " and accept the change on the installation.";
+
+  /** Posted when GitHub refuses {@code /resolve} because the App lacks the permission (#1471). */
+  static final String RESOLVE_NOT_PERMITTED_NOTICE =
+      "⚠️ GitHub does not let this App resolve review threads, so they stay open."
+          + RESOLVE_GRANT_HINT;
 
   /** Posted when {@code /resolve} could not read the pull request's review threads (#1471). */
   static final String RESOLVE_LISTING_FAILED_NOTICE =
@@ -508,7 +512,7 @@ public class CommentCommandService {
         log.warn(
             "Failed to resolve thread {} on {} #{}", thread.id(), repository(ctx), num(ctx), e);
         if (notPermitted(e)) {
-          return RESOLVE_NOT_PERMITTED_NOTICE;
+          return resolveRefused(resolved);
         }
         failed++;
       }
@@ -518,6 +522,21 @@ public class CommentCommandService {
 
   private static boolean notPermitted(RuntimeException e) {
     return e instanceof GitHubGraphQLException refusal && refusal.isNotPermitted();
+  }
+
+  /**
+   * What {@code /resolve} answers when GitHub refuses a thread for want of the permission: the
+   * notice alone when nothing was resolved, and otherwise the threads resolved before the refusal
+   * as well, so the reply never says they all stay open when some were closed.
+   */
+  private static String resolveRefused(int resolved) {
+    return resolved == 0
+        ? RESOLVE_NOT_PERMITTED_NOTICE
+        : "✅ Resolved "
+            + resolved
+            + " ThrillhouseBot finding thread(s). ⚠️ GitHub then refused to let this App resolve"
+            + " review threads, so the rest stay open."
+            + RESOLVE_GRANT_HINT;
   }
 
   /**

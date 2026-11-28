@@ -92,8 +92,9 @@ import javax.crypto.spec.SecretKeySpec;
  * same content (#982): same file, title and anchor, and for a secret the same {@linkplain
  * #contentFingerprint fingerprint} of the flagged line, so a new value on that line is raised
  * whatever prefix and length it shares with the old one (a decline recorded before secret findings
- * carried the fingerprint covers its line only until the head moves). Without this the scan, which
- * is not model output and reads no learning, raised a declined finding again on the next round and
+ * carried the fingerprint covers its line only until the head moves, and one recorded under the
+ * unkeyed fingerprint of 0.7.0 lapses once: {@link #sameContent}). Without this the scan, which is
+ * not model output and reads no learning, raised a declined finding again on the next round and
  * blocked the pull request on every push. A decline matches one detection, the nearest by line, so
  * a second identical line added later is raised. A finding the effective previous round raised
  * again before the decline was remembered is reported {@code justified} under the same rule, so its
@@ -210,14 +211,27 @@ public class SecurityScan {
    * Hidden line a secret finding's description ends with: a fingerprint of the content it flagged,
    * which is what tells a later round whether a declined finding's line still carries the same
    * value. The title shows only the value's first characters and length, which a known format
-   * shares across every value.
+   * shares across every value. The fingerprint follows the scheme it was made under ({@link
+   * #FINGERPRINT_SCHEME}); a marker with no scheme is one 0.9.3 or an earlier version posted.
+   * Whatever the marker holds is read here, so that one this version cannot compare ({@link
+   * #MARKER_VALUE}) is told from a finding stored with no marker.
    */
   private static final Pattern CONTENT_MARKER =
-      Pattern.compile("<!-- thrillhousebot:scan-content=([0-9a-f]+) -->");
+      Pattern.compile("<!-- thrillhousebot:scan-content=([^>]*) -->");
 
-  /** The marker where the scan writes it: alone, at the very end of a finding's description. */
+  /**
+   * What a marker this version can compare holds: a fingerprint, after this version's scheme or
+   * after none. Any other scheme, and anything that is not a fingerprint, is a marker that covers
+   * nothing ({@link #sameContent}).
+   */
+  private static final Pattern MARKER_VALUE = Pattern.compile("(v2:)?([0-9a-f]+)");
+
+  /**
+   * The marker where the scan writes it: alone, at the very end of a finding's description. A
+   * marker of a scheme another version posted is kept as the comment it is too.
+   */
   private static final Pattern TRAILING_CONTENT_MARKER =
-      Pattern.compile("\\n\\n<!-- thrillhousebot:scan-content=[0-9a-f]+ -->$");
+      Pattern.compile("\\n\\n<!-- thrillhousebot:scan-content=(?:[a-z0-9]+:)?[0-9a-f]+ -->$");
 
   /**
    * A finding's description as it is posted: prose ({@link MarkdownSafe#prose}), with the hidden
@@ -258,6 +272,13 @@ public class SecurityScan {
 
   /** Domain label the fingerprint key is derived under, so it is no other use's key. */
   private static final String FINGERPRINT_KEY_LABEL = "thrillhousebot:scan-content-key:v2";
+
+  /**
+   * What a posted marker puts before its fingerprint: the scheme the fingerprint was made under,
+   * keyed from the App private key. A stored marker is compared only under the scheme it names, so
+   * a value made under an earlier scheme never stands for one made under this.
+   */
+  private static final String FINGERPRINT_SCHEME = "v2";
 
   /** Domain label of the key markers were made under while it came from the webhook secret. */
   private static final String WEBHOOK_KEY_LABEL = "thrillhousebot:scan-content-key";
@@ -358,11 +379,10 @@ public class SecurityScan {
   /**
    * One scan finding and the rule that raised it.
    *
-   * @param earlierFingerprints for a secret finding, what a marker posted by an earlier version
-   *     would carry for the same content: the unkeyed fingerprint from before #985 ({@link
-   *     #legacyContentFingerprint}) and the one keyed from the webhook secret ({@link
-   *     #webhookKey}). Kept in memory only to match a decline recorded under one of them; empty for
-   *     an IaC finding
+   * @param earlierFingerprint for a secret finding, what a marker posted by 0.7.1 to 0.9.3 would
+   *     carry for the same content: the fingerprint keyed from the webhook secret ({@link
+   *     #webhookKey}). Kept in memory only to match a decline recorded under such a marker; {@code
+   *     null} for an IaC finding
    * @param identifier for a generic secret, the name its literal is assigned to when that name is
    *     distinctive enough to stand for the secret in a model's text ({@link #identifierOf}), so a
    *     model finding about it away from its line collapses into this one (#1072); otherwise {@code
@@ -374,16 +394,15 @@ public class SecurityScan {
   record Detection(
       SecurityRule rule,
       ReviewResponse.Finding finding,
-      Set<String> earlierFingerprints,
+      String earlierFingerprint,
       String identifier,
       Set<String> aliases) {
     Detection {
-      earlierFingerprints = Set.copyOf(earlierFingerprints);
       aliases = Set.copyOf(aliases);
     }
 
     Detection(SecurityRule rule, ReviewResponse.Finding finding) {
-      this(rule, finding, Set.of(), null, Set.of());
+      this(rule, finding, null, null, Set.of());
     }
   }
 
@@ -796,11 +815,7 @@ public class SecurityScan {
             hit.rule(),
             secretFinding(
                 filename, lines.get(index).number(), hit, contentFingerprint(hit.rule(), flagged)),
-            Set.copyOf(
-                List.of(
-                    legacyContentFingerprint(hit.rule(), flagged),
-                    contentFingerprint(
-                        MAC_ALGORITHM, webhookKey(webhookSecret), hit.rule(), flagged))),
+            contentFingerprint(MAC_ALGORITHM, webhookKey(webhookSecret), hit.rule(), flagged),
             identifierOf(hit),
             Set.of()));
     if (hit.rule() == SecurityRule.PRIVATE_KEY) {
@@ -910,6 +925,8 @@ public class SecurityScan {
             + "` comment on the same line or the line above it.\n\n"
             + PROVENANCE
             + "\n\n<!-- thrillhousebot:scan-content="
+            + FINGERPRINT_SCHEME
+            + ":"
             + fingerprint
             + " -->";
     return new ReviewResponse.Finding(
@@ -1090,26 +1107,53 @@ public class SecurityScan {
 
   /**
    * Whether a declined finding the identity index paired with a detection (same file, title and
-   * anchor) covers its content. A fingerprint on the declined finding must equal the detection's
-   * keyed fingerprint, or, for a marker an earlier version posted, one of the detection's {@link
-   * Detection#earlierFingerprints}, so a decline recorded before an upgrade keeps matching rather
+   * anchor) covers its content. A fingerprint on the declined finding is compared under the scheme
+   * its marker names and no other: one that names this version's scheme must equal the detection's
+   * posted fingerprint, and one with no scheme, which 0.7.1 to 0.9.3 posted, the detection's {@link
+   * Detection#earlierFingerprint}, so a decline recorded before the upgrade keeps matching rather
    * than lapsing.
+   *
+   * <p>Both are keyed, so a pull request's author cannot work out a line that gives a stored
+   * marker's value. The unkeyed fingerprint 0.7.0 posted is not compared for that reason: anyone
+   * can compute it, and eight hex digits are few enough to search for a different line that gives
+   * the value of a declined finding's marker. A decline recorded under it lapses once.
+   *
+   * <p>Only a finding with no marker at all is covered without a comparison: one stored before
+   * 0.7.0, which {@link #scanFindings} admits on an unchanged head alone. A marker that names a
+   * scheme this version does not know, or holds no fingerprint, covers nothing, so the finding is
+   * raised again rather than held by a decline nothing was compared for.
    */
   private static boolean sameContent(ReviewResponse.Finding prior, Detection detection) {
     IDENTITY_COMPARISONS.incrementAndGet();
-    var priorFingerprint = fingerprintOf(prior.description());
-    return priorFingerprint == null
-        || priorFingerprint.equals(fingerprintOf(detection.finding().description()))
-        || detection.earlierFingerprints().contains(priorFingerprint);
+    var marker = CONTENT_MARKER.matcher(Objects.toString(prior.description(), ""));
+    if (!marker.find()) {
+      return true;
+    }
+    var value = MARKER_VALUE.matcher(marker.group(1));
+    if (!value.matches()) {
+      return false;
+    }
+    var expected =
+        value.group(1) == null
+            ? detection.earlierFingerprint()
+            : fingerprintOf(detection.finding().description());
+    return value.group(2).equals(expected);
   }
 
-  /** The content fingerprint a scan finding's description carries, or {@code null}. */
+  /**
+   * The content fingerprint a scan finding's description carries, or {@code null} when it has no
+   * marker or one this version cannot compare.
+   */
   static String fingerprintOf(String description) {
     if (description == null) {
       return null;
     }
     var marker = CONTENT_MARKER.matcher(description);
-    return marker.find() ? marker.group(1) : null;
+    if (!marker.find()) {
+      return null;
+    }
+    var value = MARKER_VALUE.matcher(marker.group(1));
+    return value.matches() ? value.group(2) : null;
   }
 
   /**
@@ -1187,27 +1231,12 @@ public class SecurityScan {
    * decline keeps covering its line after the upgrade; nothing made with it is posted.
    */
   static byte[] webhookKey(String webhookSecret) {
-    return digest(
-        FINGERPRINT_ALGORITHM, WEBHOOK_KEY_LABEL, webhookSecret == null ? "" : webhookSecret);
+    return webhookKey(FINGERPRINT_ALGORITHM, webhookSecret);
   }
 
-  /**
-   * The unkeyed fingerprint markers carried before #985: the first {@value #FINGERPRINT_HEX} hex
-   * digits of a plain SHA-256 over the same input. Computed only to compare with a decline recorded
-   * under one, so that decline keeps covering its line after the upgrade; it is never posted.
-   */
-  static String legacyContentFingerprint(SecurityRule rule, String content) {
-    return legacyContentFingerprint(FINGERPRINT_ALGORITHM, rule, content);
-  }
-
-  /**
-   * As {@link #legacyContentFingerprint(SecurityRule, String)}; the algorithm is a parameter for
-   * tests.
-   */
-  static String legacyContentFingerprint(String algorithm, SecurityRule rule, String content) {
-    return HexFormat.of()
-        .formatHex(digest(algorithm, rule.name(), content))
-        .substring(0, FINGERPRINT_HEX);
+  /** As {@link #webhookKey(String)}; the algorithm is a parameter for tests. */
+  static byte[] webhookKey(String algorithm, String webhookSecret) {
+    return digest(algorithm, WEBHOOK_KEY_LABEL, webhookSecret == null ? "" : webhookSecret);
   }
 
   /** The digest of {@code head}, a zero byte, then {@code content}. */
@@ -1536,7 +1565,7 @@ public class SecurityScan {
                 : new Detection(
                     detection.rule(),
                     detection.finding(),
-                    detection.earlierFingerprints(),
+                    detection.earlierFingerprint(),
                     detection.identifier(),
                     aliases(
                         detection,
