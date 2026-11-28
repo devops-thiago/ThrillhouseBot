@@ -533,7 +533,8 @@ public class PrSummaryGenerator {
             round.requiredContextsKnown(),
             round.truncation(),
             round.blockingWithheldByConfidence(),
-            open);
+            open,
+            round.priorRoundsUnreadable());
     return new CurrentState(result, carried);
   }
 
@@ -660,6 +661,8 @@ public class PrSummaryGenerator {
       } else if (result.truncated()) {
         sb.append(
             "No new issues found in the reviewed portion of this PR — but the diff was too large to review in full, so this is a partial review.\n\n");
+      } else if (result.priorRoundsUnreadable()) {
+        sb.append("No new issues found in this round.\n\n");
       } else {
         sb.append(ZERO_ISSUES_MESSAGE).append("\n\n");
       }

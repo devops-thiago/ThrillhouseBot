@@ -665,7 +665,8 @@ public final class PromptLabelScrubber {
         result.requiredContextsKnown(),
         result.truncation(),
         result.blockingWithheldByConfidence(),
-        openPrevious);
+        openPrevious,
+        result.priorRoundsUnreadable());
   }
 
   /** Rendered markdown scrubbed against the files {@code findings} are filed on. */

@@ -523,6 +523,18 @@ public class ReviewContextLoader {
     public List<ReviewResponse.Finding> previousFindingsList() {
       return FollowUpAnalyzer.effectivePreviousFindings(priorAiResponses);
     }
+
+    /**
+     * Whether earlier rounds are stored for this pull request and none of them could be read: every
+     * stored response was blank or did not parse. There is then no finding to list to the model, no
+     * id its statuses can name and no round for the approve backstop to replay, so nothing from
+     * those rounds can hold the verdict. A first review stores no round, and a round that was read
+     * and raised nothing is a round that was read, so neither is this.
+     */
+    public boolean priorRoundsUnreadable() {
+      return !priorAiResponses.isEmpty()
+          && priorAiResponses.stream().noneMatch(FollowUpAnalyzer::isPersistedResponse);
+    }
   }
 
   /**
@@ -722,38 +734,56 @@ public class ReviewContextLoader {
     // under-tested. The section goes to the prompt; a refusal goes to the summary's scope note.
     var patchCoverage = patchCoverageResolver.resolve(auth, req, repoSettings, reviewableFiles);
 
-    return new ReviewContext(
-        files,
-        diffResult.text(),
-        baseComparisonResult.text(),
-        omittedFiles,
-        priorReviews,
-        priorAiResponseJsons,
-        priorAiResponses,
-        isFirstVisibleReview,
-        hasContext,
-        previousAiResponseJson,
-        inlineComments,
-        previousFindings,
-        instructions,
-        pathInstructions,
-        repoLabels,
-        projectStack,
-        linkedIssuesContext,
-        configKeyContext,
-        patchCoverage.section(),
-        reviewableFiles,
-        lineResolverSupplier,
-        prTotals,
-        conversationComments,
-        unmatchedIgnoreGlobs,
-        carried,
-        patchCoverage.artifactRefusal(),
-        headUnchanged(
-            previousRoundHeadSha(
-                priorCommitShas, priorAiResponseJsons.size(), previousRoundIndex, carried),
-            req.commitSha()),
-        verifiedWriters);
+    return warnWhenPriorRoundsUnreadable(
+        req,
+        new ReviewContext(
+            files,
+            diffResult.text(),
+            baseComparisonResult.text(),
+            omittedFiles,
+            priorReviews,
+            priorAiResponseJsons,
+            priorAiResponses,
+            isFirstVisibleReview,
+            hasContext,
+            previousAiResponseJson,
+            inlineComments,
+            previousFindings,
+            instructions,
+            pathInstructions,
+            repoLabels,
+            projectStack,
+            linkedIssuesContext,
+            configKeyContext,
+            patchCoverage.section(),
+            reviewableFiles,
+            lineResolverSupplier,
+            prTotals,
+            conversationComments,
+            unmatchedIgnoreGlobs,
+            carried,
+            patchCoverage.artifactRefusal(),
+            headUnchanged(
+                previousRoundHeadSha(
+                    priorCommitShas, priorAiResponseJsons.size(), previousRoundIndex, carried),
+                req.commitSha()),
+            verifiedWriters));
+  }
+
+  /**
+   * {@code ctx}, after a warning when earlier rounds are stored for the pull request and none could
+   * be read ({@link ReviewContext#priorRoundsUnreadable()}). Such a round does not approve, and the
+   * log is where an operator learns which pull request's stored results went bad.
+   */
+  private static ReviewContext warnWhenPriorRoundsUnreadable(
+      ReviewOrchestrator.ReviewRequest req, ReviewContext ctx) {
+    if (ctx.priorRoundsUnreadable()) {
+      Log.warnf(
+          "None of the %d stored earlier review round(s) of %s/%s #%d could be read — this"
+              + " round will not approve",
+          ctx.priorAiResponses().size(), req.owner(), req.repo(), req.prNumber());
+    }
+    return ctx;
   }
 
   /**
@@ -1034,14 +1064,50 @@ public class ReviewContextLoader {
     }
   }
 
+  /**
+   * The most reviews {@link GitHubReviewClient#listReviews} reads: every page of its walk, full.
+   */
+  static final int MAX_LISTED_REVIEWS =
+      GitHubReviewClient.MAX_REVIEW_PAGES * GitHubReviewClient.REVIEWS_PER_PAGE;
+
+  /**
+   * The pull request's reviews, oldest first, or an empty list when they could not be listed. A
+   * pull request with no review yet lists as empty without failing, so a failure here is never the
+   * ordinary first review: it is logged at warn with what the round loses, because the publisher
+   * takes the approvals it dismisses from this one listing ({@code
+   * ReviewPublisher.withdrawStandingApprovals}) and an empty one dismisses nothing. A listing that
+   * filled every page is logged too: GitHub lists oldest first, so the reviews left unread are the
+   * newest.
+   */
   List<GitHubReviewClient.ReviewResponse> fetchPriorReviews(
       String auth, String owner, String repo, int prNumber) {
+    List<GitHubReviewClient.ReviewResponse> reviews;
     try {
-      return reviewClient.listReviews(auth, ACCEPT, owner, repo, prNumber);
+      reviews = reviewClient.listReviews(auth, ACCEPT, owner, repo, prNumber);
     } catch (RuntimeException e) {
-      Log.debug("No prior reviews found (this is normal for first review)", e);
+      Log.warnf(
+          e,
+          "Could not list the reviews on %s/%s #%d, continuing as if it had none: the bot's earlier"
+              + " approvals could not be checked, so a round that does not approve dismisses none"
+              + " of them, and a stranded pending review is not cleared",
+          owner,
+          repo,
+          prNumber);
       return List.of();
     }
+    if (reviews.size() >= MAX_LISTED_REVIEWS) {
+      Log.warnf(
+          "Reviews on %s/%s #%d hit the %d-review read ceiling (%d pages of %d): GitHub lists the"
+              + " oldest first, so any newer review was not read, and an approval the bot gave"
+              + " among them is neither seen nor dismissed this round",
+          owner,
+          repo,
+          prNumber,
+          MAX_LISTED_REVIEWS,
+          GitHubReviewClient.MAX_REVIEW_PAGES,
+          GitHubReviewClient.REVIEWS_PER_PAGE);
+    }
+    return reviews;
   }
 
   /**

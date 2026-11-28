@@ -698,6 +698,18 @@ organization-owned app), tick **Check suite** and **Status**, and save. The
 existing `Checks: Read & write` and `Commit statuses: Read` permissions cover
 both.
 
+### Earlier reviews that cannot be read
+
+A follow-up review checks what the earlier reviews of the pull request raised,
+using the results the bot stored for them. If results are stored and none of
+them can be read, the bot cannot tell what is still open, so a review that
+finds nothing ends as `COMMENT` instead of `APPROVE`. The summary, the review
+body and the check run say why, and the bot logs a warning. A first review is
+not affected, and neither is a pull request with at least one earlier review
+the bot can read, including one that found nothing. The held review is stored
+like any other, so the next review has a readable one to work from; check the
+earlier review threads yourself before merging.
+
 ### Withdrawing an earlier approval
 
 GitHub keeps counting a reviewer's approval after the same reviewer posts a
@@ -715,11 +727,14 @@ a repository administrator or on the rule's "Restrict who can dismiss pull
 request reviews" list, so GitHub may refuse the dismissal there. The bot then
 logs a warning naming the review, posts its own review as usual, and the old
 approval stays until someone dismisses it. If you see that warning, add the App
-to the rule's list.
+to the rule's list. A dismissal that fails for another reason (a timeout, a
+rate limit, a review GitHub no longer has) is logged with a warning that says
+so, and the bot goes on to its older approvals.
 
 The approval is withdrawn when a review finishes, not when commits are pushed,
 and not at all when no review runs for the new head (a draft, a label or path
-skip, a paused bot, a failed run). Where the bot's approval counts towards a
+skip, a paused bot, a failed run) or when the bot could not list the pull
+request's reviews, which it logs as a warning. Where the bot's approval counts towards a
 required review, also turn on "Dismiss stale pull request approvals when new
 commits are pushed" in the branch protection rule or ruleset, so GitHub drops
 it on the push itself.

@@ -20,6 +20,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.thiagogonzaga.thrillhousebot.CapturedLog;
 import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
@@ -32,6 +33,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.logging.Level;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -1004,6 +1006,44 @@ class ReviewContextLoaderTest {
     }
 
     @Test
+    void storedRoundsThatCannotBeReadAreReportedAsUnreadable() {
+      stubLoad(List.of("{not json", " "));
+
+      var ctx = load();
+
+      assertTrue(ctx.hasContext());
+      assertTrue(ctx.priorRoundsUnreadable());
+      assertTrue(ctx.previousFindingsList().isEmpty());
+    }
+
+    @Test
+    void aStoredRoundThatWasReadAndRaisedNothingIsNotUnreadable() {
+      stubLoad(List.of("{\"findings\":[]}", "{not json"));
+
+      assertFalse(load().priorRoundsUnreadable());
+    }
+
+    @Test
+    void aFirstReviewHasNoUnreadableRounds() {
+      stubLoad(List.of());
+
+      assertFalse(load().priorRoundsUnreadable());
+    }
+
+    @Test
+    void carriedFindingsJoinedToUnreadableRoundsMakeARoundThatCanBeRead() {
+      // The carried findings are known and are held like any posted round's, so the round is
+      // judged on them; what the unreadable rounds raised stays unknown.
+      stubLoad(List.of("{not json"));
+      carryover.stash("owner", "repo", 1, "oldsha1", "headsha1", List.of(CARRIED));
+
+      var ctx = load();
+
+      assertFalse(ctx.priorRoundsUnreadable());
+      assertEquals(List.of(CARRIED), ctx.previousFindingsList());
+    }
+
+    @Test
     void carriedFindingsTakeTheIdsAfterThePostedRoundsOwn() {
       stubLoad(List.of(POSTED_ROUND_JSON));
       carryover.stash("owner", "repo", 1, "oldsha1", "headsha1", List.of(CARRIED));
@@ -1213,6 +1253,70 @@ class ReviewContextLoaderTest {
 
       assertNotNull(result);
       assertTrue(result.isEmpty());
+    }
+
+    @Test
+    void aFailedListingIsLoggedAtWarnNamingTheApprovalsItCouldNotCheck() {
+      when(reviewClient.listReviews(any(), any(), eq("owner"), eq("repo"), eq(42)))
+          .thenThrow(new RuntimeException("GitHub API error"));
+
+      try (var log = CapturedLog.of(ReviewContextLoader.class)) {
+        assertTrue(loader.fetchPriorReviews("auth", "owner", "repo", 42).isEmpty());
+
+        var warnings = log.at(Level.WARNING);
+        assertEquals(1, warnings.size(), warnings.toString());
+        var warning = warnings.getFirst();
+        assertTrue(warning.contains("owner/repo #42"), warning);
+        assertTrue(warning.contains("earlier approvals could not be checked"), warning);
+      }
+    }
+
+    @Test
+    void aPullRequestWithNoReviewsIsNotLoggedAsAFailure() {
+      when(reviewClient.listReviews(any(), any(), eq("owner"), eq("repo"), eq(42)))
+          .thenReturn(List.of());
+
+      try (var log = CapturedLog.of(ReviewContextLoader.class)) {
+        assertTrue(loader.fetchPriorReviews("auth", "owner", "repo", 42).isEmpty());
+
+        assertTrue(log.at(Level.WARNING).isEmpty(), log.at(Level.WARNING).toString());
+      }
+    }
+
+    @Test
+    void aListingThatFilledEveryPageIsLoggedBecauseTheNewestReviewsWereNotRead() {
+      var review =
+          new GitHubReviewClient.ReviewResponse(
+              1L, "", "COMMENTED", "abc123", new GitHubReviewClient.ReviewResponse.User("u"));
+      var full = Collections.nCopies(ReviewContextLoader.MAX_LISTED_REVIEWS, review);
+      when(reviewClient.listReviews(any(), any(), eq("owner"), eq("repo"), eq(42)))
+          .thenReturn(full);
+
+      try (var log = CapturedLog.of(ReviewContextLoader.class)) {
+        assertEquals(full.size(), loader.fetchPriorReviews("auth", "owner", "repo", 42).size());
+
+        var warnings = log.at(Level.WARNING);
+        assertEquals(1, warnings.size(), warnings.toString());
+        var warning = warnings.getFirst();
+        assertTrue(warning.contains("owner/repo #42"), warning);
+        assertTrue(warning.contains("1000-review read ceiling"), warning);
+        assertTrue(warning.contains("neither seen nor dismissed"), warning);
+      }
+    }
+
+    @Test
+    void aListingOneShortOfTheCeilingIsNotLogged() {
+      var review =
+          new GitHubReviewClient.ReviewResponse(
+              1L, "", "COMMENTED", "abc123", new GitHubReviewClient.ReviewResponse.User("u"));
+      when(reviewClient.listReviews(any(), any(), eq("owner"), eq("repo"), eq(42)))
+          .thenReturn(Collections.nCopies(ReviewContextLoader.MAX_LISTED_REVIEWS - 1, review));
+
+      try (var log = CapturedLog.of(ReviewContextLoader.class)) {
+        loader.fetchPriorReviews("auth", "owner", "repo", 42);
+
+        assertTrue(log.at(Level.WARNING).isEmpty(), log.at(Level.WARNING).toString());
+      }
     }
 
     @Test
