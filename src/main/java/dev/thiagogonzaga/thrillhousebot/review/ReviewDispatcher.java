@@ -135,7 +135,11 @@ public final class ReviewDispatcher {
    */
   public boolean dispatch(ReviewOrchestrator.ReviewRequest req) {
     if (!req.isManualTrigger()) {
-      // A newer automatic event replaces whatever a limit held back for the pull request.
+      // A newer automatic event replaces whatever a limit held back for the pull request, and it
+      // does so before it is queued, so a review handed back late cannot be queued over it. When
+      // the executor then refuses the event, the kept review is not restored: the caller counts
+      // DISPATCH_REJECTED once, for this event, which carries the pull request's newest head, and
+      // the executor refuses only once it is shut down, when the store is emptied anyway.
       deferredReviews.forget(req);
     }
     return enqueue(req);

@@ -1328,6 +1328,39 @@ class ReviewDispatcherTest {
   }
 
   @Test
+  void aPushTheExecutorRefusesStillReplacesTheKeptReviewAndIsTheOnlyOneToCount() {
+    var rejecting = mock(ExecutorService.class);
+    doThrow(new RejectedExecutionException("shut down")).when(rejecting).execute(any());
+    var refusing =
+        new ReviewDispatcher(
+            rejecting,
+            orchestrator,
+            rateLimiter,
+            slots,
+            deferred,
+            skipEmitter,
+            ciHoldRevisit,
+            coverage,
+            OpenTelemetry.noop());
+    var older = reviewRequest("owner", "repo", 42, "sha1");
+    var newer = reviewRequest("owner", "repo", 42, "sha2");
+    deferred.defer(older, 0);
+    // The kept review is handed out, and the newer push arrives before it is handed back.
+    assertEquals(List.of(older), deferred.takeDue());
+
+    // The caller counts DISPATCH_REJECTED for this event, the pull request's newest head.
+    assertFalse(refusing.dispatch(newer));
+
+    // The older head is not handed back in its place, and nothing else is counted for it.
+    assertEquals(
+        DeferredReviews.HandedOut.SUPERSEDED, deferred.handBack(older, refusing::dispatchDeferred));
+    verify(rejecting, times(1)).execute(any());
+    verify(skipEmitter, never()).recordSkip(any(), anyLong(), any(), any(), anyInt(), any());
+    assertTrue(deferred.isEmpty());
+    assertEquals(0, refusing.stateCount());
+  }
+
+  @Test
   void aPushDispatchedDuringAHandBackQueuesBehindTheHandedBackReview() throws Exception {
     var key = new ReviewDispatcher.PrKey("owner", "repo", 42);
     var busy = new ReviewDispatcher.PerPrState();
