@@ -1015,7 +1015,8 @@ live `fence(...)` (#604).
   and quotes must match the diff as it stands, so cutting them would lose findings on a line
   that holds such a run.
 - **An anchor or quote from the model is matched without backtracking into it.**
-  `RedactedAnchor` matches piece by piece rather than with a compiled pattern, and
+  `RedactedAnchor` matches piece by piece rather than with a compiled pattern, finds a text
+  piece's occurrences in one pass of the line, and reads a line of more than 64 pieces as text;
   `DescriptionGapScreen.needle` writes each stem ending so no letter is read twice. Both are held
   to the patterns they replaced by generated-input tests; keep those when changing either.
 - **A detected secret is never echoed.** Only `SecretScanner.redact` output (first characters and

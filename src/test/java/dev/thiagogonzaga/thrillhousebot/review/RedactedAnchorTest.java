@@ -241,6 +241,40 @@ class RedactedAnchorTest {
         assertTimeoutPreemptively(Duration.ofSeconds(10), () -> matcher.test(run)));
   }
 
+  /**
+   * Long stretches of text between markers, against a line that is one run of the text's own
+   * character: after a marker the text can start almost anywhere in the line, and it was once
+   * compared whole at each of those places.
+   */
+  @Test
+  void aLongTextBetweenMarkersIsLookedForInOnePassOfTheLine() {
+    var text = "A".repeat(100_000);
+    var matcher = RedactedAnchor.lineMatcher((KEY + text).repeat(6));
+    var run = "A".repeat(1_000_000);
+
+    assertTrue(assertTimeoutPreemptively(Duration.ofSeconds(10), () -> matcher.test(run)));
+    assertFalse(assertTimeoutPreemptively(Duration.ofSeconds(10), () -> matcher.test(run + "?")));
+    assertFalse(
+        assertTimeoutPreemptively(
+            Duration.ofSeconds(10), () -> matcher.test("A".repeat(6 * 100_040 - 1))));
+    // Text that overlaps itself is found at every place it starts, not only after the last find.
+    var overlapping = RedactedAnchor.lineMatcher(KEY + "ABAB" + KEY);
+    assertTrue(overlapping.test("A".repeat(40) + "BABAB" + "A".repeat(40)));
+    assertTrue(overlapping.test("A".repeat(38) + "ABABAB" + "A".repeat(40)));
+    assertFalse(overlapping.test("A".repeat(40) + "BABA" + "A".repeat(40)));
+  }
+
+  @Test
+  void anAnchorOfMorePiecesThanAnyScrubWritesMatchesOnlyItself() {
+    var unit = "x[redacted: \u2026, 1 chars]";
+    var most = RedactedAnchor.MAX_PIECES / 2;
+
+    assertTrue(RedactedAnchor.lineMatcher(unit.repeat(most)).test("xa".repeat(most)));
+    var over = unit.repeat(most + 1);
+    assertFalse(RedactedAnchor.lineMatcher(over).test("xa".repeat(most + 1)));
+    assertTrue(RedactedAnchor.lineMatcher(over).test(over));
+  }
+
   private static Stream<Arguments> anchorsOfManyMarkers() {
     return Stream.of(
         Arguments.of(KEY, ""),

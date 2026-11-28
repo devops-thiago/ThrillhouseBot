@@ -58,6 +58,14 @@ final class RedactedAnchor {
   /** The shortest base64 run {@link SecurityScan} scrubs as private key material. */
   private static final int KEY_MATERIAL_MIN = 40;
 
+  /**
+   * The most pieces an anchor line is matched by. A scrubbed line holds a marker or two, each of
+   * them two or three pieces with the text around it. A line of more is not a scrub's output and is
+   * read as text, like a malformed marker, so the pieces of an anchor never set what a diff line
+   * costs to read.
+   */
+  static final int MAX_PIECES = 64;
+
   /** What no redacted value holds after its shown prefix: the scrub's whitespace, and a quote. */
   private static final String NOT_IN_A_VALUE = " \t\n\u000B\f\r\"'`";
 
@@ -81,7 +89,8 @@ final class RedactedAnchor {
    * <p>The anchor is the model's text, so it may hold any number of markers in any order. The diff
    * line is read once per piece of the anchor whatever those are: each piece takes the places the
    * pieces before it can end at and gives the places it can end at, so a line is never read again
-   * for each way two markers could share a run of characters between them.
+   * for each way two markers could share a run of characters between them. An anchor line of more
+   * than {@value #MAX_PIECES} pieces is matched as plain text.
    */
   static Predicate<String> lineMatcher(String anchorLine) {
     var marker = MARKER.matcher(anchorLine);
@@ -98,10 +107,10 @@ final class RedactedAnchor {
         last = marker.end();
       }
     }
-    if (pieces.isEmpty()) {
+    addText(pieces, anchorLine.substring(last));
+    if (last == 0 || pieces.size() > MAX_PIECES) {
       return anchorLine::equals;
     }
-    addText(pieces, anchorLine.substring(last));
     return line -> matches(pieces, line);
   }
 
@@ -163,18 +172,54 @@ final class RedactedAnchor {
     return ends[line.length()];
   }
 
-  /** Marks in {@code ends} where {@code text} ends when it starts at one of {@code starts}. */
+  /**
+   * Marks in {@code ends} where {@code text} ends when it starts at one of {@code starts}.
+   *
+   * <p>After a marker the starts can be nearly every place in the line, so the text is not compared
+   * at each of them. Every place it occurs is found in one pass of the line: {@code held} is how
+   * much of the text ends at the character just read, and when the next character does not carry it
+   * on, it falls back to the longest shorter start of the text that still ends there.
+   */
   private static boolean afterText(String line, String text, boolean[] starts, boolean[] ends) {
+    int[] fallback = fallbacks(text);
     boolean any = false;
-    for (int at = 0; at + text.length() <= line.length(); at++) {
-      int end = at + text.length();
-      // Half of a pair in the anchor is not the first half of a whole pair in the line.
-      if (starts[at] && line.startsWith(text, at) && !insidePair(line, end)) {
-        ends[end] = true;
-        any = true;
+    int held = 0;
+    for (int at = 0; at < line.length(); at++) {
+      held = carriedOn(text, fallback, held, line.charAt(at));
+      if (held == text.length()) {
+        int end = at + 1;
+        // Half of a pair in the anchor is not the first half of a whole pair in the line.
+        if (starts[end - held] && !insidePair(line, end)) {
+          ends[end] = true;
+          any = true;
+        }
+        held = fallback[held - 1];
       }
     }
     return any;
+  }
+
+  /**
+   * For each length of a start of {@code text}, the longest shorter start of the text that the
+   * start of that length also ends with.
+   */
+  private static int[] fallbacks(String text) {
+    var fallback = new int[text.length()];
+    int held = 0;
+    for (int at = 1; at < text.length(); at++) {
+      held = carriedOn(text, fallback, held, text.charAt(at));
+      fallback[at] = held;
+    }
+    return fallback;
+  }
+
+  /** How much of {@code text} ends at {@code next}, when {@code held} of it ended just before. */
+  private static int carriedOn(String text, int[] fallback, int held, char next) {
+    int kept = held;
+    while (kept > 0 && text.charAt(kept) != next) {
+      kept = fallback[kept - 1];
+    }
+    return text.charAt(kept) == next ? kept + 1 : kept;
   }
 
   /** Whether {@code at}, where a text of one character or more ends, splits a pair. */
