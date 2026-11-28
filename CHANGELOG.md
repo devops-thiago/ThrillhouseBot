@@ -169,6 +169,12 @@ cannot resolve its review threads.
   token skipped its labels with only a warning. Label writes, check-run creation, reactions and the
   read of an installation's repository are now repeated once with the replacement token, as the
   other calls are. Label writes also take their turn with the bot's other writes, one second apart.
+- **The review body's list of findings without a thread renders like the summary** (#1438): code
+  quoted in a description, indented by two spaces or more, shows as a code block inside its bullet,
+  each bullet carries the finding's confidence note, and a bare carriage return can no longer end a
+  bullet. The list of lower-confidence items sends the reader to **Things to double-check** only
+  when this round's summary comment was written with them, and otherwise says the review itself
+  lists them.
 
 ### Security
 

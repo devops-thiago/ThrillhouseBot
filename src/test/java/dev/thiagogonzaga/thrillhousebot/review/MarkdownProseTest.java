@@ -628,4 +628,67 @@ class MarkdownProseTest {
           MarkdownSafe.prose(fences);
         });
   }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "text\n    not after a blank line",
+        "text\n\n one space only",
+        "- item\n\n  its continuation",
+        "- item\nlazy line\n\n  still the item",
+        "text\n\n  - a nested list\n\n      its continuation",
+        "text\n\n  1. a numbered list",
+        "text\n\n  > a quote",
+        "text\n\n  | a | table |",
+        "```\nfenced\n\n    already code\n```",
+        "text\n\n    ```\n    left to the fence reader\n    ```",
+      })
+  void whatIsNotAnIndentedCodeBlockIsLeftAsItIs(String text) {
+    assertEquals(text, MarkdownSafe.fenceIndentedCode(text));
+  }
+
+  @Test
+  void aBlockMixingTabsAndSpacesIsOutdentedByColumns() {
+    assertEquals(
+        "```\ncall();\nresult();\n```", MarkdownSafe.fenceIndentedCode("\tcall();\n    result();"));
+    assertEquals("```\na\n  b\n```", MarkdownSafe.fenceIndentedCode("  a\n\tb"));
+    assertEquals(
+        "```\ntarget:\n\trecipe\n```", MarkdownSafe.fenceIndentedCode("  target:\n  \trecipe"));
+  }
+
+  @Test
+  void anIndentedBlockIsFencedWithItsBlankLinesAndRelativeIndentation() {
+    assertEquals(
+        "Run:\n\n```\n- old\n\n  + new\n```\n\nDone.",
+        MarkdownSafe.fenceIndentedCode("Run:\n\n    - old\n\n      + new\n\nDone."));
+    assertEquals("Run:\n\n```\nmake\n```", MarkdownSafe.fenceIndentedCode("Run:\n\n\tmake"));
+    assertEquals(
+        "Run:\n\n````\ncat\n```\n````\nthen",
+        MarkdownSafe.fenceIndentedCode("Run:\n\n  cat\n  ```\nthen"));
+  }
+
+  @Test
+  void aBlockThatOpensTheTextIsFencedWhole() {
+    assertEquals(
+        "```\ncall();\n\nresult();\n```",
+        MarkdownSafe.fenceIndentedCode("    call();\n\n    result();"));
+    assertEquals(
+        "```\ncall();\nresult();\n```\nthen",
+        MarkdownSafe.fenceIndentedCode("  call();\n  result();\nthen"));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"  - one", "  > quoted", "  | a | table |"})
+  void aListQuoteOrTableLineEndsABlockIndentedLessThanFourColumns(String line) {
+    assertEquals(
+        "prose:\n\n```\na short note\n```\n" + line + "\n\nDone.",
+        MarkdownSafe.fenceIndentedCode("prose:\n\n  a short note\n" + line + "\n\nDone."));
+  }
+
+  @Test
+  void aBlockAfterTheListHasEndedIsFenced() {
+    assertEquals(
+        "- item\n\nA paragraph.\n\n```\ncall();\n```",
+        MarkdownSafe.fenceIndentedCode("- item\n\nA paragraph.\n\n  call();"));
+  }
 }
