@@ -746,6 +746,14 @@ it on the push itself.
 
 ### Summary comment
 
+The summary keeps its long sections folded: **Changes Overview**, **Changed
+Files** and **Previous Findings Status** open on a click, with their counts in
+the line you click, and so does **Risk Assessment** when there is no critical or
+high finding. A line above the folded file table names its first files. The key
+findings and the checks that are not green are never folded, and a green CI adds
+no section. Set `REVIEW_SUMMARY_COLLAPSE_ENABLED=false` to keep every section
+open.
+
 With `REVIEW_AGENT_NEXT_STEPS_ENABLED` on, the summary also carries a short
 **Agent next steps** block at the top (under the heading, above the overview): head SHA and
 whether it changed since the last edit, how many findings are still open, names of required checks
