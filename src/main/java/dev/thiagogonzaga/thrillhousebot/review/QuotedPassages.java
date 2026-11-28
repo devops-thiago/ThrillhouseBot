@@ -25,6 +25,11 @@ import java.util.List;
  * none stands right after it, so the passage may hold apostrophes. No passage runs over a line
  * break, and none starts inside another.
  *
+ * <p>The two sides are read as the pattern this replaces read them: one character back, a whole
+ * code point ahead. A letter or digit outside the basic plane is two characters, the second of
+ * which is neither on its own, so one right before a single quote does not keep it from opening a
+ * passage, while one right after a single quote keeps it from closing.
+ *
  * <p>The text is read once: a single quote that nothing closes on its line settles that for every
  * quote after it on that line, which is then not read again.
  */
@@ -104,6 +109,10 @@ final class QuotedPassages {
     return -at;
   }
 
+  /**
+   * Whether the one character before {@code at} is a letter or a number. The second half of a pair
+   * is neither, which is how the lookbehind this stands for read it: it stepped one character back.
+   */
   private static boolean letterOrNumberBefore(String text, int at) {
     return at > 0 && letterOrNumber(text.charAt(at - 1));
   }
