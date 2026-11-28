@@ -84,7 +84,7 @@ class ReviewDispatcherTracingTest {
         new ReviewDispatcher(
             executor,
             orchestrator,
-            mock(AutoReviewRateLimiter.class),
+            new AutoReviewRateLimiter(0, AutoReviewRateLimiter.SWEEP_THRESHOLD, () -> 0L),
             new AutoReviewSlots(4, 50),
             new DeferredReviews(),
             mock(ReviewSkipEmitter.class),
