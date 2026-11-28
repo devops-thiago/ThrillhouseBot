@@ -468,8 +468,10 @@ for an hour after it was first started. Past that, a push held back for another
 pull request is skipped at once, with `reason=RATE_LIMITED` for the window and
 `reason=REPOSITORY_QUEUE_FULL` for the queue. A kept review is also given up,
 and counted as skipped, when the same commit is still being turned away an hour
-after its first start, when the executor refuses it as it comes due, or when
-the PR was paused while it waited.
+after its first start, when the executor refuses it as it comes due, when the
+PR was paused while it waited, or when the PR was converted to a draft while it
+waited and drafts are skipped (`reason=DRAFT`; marking the PR ready reviews
+it).
 
 ### Dimension routing
 
@@ -1910,8 +1912,9 @@ reason in the dashboard summary
    being held back an hour after its review was first started.
 7. **Redelivery** (`reason=DUPLICATE_DELIVERY`): GitHub redelivered a webhook
    the bot already handled. This is normal.
-8. **Executor saturated** (`reason=DISPATCH_REJECTED`): the review executor
-   refused the task (overload or shutdown); redeliver the webhook from GitHub.
+8. **Executor refused the review** (`reason=DISPATCH_REJECTED`): the review
+   executor refused the task, which it does only while the bot shuts down;
+   redeliver the webhook from GitHub.
    A review kept for later is counted here too when the executor refuses it as
    it comes due, or when starting it failed for an hour (the log says
    `Could not hand back the deferred review`); push again or comment

@@ -858,9 +858,30 @@ class WebhookEventsTest {
 
     deliverPullRequest("to-draft", "converted_to_draft", 55, "owner/repo", "sha55");
 
-    verify(reviewDispatcher).forgetDeferred(any(RepoScope.class), eq(55));
+    verify(reviewDispatcher).dropDeferred(any(RepoScope.class), eq(55));
     verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
     verify(deduplicator, never()).forget(anyString());
+    // Nothing waited for a limit, so there is no review to count as skipped.
+    verifyNoInteractions(skipEmitter);
+  }
+
+  @Test
+  void aReviewStillWaitingForALimitThatADraftConversionDropsIsCountedAsSkipped() {
+    when(triggerFilter.skipReason(any()))
+        .thenReturn(
+            Optional.of(new ReviewTriggerFilter.Skip(ReviewSkipReason.DRAFT, "PR is a draft")));
+    when(reviewDispatcher.dropDeferred(any(RepoScope.class), eq(55))).thenReturn(true);
+
+    deliverPullRequest("to-draft", "converted_to_draft", 55, "owner/repo", "sha55");
+
+    verify(skipEmitter)
+        .recordSkip(
+            ReviewSkipReason.DRAFT,
+            12345L,
+            "owner",
+            "repo",
+            55,
+            "PR is a draft; the review a limit held back for it is dropped");
   }
 
   @Test
@@ -869,6 +890,7 @@ class WebhookEventsTest {
 
     deliverPullRequest("to-draft", "converted_to_draft", 55, "owner/repo", "sha55");
 
+    verify(reviewDispatcher, never()).dropDeferred(any(), anyInt());
     verify(reviewDispatcher, never()).forgetDeferred(any(), anyInt());
   }
 
@@ -877,7 +899,7 @@ class WebhookEventsTest {
     deliver("pull_request", "{\"action\":\"converted_to_draft\"}");
     deliver("pull_request", "{\"action\":\"converted_to_draft\",\"pull_request\":{\"number\":55}}");
 
-    verify(reviewDispatcher, never()).forgetDeferred(any(), anyInt());
+    verify(reviewDispatcher, never()).dropDeferred(any(), anyInt());
     verifyNoInteractions(triggerFilter);
   }
 
