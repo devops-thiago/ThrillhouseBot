@@ -51,9 +51,10 @@ import org.slf4j.LoggerFactory;
  * reviewed, and when the store refuses it: as many pull requests have a review kept as {@link
  * DeferredReviews#MAX_PENDING} allows, or the same head has been coming back for {@link
  * DeferredReviews#GIVE_UP_AFTER}. A kept review is not certain to run either: it is held in memory,
- * so a restart forgets it, a request that comes back gives way to a newer head an event kept since,
- * and {@link DeferredReviewRelease} drops it when the pull request was paused or the executor
- * refuses it.
+ * so a restart forgets it, a later event for the pull request replaces or drops it (a newer head,
+ * the head already reviewed, a close, a pause or a filter), a request that comes back gives way to
+ * a newer head an event kept since, and {@link DeferredReviewRelease} drops it when the pull
+ * request was paused or the executor refuses it.
  *
  * <p>A manual {@code /review} that arrives while a review is running reads the pull request's head
  * first (#1152). When it is the head under review, the running review already covers it: the
@@ -128,13 +129,17 @@ public final class ReviewDispatcher {
    * manual {@code /review} for the head a running review covers is answered instead (#1152).
    *
    * @return {@code true} if the review was queued, coalesced into a running worker, or covered by
-   *     the running review; {@code false} if the executor rejected the task (e.g. it is saturated
-   *     or shutting down) so no review will run. Callers use this to roll back webhook dedup state
-   *     so a redelivery can retry.
+   *     the running review; {@code false} if the executor rejected the task (it is shutting down)
+   *     so no review will run. Callers use this to roll back webhook dedup state so a redelivery
+   *     can retry.
    */
   public boolean dispatch(ReviewOrchestrator.ReviewRequest req) {
     if (!req.isManualTrigger()) {
-      // A newer automatic event replaces whatever a limit held back for the pull request.
+      // A newer automatic event replaces whatever a limit held back for the pull request, and it
+      // does so before it is queued, so a review handed back late cannot be queued over it. When
+      // the executor then refuses the event, the kept review is not restored: the caller counts
+      // DISPATCH_REJECTED once, for this event, which carries the pull request's newest head, and
+      // the executor refuses only once it is shut down, when the store is emptied anyway.
       deferredReviews.forget(req);
     }
     return enqueue(req);
@@ -143,6 +148,10 @@ public final class ReviewDispatcher {
   /**
    * Queues a review {@link DeferredReviews} handed back, like {@link #dispatch}. Its entry there is
    * left alone, so a request a limit turns away again is counted as the same one.
+   *
+   * <p>{@link DeferredReviews#handBack} calls this while it updates that entry, so that a newer
+   * event cannot be queued in between. Nothing on this path may call into {@link DeferredReviews},
+   * and the review must start on another thread, as the executor's tasks do.
    */
   public boolean dispatchDeferred(ReviewOrchestrator.ReviewRequest req) {
     return enqueue(req);
@@ -158,19 +167,33 @@ public final class ReviewDispatcher {
      */
     KEPT,
     /**
-     * The window holds the review back and nothing was kept, so the caller records the skip: the
+     * The window holds the review back and nothing is kept, so the caller records the skip: the
      * last automatic review covered this head, or {@link DeferredReviews} refused it.
      */
     NOT_KEPT
   }
 
   /**
-   * Asks the rate window about an automatic review, once, and keeps the review to run when the
-   * window closes if the window holds back a head its last automatic review did not cover and
-   * {@link DeferredReviews} takes it; {@link RateWindowHold#NOT_KEPT} says it did not.
+   * Asks the rate window about the automatic review of an event that just arrived, once, and keeps
+   * the review to run when the window closes if the window holds back a head its last automatic
+   * review did not cover and {@link DeferredReviews} takes it; {@link RateWindowHold#NOT_KEPT} says
+   * it did not. An event for the head that review covered needs no review, and says the pull
+   * request is back on that head, so a review kept for another head is dropped.
    */
   public RateWindowHold holdForRateWindow(ReviewOrchestrator.ReviewRequest req) {
-    return holdForRateWindow(req, deferredReviews::defer);
+    var hold = windowHold(req);
+    if (hold.throttled() && hold.reviewDueAt().isEmpty() && hasHead(req)) {
+      deferredReviews.forget(req);
+    }
+    return held(req, hold, deferredReviews::defer);
+  }
+
+  private static boolean hasHead(ReviewOrchestrator.ReviewRequest req) {
+    return req.commitSha() != null && !req.commitSha().isBlank();
+  }
+
+  private AutoReviewRateLimiter.Hold windowHold(ReviewOrchestrator.ReviewRequest req) {
+    return autoReviewRateLimiter.hold(req.owner(), req.repo(), req.prNumber(), req.commitSha());
   }
 
   /**
@@ -181,8 +204,8 @@ public final class ReviewDispatcher {
     boolean keep(ReviewOrchestrator.ReviewRequest req, long dueAt);
   }
 
-  private RateWindowHold holdForRateWindow(ReviewOrchestrator.ReviewRequest req, Keeper keeper) {
-    var hold = autoReviewRateLimiter.hold(req.owner(), req.repo(), req.prNumber(), req.commitSha());
+  private static RateWindowHold held(
+      ReviewOrchestrator.ReviewRequest req, AutoReviewRateLimiter.Hold hold, Keeper keeper) {
     if (!hold.throttled()) {
       return RateWindowHold.NOT_HELD;
     }
@@ -195,6 +218,16 @@ public final class ReviewDispatcher {
   /** Drops the review a limit held back for the pull request; a newer event ruled it out. */
   public void forgetDeferred(RepoScope scope, int prNumber) {
     deferredReviews.forget(scope, prNumber);
+  }
+
+  /**
+   * Drops the review a limit held back for the pull request, like {@link #forgetDeferred}, for an
+   * event that records no skip of its own.
+   *
+   * @return whether a review that still waited for the limit was dropped, so the caller counts it
+   */
+  public boolean dropDeferred(RepoScope scope, int prNumber) {
+    return deferredReviews.forgetWaiting(scope, prNumber);
   }
 
   private boolean enqueue(ReviewOrchestrator.ReviewRequest req) {
@@ -435,7 +468,7 @@ public final class ReviewDispatcher {
   private boolean skippedAsThrottled(ReviewOrchestrator.ReviewRequest req) {
     // On the worker the request can be older than the head an event deferred while it waited for
     // its turn, so it is put back without displacing that head.
-    var hold = holdForRateWindow(req, deferredReviews::requeue);
+    var hold = held(req, windowHold(req), deferredReviews::requeue);
     if (hold == RateWindowHold.NOT_HELD) {
       return false;
     }
