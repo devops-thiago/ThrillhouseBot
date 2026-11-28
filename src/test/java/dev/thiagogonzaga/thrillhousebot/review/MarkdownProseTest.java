@@ -514,13 +514,30 @@ class MarkdownProseTest {
     assertEquals("&#96;&#96;a | @&#8203;v&#96;&#96;", MarkdownSafe.proseLine("``a | @v``"));
   }
 
-  // Its backticks pair with no other either: a span after it reads the same in a row and out of it.
+  // Its closing run is read as a run of its own: it pairs with the next one when no pipe is between
+  // them, as GitHub pairs them, so a span after it reads the same in a row and out of it.
   @Test
   void aSpanAfterOneHoldingAPipeIsPairedTheSameInATableRowAndOutOfIt() {
     assertEquals(
         "&#96;a | b` c `@&#8203;Keep` and `@&#8203;Kept&#96;",
         MarkdownSafe.prose("`a | b` c `@Keep` and `@Kept`"));
     assertEquals("`a` | `@Kept`", MarkdownSafe.prose("`a` | `@Kept`"));
+  }
+
+  // The span its closing run opens is one GitHub reads too: what it holds is code in a row and out
+  // of one, and a pipe before the next run leaves the closing run literal and the text prose.
+  @Test
+  void theClosingRunOfASpanHoldingAPipeOpensASpanOnlyWhereGitHubReadsOne() {
+    var paired = MarkdownSafe.prose("`a | b` @Kept <b> `x` @octocat");
+
+    assertEquals("&#96;a | b` @Kept <b> `x&#96; @&#8203;octocat", paired);
+    assertEquals(paired, MarkdownSafe.prose(paired));
+    assertEquals(
+        "&#96;a | b&#96; @&#8203;victim &lt;img> | `x`",
+        MarkdownSafe.prose("`a | b` @victim <img> | `x`"));
+    assertEquals(
+        "| &#96;a | b` @Kept `x&#96; @&#8203;octocat |",
+        MarkdownSafe.prose("| `a | b` @Kept `x` @octocat |"));
   }
 
   // The pipes of a table cell are escaped after this, so no cell ends inside its span.

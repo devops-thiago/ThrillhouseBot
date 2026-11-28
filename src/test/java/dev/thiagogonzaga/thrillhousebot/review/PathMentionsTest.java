@@ -33,9 +33,12 @@ import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /** {@link PathMentions}: paths the model names must name files that exist (#1076). */
@@ -1475,6 +1478,32 @@ class PathMentionsTest {
     assertEquals(List.of("1-6"), spansNow("\u0301www.x"));
   }
 
+  /**
+   * The rule the file names of a description gap start by, read at a URL's start: a combining mark
+   * is a word character on a letter or digit, and on nothing else.
+   */
+  @ParameterizedTest
+  @MethodSource("urlsBesideACombiningMark")
+  void aCombiningMarkIsPartOfAWordOnlyOnALetterOrDigit(String text, List<String> spans) {
+    assertEquals(spans, spansBefore(text), () -> "the URLs the pattern found in: " + text);
+    assertSpansAsBefore(text);
+  }
+
+  private static void assertSpansAsBefore(String text) {
+    assertEquals(spansBefore(text), spansNow(text), () -> "the URLs of: " + text);
+  }
+
+  private static Stream<Arguments> urlsBesideACombiningMark() {
+    return Stream.of(
+        Arguments.of("e\u0301www.x", List.of()),
+        Arguments.of("e\u0301\u0301www.x", List.of()),
+        Arguments.of("7\u0301www.x", List.of()),
+        Arguments.of("-\u0301www.x", List.of("2-7")),
+        Arguments.of("\u0301www.x", List.of("1-6")),
+        Arguments.of("e\u0301-www.x", List.of("3-8")),
+        Arguments.of("e\u0301a-www.x", List.of("4-9")));
+  }
+
   @Test
   void randomTextsHoldTheUrlsThePatternFoundInThem() {
     var random = new Random(1501);
@@ -1485,7 +1514,7 @@ class PathMentionsTest {
         text.append(URL_PIECES[random.nextInt(URL_PIECES.length)]);
       }
       var written = text.toString();
-      assertEquals(spansBefore(written), spansNow(written), () -> "the URLs of: " + written);
+      assertSpansAsBefore(written);
     }
   }
 
@@ -1528,7 +1557,7 @@ class PathMentionsTest {
         text.append(MARK_PIECES[random.nextInt(MARK_PIECES.length)]);
       }
       var written = text.toString();
-      assertEquals(spansBefore(written), spansNow(written), () -> "the URLs of: " + written);
+      assertSpansAsBefore(written);
     }
   }
 

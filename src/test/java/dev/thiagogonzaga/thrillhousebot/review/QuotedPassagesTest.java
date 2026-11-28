@@ -36,12 +36,41 @@ class QuotedPassagesTest {
   private static final Pattern QUOTED =
       Pattern.compile("\"([^\"\n]++)\"|(?<![\\p{L}\\p{N}])'([^\n]+?)'(?![\\p{L}\\p{N}])");
 
+  /** A letter and a digit outside the basic plane, and the two halves such a character is of. */
+  private static final String WIDE_LETTER = "\uD835\uDC00";
+
+  private static final String WIDE_DIGIT = "\uD835\uDFCE";
+
+  private static final String HIGH_HALF = "\uD835";
+
+  private static final String LOW_HALF = "\uDC00";
+
   /**
-   * What the random texts are made of: both quotes, letters and numbers of several scripts (one
-   * outside the basic plane), a blank, punctuation and a line break.
+   * What the random texts are made of: both quotes, letters and numbers of several scripts, a
+   * letter and a digit outside the basic plane, whole and as the halves of a pair, a blank,
+   * punctuation and a line break.
    */
   private static final String[] PIECES = {
-    "'", "'", "\"", "a", "Z", "é", "7", "²", "Ⅷ", "\uD835\uDC00", " ", " ", ".", "-", "\n", "s"
+    "'",
+    "'",
+    "'",
+    "\"",
+    "a",
+    "Z",
+    "é",
+    "7",
+    "²",
+    "Ⅷ",
+    WIDE_LETTER,
+    WIDE_DIGIT,
+    HIGH_HALF,
+    LOW_HALF,
+    " ",
+    " ",
+    ".",
+    "-",
+    "\n",
+    "s"
   };
 
   private static List<Passage> matches(String text) {
@@ -92,6 +121,56 @@ class QuotedPassagesTest {
   void aSingleQuoteMayOpenThePassageItsNeighbourCloses() {
     assertEquals(List.of(new Passage(0, 3)), QuotedPassages.in("'''"));
     assertEquals(List.of(new Passage(0, 4)), QuotedPassages.in("''a'"));
+  }
+
+  /**
+   * The pattern looked one character back and a whole code point ahead. A letter or digit outside
+   * the basic plane is two characters, the second of which is neither on its own: before a quote it
+   * does not keep the quote from opening a passage, and after one it keeps it from closing.
+   */
+  @Test
+  void aLetterOutsideTheBasicPlaneCountsAfterAQuoteAndNotBeforeOne() {
+    assertEquals(List.of(new Passage(2, 5)), QuotedPassages.in(WIDE_LETTER + "'x'"));
+    assertEquals(List.of(new Passage(2, 5)), QuotedPassages.in(WIDE_DIGIT + "'x'"));
+    assertEquals(List.of(), QuotedPassages.in(" 'x'" + WIDE_LETTER));
+    assertEquals(List.of(), QuotedPassages.in(" 'x'" + WIDE_DIGIT));
+    // The passage runs on to the next quote nothing of the kind follows.
+    assertEquals(List.of(new Passage(1, 7)), QuotedPassages.in(" 'x'" + WIDE_LETTER + "' "));
+    assertEquals(List.of(new Passage(0, 4)), QuotedPassages.in("'" + WIDE_LETTER + "'"));
+    // Half a pair is no letter on either side, whatever stands next to it.
+    assertEquals(List.of(new Passage(1, 4)), QuotedPassages.in(HIGH_HALF + "'x'"));
+    assertEquals(List.of(new Passage(1, 4)), QuotedPassages.in(LOW_HALF + "'x'"));
+    assertEquals(List.of(new Passage(2, 5)), QuotedPassages.in("a" + LOW_HALF + "'x'"));
+    assertEquals(List.of(new Passage(1, 4)), QuotedPassages.in(" 'x'" + HIGH_HALF));
+    assertEquals(List.of(new Passage(1, 4)), QuotedPassages.in(" 'x'" + LOW_HALF + "a"));
+    assertEquals(List.of(new Passage(1, 4)), QuotedPassages.in(" 'x'" + HIGH_HALF + "a"));
+    assertEquals(List.of(), QuotedPassages.in(" '" + LOW_HALF + "'" + WIDE_LETTER));
+  }
+
+  @ParameterizedTest
+  @MethodSource("textsOfCharactersOutsideTheBasicPlane")
+  void aTextOfCharactersOutsideTheBasicPlaneIsReadAsThePatternReadsIt(String text) {
+    assertReadAsThePatternReads(text);
+  }
+
+  private static Stream<String> textsOfCharactersOutsideTheBasicPlane() {
+    return Stream.of(
+        WIDE_LETTER + "'x'",
+        WIDE_DIGIT + "'x'",
+        " 'x'" + WIDE_LETTER,
+        " 'x'" + WIDE_DIGIT,
+        " 'x'" + WIDE_LETTER + "' ",
+        "'" + WIDE_LETTER + "'",
+        HIGH_HALF + "'x'",
+        LOW_HALF + "'x'",
+        "a" + LOW_HALF + "'x'",
+        " 'x'" + HIGH_HALF,
+        " 'x'" + LOW_HALF,
+        " 'x'" + LOW_HALF + "a",
+        " 'x'" + HIGH_HALF + "a",
+        " '" + LOW_HALF + "'" + WIDE_LETTER,
+        "'x'" + HIGH_HALF + "'" + LOW_HALF + "'y'",
+        WIDE_LETTER + "'" + WIDE_DIGIT + "'" + WIDE_LETTER + "' '");
   }
 
   /** Every text of up to eight characters over both quotes, a letter, a blank and a line break. */

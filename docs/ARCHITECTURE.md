@@ -87,7 +87,7 @@ installation client is built on the ack path: the observers receive the raw even
 
 | Event | What it starts |
 |---|---|
-| `pull_request` `opened`, `reopened`, `synchronize`, `ready_for_review` | An automatic review, unless the PR is paused, filtered out by the `WEBHOOK_*` trigger settings (drafts, labels, base branches), or reviewed less than `AUTO_REVIEW_MIN_INTERVAL` ago (default `1m`; `0` turns the window off). A new head pushed inside that window is reviewed when the window closes. `ready_for_review` clears the window once per head commit. |
+| `pull_request` `opened`, `reopened`, `synchronize`, `ready_for_review` | An automatic review, unless the PR is paused, filtered out by the `WEBHOOK_*` trigger settings (drafts, labels, base branches), or reviewed less than `AUTO_REVIEW_MIN_INTERVAL` ago (default `1m`; `0` turns the window off). A new head pushed inside that window is kept (`DeferredReviews`, the latest head only) and reviewed when the window closes, unless a restart or the store's bounds lose it. `ready_for_review` clears the window once per head commit. |
 | `issue_comment` with `/review` or `@thrillhousebot review` | A manual review. It bypasses the trigger filters and the rate-limit window, and needs write access. On a closed or merged PR it posts a notice instead of reviewing. |
 | `issue_comment` with another command | For a commenter with write access, the command: `/help`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`, `/resolve`, `/pause`, `/resume`, `/learnings`, `/remember`, `/forget`. `/summary` runs a review that posts a new summary comment. Anyone else gets only `/help`, once per pull request per hour (`HelpReplyLimiter`). |
 | `issue_comment` mentioning the bot without a command | A conversational reply in the PR conversation. No 👀 reaction. |
@@ -618,7 +618,9 @@ virtual-thread executor with no size limit. Load is bounded by per-PR serializat
 the running limit waits on its worker, one past the queue limit is set aside), the model call cap and
 GitHub write pacing. A review the rate window or a full queue holds back is kept in `DeferredReviews`,
 one per pull request and at most 10,000, and one timer (`DeferredReviewRelease`, every 5 seconds)
-dispatches it again once it is due.
+dispatches it again once it is due. The store is in memory, so a restart empties it; a review it
+refuses (at the 10,000 limit, or for a head still coming back an hour after its first hand-out) is
+skipped and counted.
 
 | Limit | Setting | Default |
 |---|---|---|

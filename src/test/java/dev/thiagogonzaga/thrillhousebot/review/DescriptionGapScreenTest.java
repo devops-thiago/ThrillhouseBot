@@ -28,8 +28,11 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Random;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /** Dropping description gaps that misquote the description or cite nothing it says (#946). */
@@ -1046,11 +1049,77 @@ class DescriptionGapScreenTest {
     assertEquals(
         List.of("a.md", "-b.md"), List.copyOf(DescriptionGapScreen.namedFiles("a.md-b.md")));
     assertEquals(List.of("b/"), List.copyOf(DescriptionGapScreen.namedFiles("..b/ -- .")));
-    // A combining mark on a letter carries its word on into the name, which then starts at the
-    // first hyphen or full stop.
-    assertEquals(List.of("-b.md"), List.copyOf(DescriptionGapScreen.namedFiles("e\u0301a-b.md")));
-    assertEquals(List.of(".b/"), List.copyOf(DescriptionGapScreen.namedFiles("e\u0301a.b/")));
-    assertEquals(List.of("-/"), List.copyOf(DescriptionGapScreen.namedFiles("e\u0301-/")));
+  }
+
+  /**
+   * One rule places every start: a combining mark is a word character on a letter or digit, and on
+   * nothing else. On a letter it carries the word on into the name, which then starts at the first
+   * hyphen or full stop; on a hyphen or at the start of the text the word starts after it, and so
+   * does the name.
+   */
+  @ParameterizedTest
+  @MethodSource("namesBesideACombiningMark")
+  void aCombiningMarkIsPartOfAWordOnlyOnALetterOrDigit(String gap, List<String> names) {
+    assertEquals(names, namesBefore(gap), () -> "the names the patterns found in: " + gap);
+    assertNamedAsBefore(gap);
+  }
+
+  private static void assertNamedAsBefore(String gap) {
+    assertEquals(
+        namesBefore(gap),
+        List.copyOf(DescriptionGapScreen.namedFiles(gap)),
+        () -> "the names in: " + gap);
+  }
+
+  private static Stream<Arguments> namesBesideACombiningMark() {
+    var afterTheWord = List.of("-b.md");
+    var whole = List.of("a-b.md");
+    return Stream.of(
+        Arguments.of("e\u0301a-b.md", afterTheWord),
+        Arguments.of("e\u0301a.b/", List.of(".b/")),
+        Arguments.of("e\u0301-/", List.of("-/")),
+        Arguments.of("7\u0301a-b.md", afterTheWord),
+        Arguments.of("e\u0301\u0301a-b.md", afterTheWord),
+        Arguments.of("\u0301a-b.md", whole),
+        Arguments.of("-\u0301a-b.md", whole),
+        Arguments.of(" \u0301a.b/", List.of("a.b/")),
+        Arguments.of("e\u0301 a-b.md", whole));
+  }
+
+  /**
+   * What the bullets about combining marks are made of: what a name holds, letters and digits of
+   * other scripts, and marks of every kind, in and beyond the basic plane, whole and as the halves
+   * of a pair.
+   */
+  private static final String[] MARKED_NAME_PIECES = {
+    "a",
+    "7",
+    "_",
+    "-",
+    ".",
+    "/",
+    " ",
+    ".md",
+    "-ci",
+    "é",
+    "\u0663",
+    "\u0301",
+    "\u0300",
+    "\u0903",
+    "\u20DD",
+    "\uD834\uDD67",
+    "\uD835\uDC00",
+    "\uD834",
+    "\uDD67"
+  };
+
+  @Test
+  void randomBulletsOfCombiningMarksNameTheFilesThePatternsFoundInThem() {
+    var random = new Random(1523);
+    for (int round = 0; round < 150_000; round++) {
+      var gap = randomText(random, MARKED_NAME_PIECES, 12);
+      assertNamedAsBefore(gap);
+    }
   }
 
   @Test
@@ -1058,10 +1127,7 @@ class DescriptionGapScreenTest {
     var random = new Random(1501);
     for (int round = 0; round < 150_000; round++) {
       var gap = randomText(random, NAME_PIECES, 14);
-      assertEquals(
-          namesBefore(gap),
-          List.copyOf(DescriptionGapScreen.namedFiles(gap)),
-          () -> "the names in: " + gap);
+      assertNamedAsBefore(gap);
     }
   }
 

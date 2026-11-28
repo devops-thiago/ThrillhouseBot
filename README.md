@@ -441,9 +441,10 @@ the bot bounds them without any setting:
 | Model calls in flight, whole process | `AI_MAX_CONCURRENT_CALLS` | `16` | no limit |
 
 - **Interval.** For this long after an automatic review of a PR is posted, no
-  other automatic review of that PR starts. A push inside the window is not
-  lost: the bot keeps the latest head and reviews it when the window closes, so
-  several pushes in a row cost one review. A reopen or a repeated
+  other automatic review of that PR starts. A push inside the window is kept
+  instead of skipped: the bot holds the latest head and reviews it when the
+  window closes, so several pushes in a row cost one review. The cases where a
+  kept review does not run are listed below this list. A reopen or a repeated
   ready-for-review of the commit that was just reviewed is skipped
   (`reason=RATE_LIMITED`). A longer window saves more model spend and makes a
   new head wait longer for its review and check run. Marking a draft ready is
@@ -463,9 +464,12 @@ These limits are kept in memory in the one bot process and reset on restart.
 A review still waiting for a window to close or for a place in the queue is
 forgotten by a restart; the next push or a `/review` reviews that PR. The bot
 keeps such a review for at most 10,000 pull requests at a time, counting one
-for an hour after its wait ended. Past that, a push held back for another pull
-request is skipped at once, with `reason=RATE_LIMITED` for the window and
-`reason=REPOSITORY_QUEUE_FULL` for the queue.
+for an hour after it was first started. Past that, a push held back for another
+pull request is skipped at once, with `reason=RATE_LIMITED` for the window and
+`reason=REPOSITORY_QUEUE_FULL` for the queue. A kept review is also given up,
+and counted as skipped, when the same commit is still being turned away an hour
+after its first start, when the executor refuses it as it comes due, or when
+the PR was paused while it waited.
 
 ### Dimension routing
 
@@ -1899,18 +1903,19 @@ reason in the dashboard summary
    `WEBHOOK_IGNORED_BASE_BRANCHES`.
 6. **Rate window** (`reason=RATE_LIMITED`): an automatic review of the same
    commit already ran within `AUTO_REVIEW_MIN_INTERVAL` (default `1m`), as with
-   a reopen or a second ready-for-review. A push inside the window is not
-   skipped: its review starts when the window closes, and the log says
-   `deferred` until then. The one exception is a push that arrives while
-   10,000 pull requests already have a review kept for later; it is counted
-   here too.
+   a reopen or a second ready-for-review. A push inside the window is kept:
+   its review starts when the window closes, and the log says `deferred` until
+   then. A push the bot could not keep is counted here too: 10,000 pull
+   requests already had a review kept for later, or the same commit was still
+   being held back an hour after its review was first started.
 7. **Redelivery** (`reason=DUPLICATE_DELIVERY`): GitHub redelivered a webhook
    the bot already handled. This is normal.
 8. **Executor saturated** (`reason=DISPATCH_REJECTED`): the review executor
    refused the task (overload or shutdown); redeliver the webhook from GitHub.
-   A review kept for later that could not be started for an hour (the log says
-   `Could not hand back the deferred review`) is counted here too; push again
-   or comment `/review`.
+   A review kept for later is counted here too when the executor refuses it as
+   it comes due, or when starting it failed for an hour (the log says
+   `Could not hand back the deferred review`); push again or comment
+   `/review`.
 9. **Repository queue full** (`reason=REPOSITORY_QUEUE_FULL`): as many automatic
    reviews of the repository were waiting as `AUTO_REVIEW_MAX_QUEUED_PER_REPO`
    allows for a whole hour, so the review that kept asking for a place was given

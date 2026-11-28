@@ -30,20 +30,24 @@ import java.util.function.LongSupplier;
 /**
  * The automatic reviews a limit held back and that still have to run: one per pull request, for the
  * latest head a limit held. A push inside the rate window ({@link AutoReviewRateLimiter}) or past a
- * full repository queue ({@link AutoReviewSlots}) is kept here instead of dropped, and {@link
- * DeferredReviewRelease} hands it back to {@link ReviewDispatcher} once it is due. Without this a
- * head pushed inside the window was never reviewed, and an approval of the previous head stayed on
- * code nobody read.
+ * full repository queue ({@link AutoReviewSlots}) is kept here instead of dropped, within the
+ * bounds below, and {@link DeferredReviewRelease} hands it back to {@link ReviewDispatcher} once it
+ * is due. Without this a head pushed inside the window was never reviewed, and an approval of the
+ * previous head stayed on code nobody read.
  *
  * <p>Bounds. A pull request has one entry, and a newer request replaces it, so a burst of pushes
  * costs one review. A request that comes back from the dispatcher ({@link #requeue}) is not a newer
- * one: it leaves the head an event put here since in place. At most {@link #MAX_PENDING} pull
- * requests have an entry; past that a new one is refused and the caller records the skip, as it did
- * before. An entry leaves when the pull request is closed or merged, when a newer event for the
- * pull request is dispatched or filtered out, and at shutdown. Handing an entry out does not remove
- * it, and neither does its review running: it stays, counted towards the limit, until {@link
- * #GIVE_UP_AFTER} has passed since it was first handed out, so a request that keeps coming back (a
- * repository queue that stays full) is refused after that long instead of retried without end.
+ * one: it leaves another head an event put here since in place, and is dropped in its favour. At
+ * most {@link #MAX_PENDING} pull requests have an entry; past that a request for a pull request
+ * that has none is refused and the caller records the skip, as it did before. An entry leaves when
+ * the pull request is closed or merged, when a newer event for the pull request is dispatched or
+ * filtered out, when {@link DeferredReviewRelease} finds the pull request paused or has its
+ * hand-back refused by the executor, and at shutdown. Handing an entry out does not remove it, and
+ * neither does its review running: unless one of those removes it or a request for another head
+ * replaces it, it stays, counted towards the limit, until {@link #GIVE_UP_AFTER} has passed since
+ * it was first handed out. A request for the same head that comes back after that long (a
+ * repository queue that stays full) is refused and its entry removed, instead of retried without
+ * end.
  *
  * <p>State is in memory, like the limits it serves: a restart forgets the reviews still waiting.
  */
@@ -106,7 +110,8 @@ public class DeferredReviews {
    * has; one that comes back from the dispatcher goes through {@link #requeue}.
    *
    * @return {@code false} when it was not kept, so the caller records the skip: as many pull
-   *     requests wait as may, or this head has been coming back for {@link #GIVE_UP_AFTER}
+   *     requests have an entry as may and this one has none, or this head has been coming back for
+   *     {@link #GIVE_UP_AFTER}
    */
   public boolean defer(ReviewOrchestrator.ReviewRequest request, long dueAt) {
     return keep(request, dueAt, true) == Outcome.KEPT;
@@ -206,8 +211,9 @@ public class DeferredReviews {
   }
 
   /**
-   * Hands out the requests that are due, each once: an entry stays, marked as handed out, until its
-   * pull request is forgotten or {@link #GIVE_UP_AFTER} has passed since its first hand-out.
+   * Hands out the requests that are due, each once: an entry stays, marked as handed out, until a
+   * request for its pull request is kept in its place, its pull request is forgotten, or {@link
+   * #GIVE_UP_AFTER} has passed since its first hand-out.
    */
   public List<ReviewOrchestrator.ReviewRequest> takeDue() {
     long now = clock.getAsLong();

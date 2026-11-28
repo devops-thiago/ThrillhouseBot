@@ -1346,6 +1346,19 @@ class ReviewDiffFormatterTest {
           ReviewDiffFormatter.formatPureRenameRollup(renames));
     }
 
+    // A name holding a pipe would split its span in a table row, so it is escaped text instead.
+    @Test
+    void pureRenameRollupWritesANameHoldingAPipeAsEscapedText() {
+      var renames =
+          List.of(
+              new GitHubPullRequestClient.FileDiff(
+                  "x/@victim|y", "renamed", 0, 0, 0, null, "a|b.txt"));
+
+      assertEquals(
+          "1 pure rename omitted from AI review (a\\|b\\.txt → x\\/\\@&#8203;victim\\|y)\n",
+          ReviewDiffFormatter.formatPureRenameRollup(renames));
+    }
+
     @Test
     void pureRenameRollupCapsSampleAndReportsRemainder() {
       var renames = new java.util.ArrayList<GitHubPullRequestClient.FileDiff>();
