@@ -147,7 +147,8 @@ public final class UnitTestAssistantPrompts {
 
             If nothing in the diff warrants a unit test, return {"tests": [], "notes": ""} with a
             one-line reason in "notes".
-            """;
+            """
+          + PrReviewPrompts.ENGLISH_PROSE_RULE;
 
   public static final String USER =
       """
