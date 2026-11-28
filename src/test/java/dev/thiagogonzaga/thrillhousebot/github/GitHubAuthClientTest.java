@@ -27,6 +27,7 @@ import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Response;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -35,6 +36,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -514,6 +516,61 @@ class GitHubAuthClientTest {
     assertTrue(
         client.refreshedAuthHeader(dead).isPresent(),
         "a write still holding the dead token must not be stranded by a concurrent refresh");
+  }
+
+  @Test
+  void aReviewStillHoldingARejectedTokenDrawsOneRejectionAndThenSendsItsReplacement() {
+    when(appApi.createRepositoryToken(42L, "widgets")).thenReturn("expired-token", "minted-token");
+    var auth = authClient.getAuthHeader(42L, "widgets");
+    var sent = new ArrayList<String>();
+    Function<String, String> github =
+        header -> {
+          sent.add(header);
+          if (header.equals("Bearer expired-token")) {
+            throw badCredentials();
+          }
+          return "ok";
+        };
+    var writes =
+        new GitHubWriteRetry(_ -> {}, now::get, GitHubWritePacer.NONE, GitHubTokenRefresh.SHARED);
+
+    GitHubTokenRefresh.SHARED.retrying("first read", auth, github);
+    GitHubTokenRefresh.SHARED.retrying("second read", auth, github);
+    writes.call("a write", auth, github);
+
+    assertEquals(
+        List.of(
+            "Bearer expired-token",
+            "Bearer minted-token",
+            "Bearer minted-token",
+            "Bearer minted-token"),
+        sent);
+    verify(appApi, times(2)).createRepositoryToken(42L, "widgets");
+  }
+
+  @Test
+  void aTokenGitHubHasNotRejectedIsSentAsItIsAfterTheCacheMovesOn() {
+    when(appApi.createInstallationToken(42L)).thenReturn("older-token", "newer-token");
+    var older = authClient.getAuthHeader(42L);
+    advance(GitHubAuthClient.TOKEN_TTL);
+    authClient.getAuthHeader(42L);
+
+    assertEquals(older, GitHubTokenRefresh.SHARED.current(older));
+    assertEquals("Bearer someone-elses", GitHubTokenRefresh.SHARED.current("Bearer someone-elses"));
+    assertEquals("Basic dXNlcjpwdw==", GitHubTokenRefresh.SHARED.current("Basic dXNlcjpwdw=="));
+    assertNull(GitHubTokenRefresh.SHARED.current(null));
+  }
+
+  @Test
+  void aReplacementThatCannotBeMintedAgainLeavesTheCallersTokenToBeSent() {
+    when(appApi.createInstallationToken(42L))
+        .thenReturn("expired-token", "minted-token")
+        .thenThrow(new IllegalStateException("the installation is gone"));
+    var dead = authClient.getAuthHeader(42L);
+    authClient.refreshedAuthHeader(dead);
+    advance(GitHubAuthClient.TOKEN_TTL);
+
+    assertEquals(dead, GitHubTokenRefresh.SHARED.current(dead));
   }
 
   @Test
