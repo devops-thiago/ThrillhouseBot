@@ -556,13 +556,18 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   no learning and is not model output, so it needs its own memory:
   `FollowUpAnalyzer.justifiedPriorFindings` hands every persisted `justified` scan finding to
   `SecurityScan.merge`, which does not raise a detection with the same file, title, anchor and, for
-  a secret, the same `<!-- thrillhousebot:scan-content=… -->` fingerprint (8 hex digits of an
+  a secret, the same `<!-- thrillhousebot:scan-content=v2:… -->` fingerprint (8 hex digits of an
   HMAC-SHA-256 over the rule and the stripped line, keyed from the App private key by
-  `SecurityScan.fingerprintKey`, #985; a decline under the unkeyed 0.7.0 marker, or under the
-  marker keyed from the webhook secret that 0.7.1 to 0.9.3 posted, still matches through
-  `Detection.earlierFingerprints`). The marker is public and a pull request's author chooses its
-  input, so never key it from a secret an operator chooses. Each decline covers one detection
-  (`DeclinedScanFindingAcrossRoundsTest`).
+  `SecurityScan.fingerprintKey`, #985). A stored marker is compared only under the scheme it names
+  (`SecurityScan.sameContent`): `v2:` against the posted fingerprint, and one with no scheme, which
+  0.7.1 to 0.9.3 posted keyed from the webhook secret, against `Detection.earlierFingerprint`. The
+  marker is public and a pull request's author chooses its input, so never key it from a secret an
+  operator chooses, and never accept a fingerprint the author can compute: at 8 hex digits a
+  different line that gives a declined finding's value can be searched for, which is why the
+  unkeyed 0.7.0 marker is not compared and a decline recorded under it lapses once. A new scheme
+  gets a new tag, and a marker whose tag this version does not know, or that holds no fingerprint,
+  covers nothing: only a finding stored with no marker at all (before 0.7.0) is matched without a
+  comparison, and only on an unchanged head. Each decline covers one detection (`DeclinedScanFindingAcrossRoundsTest`).
 - **Summary carry-over preserves every distinct path.** `PriorOverviewCarryover` uses
   `PathIndex.contains` for coverage membership, preserving `FilePaths.same` directory-suffix
   semantics without enumerating groups of same-named files (#1104).

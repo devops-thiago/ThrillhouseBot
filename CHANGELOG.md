@@ -161,6 +161,14 @@ cannot resolve its review threads.
 
 ### Security
 
+- **A declined secret finding no longer covers a different secret**: a decline is matched on later
+  rounds by the hidden marker at the end of the finding, and the comparison also accepted the
+  unkeyed value that v0.7.0 wrote. Anyone can compute that value, so a pull request's author could
+  look for another line that gives the same one and have the earlier decline cover it. A marker now
+  names its scheme (`scan-content=v2:…`), a stored marker is compared only under the scheme it was
+  written with, and the unkeyed one is no longer accepted. **A decline recorded on v0.7.0 lapses
+  once**: the finding is raised again and can be declined again. Declines recorded on v0.7.1 to
+  v0.9.3 keep matching.
 - **A CI check's name is escaped in the review body**: the list of failing or pending checks under a
   held approval printed each check's name as GitHub returned it. A workflow job's name is chosen by
   the pull request's author, so a name could `@`-mention users and teams, or open an HTML comment
