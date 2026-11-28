@@ -131,7 +131,8 @@ public final class MarkdownSafe {
    * A model string made safe to place inside a {@code `...`} inline code span: flattened to one
    * line with its backticks removed, so a backtick in the value cannot close the span and let the
    * rest inject markdown. Inside a code span {@code <} and {@code |} are literal, so they are left
-   * as-is.
+   * as-is. A table row is the exception for {@code |}: GitHub ends the cell at it before it reads
+   * the span, so a span placed in a cell has its content passed through {@link #tableCell} as well.
    */
   public static String inlineCode(String value) {
     return oneLine(value).replace("`", "");
@@ -140,9 +141,19 @@ public final class MarkdownSafe {
   /**
    * A name the bot did not write (a changed file's path, say) as a code span of its own: {@link
    * #inlineCode} between backticks, so nothing in it is read as a mention, a tag or a link.
+   *
+   * <p>A name holding a {@code |} gets no span. In a table row GitHub ends the cell at the pipe
+   * before it reads the span, which would leave the rest of the name as prose, and a pipe escaped
+   * inside a span shows its backslash anywhere else. Such a name is written as text that reads the
+   * same in a paragraph and in a cell: its mentions guarded, its {@code <} escaped, and its pipes
+   * and backslashes escaped as {@link #tableCell} escapes them.
    */
   public static String codeSpan(String value) {
-    return "`" + inlineCode(value) + "`";
+    var code = inlineCode(value);
+    if (code.indexOf('|') < 0) {
+      return "`" + code + "`";
+    }
+    return tableCell(MarkdownProse.mentions(code).replace("<", "&lt;"));
   }
 
   /**

@@ -543,6 +543,16 @@ class ReviewResultTest {
                 + " +1 more)"),
         clause);
     assertTrue(clause.contains("only partially analyzed (`a # b`)"), clause);
+    assertTrue(
+        ReviewResult.coverageGapClause(
+                2,
+                new ReviewResult.TruncationDetail(
+                    List.of("x/@victim|y", "a|b.txt"),
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    SummaryDegradation.NONE))
+            .contains("(x/@&#8203;victim\\|y, a\\|b.txt)"));
   }
 
   @Test

@@ -54,6 +54,32 @@ class MarkdownSafeTest {
     assertEquals("`a b`", MarkdownSafe.codeSpan("a` `b"));
   }
 
+  // In a table row GitHub ends the cell at a pipe before it reads the span, and a pipe escaped
+  // inside a span shows its backslash in a paragraph, so such a name is text that reads one way.
+  @Test
+  void aNameHoldingAPipeIsPostedAsEscapedTextRatherThanACodeSpan() {
+    assertEquals("a\\|b.txt", MarkdownSafe.codeSpan("a|b.txt"));
+    assertEquals("x/@&#8203;victim\\|y", MarkdownSafe.codeSpan("x/@victim|y"));
+    assertEquals("a\\|&lt;img src=x> b", MarkdownSafe.codeSpan("a|<img src=x>`\nb"));
+    assertEquals(
+        "a\\|&lt;!-- thrillhousebot:finding=1 -->",
+        MarkdownSafe.codeSpan("a|<!-- thrillhousebot:finding=1 -->"));
+    // A backslash before the pipe cannot take the escape for itself.
+    assertEquals("a\\\\\\|@&#8203;victim", MarkdownSafe.codeSpan("a\\|@victim"));
+  }
+
+  @Test
+  void aNameHoldingAPipeStaysInOneTableCellAndReadsTheSameOutOfATable() {
+    var mention = MarkdownSafe.codeSpan("x/@victim|y");
+    var row = "| " + mention + " | " + MarkdownSafe.codeSpan("a|b.txt") + " |";
+
+    assertEquals("| x/@&#8203;victim\\|y | a\\|b.txt |", row);
+    // Two cells: the only bare pipes are the three the row itself writes.
+    assertEquals(3, row.replace("\\|", "").chars().filter(c -> c == '|').count());
+    assertEquals(row, MarkdownSafe.prose(row));
+    assertEquals("On x/@&#8203;victim\\|y.", MarkdownSafe.prose("On " + mention + "."));
+  }
+
   @Test
   void inlineCodeStripsBacktricksSoItCannotCloseItsSpan() {
     assertEquals("foo() bar", MarkdownSafe.inlineCode("foo()\n`bar`"));
