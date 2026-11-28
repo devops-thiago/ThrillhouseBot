@@ -192,6 +192,7 @@ public final class GitHubWriteRetry {
     while (true) {
       try {
         pacer.acquire(operation);
+        credential = credentials.current(credential);
         return operationCall.apply(credential);
       } catch (WebApplicationException e) {
         var fresh = replacementCredential(operation, credential, refreshable, e);

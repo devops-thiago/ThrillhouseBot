@@ -143,6 +143,10 @@ cannot resolve its review threads.
   write in, so a model could answer an English pull request with a summary in another one. Every
   prompt now asks for English prose, with code, identifiers, paths and quotations left as they are.
   That includes replies and the `/describe`, `/changelog`, `/add-docs`, `/improve` and `/generate-tests` commands.
+- **A review that outlives its installation token switches to the new one** (#1431): the first
+  call GitHub rejects still gets a replacement and is repeated, and every later call made with the
+  old token now sends that replacement. Before, each of them drew its own `401 Bad credentials`
+  first, so a long review made two requests for every one it needed and logged a warning for each.
 - **A review names the earlier findings it says are still open** (#1436): a review with no new
   findings used to state only how many remain unresolved. Its body now lists each of them by
   `path:line` and title, most severe first, with a link to its review thread or a mark saying it

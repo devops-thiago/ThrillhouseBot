@@ -118,8 +118,20 @@ public class GitHubAuthClient {
    */
   static final Duration OWNER_RETENTION = Duration.ofHours(6);
 
-  /** A token this process minted: what it was minted for, and when it was issued. */
-  private record TokenOwner(TokenScope scope, Instant issuedAt) {}
+  /**
+   * A token this process minted: what it was minted for, when it was issued, and whether GitHub has
+   * rejected it and a replacement was minted.
+   */
+  private record TokenOwner(TokenScope scope, Instant issuedAt, boolean rejected) {
+
+    TokenOwner(TokenScope scope, Instant issuedAt) {
+      this(scope, issuedAt, false);
+    }
+
+    TokenOwner asRejected() {
+      return new TokenOwner(scope, issuedAt, true);
+    }
+  }
 
   /**
    * Which installation a token this process minted belongs to, so a write GitHub answered with 401
@@ -159,7 +171,18 @@ public class GitHubAuthClient {
     this.clock = clock;
     // Minting is the one thing only this bean can do, and the GitHub writes that need a dead token
     // replaced are interface default methods with nowhere to inject it. See GitHubTokenRefresh.
-    GitHubTokenRefresh.SHARED.bind(this::mintedReplacementFor);
+    GitHubTokenRefresh.SHARED.bind(
+        new GitHubTokenRefresh.Source() {
+          @Override
+          public Optional<String> replace(String deadAuthHeader) {
+            return mintedReplacementFor(deadAuthHeader);
+          }
+
+          @Override
+          public Optional<String> successorOf(String authHeader) {
+            return replacementOfRejected(authHeader);
+          }
+        });
   }
 
   /**
@@ -297,6 +320,25 @@ public class GitHubAuthClient {
         scope,
         (key, cached) ->
             cached.token().equals(dead) ? new CachedToken(dead, Instant.EPOCH) : cached);
-    return Optional.of(BEARER + token(scope));
+    var replacement = token(scope);
+    if (!replacement.equals(dead)) {
+      tokenOwners.put(dead, owner.asRejected());
+    }
+    return Optional.of(BEARER + replacement);
+  }
+
+  /**
+   * The header to send in place of one whose token was rejected and replaced: what a caller asking
+   * for the same scope would be handed now. Empty for every other header.
+   */
+  private Optional<String> replacementOfRejected(String authHeader) {
+    if (!authHeader.startsWith(BEARER)) {
+      return Optional.empty();
+    }
+    var owner = tokenOwners.get(authHeader.substring(BEARER.length()));
+    if (owner == null || !owner.rejected()) {
+      return Optional.empty();
+    }
+    return Optional.of(BEARER + token(owner.scope()));
   }
 }
