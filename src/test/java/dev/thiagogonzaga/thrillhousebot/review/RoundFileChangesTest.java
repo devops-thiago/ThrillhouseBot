@@ -49,7 +49,7 @@ class RoundFileChangesTest {
         "o",
         "r",
         HEAD,
-        new RoundFileChanges.Rounds(Arrays.asList(heads), heads.length, false));
+        new RoundFileChanges.Rounds(Arrays.asList(heads), heads.length));
   }
 
   private void compares(String base, CompareResponse response) {
@@ -166,20 +166,13 @@ class RoundFileChangesTest {
 
     assertSame(
         none,
-        RoundFileChanges.of(
-            prClient, "a", "o", "r", HEAD, new RoundFileChanges.Rounds(heads, 2, false)));
+        RoundFileChanges.of(prClient, "a", "o", "r", HEAD, new RoundFileChanges.Rounds(heads, 2)));
     assertSame(
         none,
-        RoundFileChanges.of(
-            prClient, "a", "o", "r", HEAD, new RoundFileChanges.Rounds(heads, 1, true)));
+        RoundFileChanges.of(prClient, "a", "o", "r", null, new RoundFileChanges.Rounds(heads, 1)));
     assertSame(
         none,
-        RoundFileChanges.of(
-            prClient, "a", "o", "r", null, new RoundFileChanges.Rounds(heads, 1, false)));
-    assertSame(
-        none,
-        RoundFileChanges.of(
-            prClient, "a", "o", "r", " ", new RoundFileChanges.Rounds(heads, 1, false)));
+        RoundFileChanges.of(prClient, "a", "o", "r", " ", new RoundFileChanges.Rounds(heads, 1)));
     assertEquals(FileChange.UNKNOWN, none.since(0, "src/A.java"));
   }
 
