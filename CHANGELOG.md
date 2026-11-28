@@ -172,6 +172,15 @@ cannot resolve its review threads.
 
 ### Security
 
+- **Patterns over pull request, CI and model text read each line once**: four of the patterns the
+  review applies took time that grew much faster than the text. They were the match of a quoted line
+  that holds redacted key material, the match of a quoted passage with shortened words against the
+  description, the single-quoted passages of a linked issue's criteria, and every word-boundary
+  pattern on a long run of combining marks. Text written for the purpose, in a diff, a description,
+  an issue or a model's answer, could keep a review worker busy for minutes. Each of the first three
+  is now read in one pass, and a run of combining marks is cut to 30 where added lines, the pull
+  request's title and description, CI output and issue text enter the review. Ordinary text matches
+  as before.
 - **The bot's approval is found on a pull request with more than 1,000 reviews**: reviews were read
   oldest first, up to 1,000, and every reply on a review thread counts as one. Past that point a
   later approval by the bot was not seen, so it was not dismissed when a round ended without
