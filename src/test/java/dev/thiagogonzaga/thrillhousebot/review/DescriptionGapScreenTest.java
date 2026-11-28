@@ -1049,37 +1049,41 @@ class DescriptionGapScreenTest {
     assertEquals(
         List.of("a.md", "-b.md"), List.copyOf(DescriptionGapScreen.namedFiles("a.md-b.md")));
     assertEquals(List.of("b/"), List.copyOf(DescriptionGapScreen.namedFiles("..b/ -- .")));
-    // A combining mark on a letter carries its word on into the name, which then starts at the
-    // first hyphen or full stop.
-    assertEquals(List.of("-b.md"), List.copyOf(DescriptionGapScreen.namedFiles("e\u0301a-b.md")));
-    assertEquals(List.of(".b/"), List.copyOf(DescriptionGapScreen.namedFiles("e\u0301a.b/")));
-    assertEquals(List.of("-/"), List.copyOf(DescriptionGapScreen.namedFiles("e\u0301-/")));
   }
 
   /**
    * One rule places every start: a combining mark is a word character on a letter or digit, and on
-   * nothing else. On a letter it carries the word on, so no name starts after it; on a hyphen or at
-   * the start of the text the word starts after it, and so does the name.
+   * nothing else. On a letter it carries the word on into the name, which then starts at the first
+   * hyphen or full stop; on a hyphen or at the start of the text the word starts after it, and so
+   * does the name.
    */
   @ParameterizedTest
   @MethodSource("namesBesideACombiningMark")
   void aCombiningMarkIsPartOfAWordOnlyOnALetterOrDigit(String gap, List<String> names) {
     assertEquals(names, namesBefore(gap), () -> "the names the patterns found in: " + gap);
+    assertNamedAsBefore(gap);
+  }
+
+  private static void assertNamedAsBefore(String gap) {
     assertEquals(
-        names, List.copyOf(DescriptionGapScreen.namedFiles(gap)), () -> "the names in: " + gap);
+        namesBefore(gap),
+        List.copyOf(DescriptionGapScreen.namedFiles(gap)),
+        () -> "the names in: " + gap);
   }
 
   private static Stream<Arguments> namesBesideACombiningMark() {
+    var afterTheWord = List.of("-b.md");
+    var whole = List.of("a-b.md");
     return Stream.of(
-        Arguments.of("e\u0301a-b.md", List.of("-b.md")),
+        Arguments.of("e\u0301a-b.md", afterTheWord),
         Arguments.of("e\u0301a.b/", List.of(".b/")),
         Arguments.of("e\u0301-/", List.of("-/")),
-        Arguments.of("7\u0301a-b.md", List.of("-b.md")),
-        Arguments.of("e\u0301\u0301a-b.md", List.of("-b.md")),
-        Arguments.of("\u0301a-b.md", List.of("a-b.md")),
-        Arguments.of("-\u0301a-b.md", List.of("a-b.md")),
+        Arguments.of("7\u0301a-b.md", afterTheWord),
+        Arguments.of("e\u0301\u0301a-b.md", afterTheWord),
+        Arguments.of("\u0301a-b.md", whole),
+        Arguments.of("-\u0301a-b.md", whole),
         Arguments.of(" \u0301a.b/", List.of("a.b/")),
-        Arguments.of("e\u0301 a-b.md", List.of("a-b.md")));
+        Arguments.of("e\u0301 a-b.md", whole));
   }
 
   /**
@@ -1114,10 +1118,7 @@ class DescriptionGapScreenTest {
     var random = new Random(1523);
     for (int round = 0; round < 150_000; round++) {
       var gap = randomText(random, MARKED_NAME_PIECES, 12);
-      assertEquals(
-          namesBefore(gap),
-          List.copyOf(DescriptionGapScreen.namedFiles(gap)),
-          () -> "the names in: " + gap);
+      assertNamedAsBefore(gap);
     }
   }
 
@@ -1126,10 +1127,7 @@ class DescriptionGapScreenTest {
     var random = new Random(1501);
     for (int round = 0; round < 150_000; round++) {
       var gap = randomText(random, NAME_PIECES, 14);
-      assertEquals(
-          namesBefore(gap),
-          List.copyOf(DescriptionGapScreen.namedFiles(gap)),
-          () -> "the names in: " + gap);
+      assertNamedAsBefore(gap);
     }
   }
 
