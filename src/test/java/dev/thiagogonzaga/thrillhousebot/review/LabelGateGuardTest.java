@@ -27,6 +27,7 @@ import static org.mockito.Mockito.when;
 
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubLabelClient;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubTokenReads;
 import dev.thiagogonzaga.thrillhousebot.webhook.ReviewTriggerFilter;
 import java.util.List;
 import java.util.Optional;
@@ -38,23 +39,18 @@ import org.junit.jupiter.api.Test;
 class LabelGateGuardTest {
 
   private final ReviewTriggerFilter triggerFilter = mock(ReviewTriggerFilter.class);
-  private final GitHubLabelClient labelClient = mock(GitHubLabelClient.class);
+  private final GitHubTokenReads reads = mock(GitHubTokenReads.class);
   private final CheckRunManager checkRunManager = mock(CheckRunManager.class);
   private final ReviewSkipEmitter skipEmitter =
       new ReviewSkipEmitter(io.opentelemetry.api.OpenTelemetry.noop());
   private final LabelGateGuard guard =
       new LabelGateGuard(
           new PullRequestLabelGate(
-              triggerFilter,
-              mock(GitHubAuthClient.class),
-              labelClient,
-              checkRunManager,
-              skipEmitter));
+              triggerFilter, mock(GitHubAuthClient.class), reads, checkRunManager, skipEmitter));
 
   private void labelled(String label) {
     when(triggerFilter.hasLabelGates()).thenReturn(true);
-    when(labelClient.listIssueLabels(
-            AUTH, "application/vnd.github+json", "owner", "repo", 42, 100, 1))
+    when(reads.issueLabels(AUTH, "owner", "repo", 42))
         .thenReturn(List.of(new GitHubLabelClient.Label(label, null, null)));
   }
 
@@ -91,14 +87,14 @@ class LabelGateGuardTest {
 
     assertTrue(guard.check(review(true, 9L)).isEmpty());
 
-    verifyNoInteractions(labelClient);
+    verifyNoInteractions(reads);
   }
 
   @Test
   void noLabelGateConfiguredReadsNoLabels() {
     assertTrue(guard.check(review(false, 9L)).isEmpty());
 
-    verifyNoInteractions(labelClient);
+    verifyNoInteractions(reads);
   }
 
   @Test
@@ -107,8 +103,7 @@ class LabelGateGuardTest {
 
     assertTrue(guard.check(review(false, 9L)).isEmpty());
 
-    when(labelClient.listIssueLabels(
-            anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt()))
+    when(reads.issueLabels(anyString(), anyString(), anyString(), anyInt()))
         .thenThrow(new RuntimeException("labels down"));
     assertTrue(guard.check(review(false, 9L)).isEmpty());
   }

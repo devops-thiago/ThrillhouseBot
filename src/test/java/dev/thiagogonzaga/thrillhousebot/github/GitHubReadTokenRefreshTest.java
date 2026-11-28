@@ -109,18 +109,16 @@ class GitHubReadTokenRefreshTest {
   }
 
   @Test
-  void aFilesPageRejectedForItsCredentialIsRepeatedWithAFreshOne() {
+  void aFileListingRejectedForItsCredentialIsRepeatedWithAFreshOne() {
     var client = mock(GitHubPullRequestClient.class);
     doCallRealMethod()
         .when(client)
-        .getPullRequestFilesPage(
-            anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt());
+        .getPullRequestFiles(anyString(), anyString(), anyString(), anyString(), anyInt());
     var files = List.of(new GitHubPullRequestClient.FileDiff("f", "added", 1, 0, 1, "@@"));
-    when(client.getPullRequestFilesPageOnce(DEAD, "json", "o", "r", 7, 100, 2))
-        .thenThrow(badCredentials());
-    when(client.getPullRequestFilesPageOnce(FRESH, "json", "o", "r", 7, 100, 2)).thenReturn(files);
+    when(client.getPullRequestFilesOnce(DEAD, "json", "o", "r", 7)).thenThrow(badCredentials());
+    when(client.getPullRequestFilesOnce(FRESH, "json", "o", "r", 7)).thenReturn(files);
 
-    assertSame(files, client.getPullRequestFilesPage(DEAD, "json", "o", "r", 7, 100, 2));
+    assertSame(files, client.getPullRequestFiles(DEAD, "json", "o", "r", 7));
   }
 
   @Test
@@ -303,33 +301,6 @@ class GitHubReadTokenRefreshTest {
     when(client.getPullRequestCommentOnce(FRESH, "json", "o", "r", 5L)).thenReturn(comment);
 
     assertSame(comment, client.getPullRequestComment(DEAD, "json", "o", "r", 5L));
-  }
-
-  @Test
-  void aLabelsPageRejectedForItsCredentialIsRepeatedWithAFreshOne() {
-    var client = mock(GitHubLabelClient.class);
-    doCallRealMethod()
-        .when(client)
-        .listLabels(anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt());
-    var labels = List.of(new GitHubLabelClient.Label("bug", "d", "f00"));
-    when(client.listLabelsOnce(DEAD, "json", "o", "r", 100, 1)).thenThrow(badCredentials());
-    when(client.listLabelsOnce(FRESH, "json", "o", "r", 100, 1)).thenReturn(labels);
-
-    assertSame(labels, client.listLabels(DEAD, "json", "o", "r", 100, 1));
-  }
-
-  @Test
-  void anIssueLabelsPageRejectedForItsCredentialIsRepeatedWithAFreshOne() {
-    var client = mock(GitHubLabelClient.class);
-    doCallRealMethod()
-        .when(client)
-        .listIssueLabels(
-            anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt());
-    var labels = List.of(new GitHubLabelClient.Label("bug", "d", "f00"));
-    when(client.listIssueLabelsOnce(DEAD, "json", "o", "r", 7, 100, 1)).thenThrow(badCredentials());
-    when(client.listIssueLabelsOnce(FRESH, "json", "o", "r", 7, 100, 1)).thenReturn(labels);
-
-    assertSame(labels, client.listIssueLabels(DEAD, "json", "o", "r", 7, 100, 1));
   }
 
   @Test

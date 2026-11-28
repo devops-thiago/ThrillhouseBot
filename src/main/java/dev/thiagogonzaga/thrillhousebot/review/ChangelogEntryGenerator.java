@@ -30,7 +30,6 @@ import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
 import java.util.List;
-import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 /**
  * Builds the {@code /changelog} suggestion: a CHANGELOG entry drafted from the PR diff in the Keep
@@ -94,7 +93,7 @@ public class ChangelogEntryGenerator extends AbstractPrSuggestionGenerator {
 
   @Inject
   public ChangelogEntryGenerator(
-      @RestClient GitHubPullRequestClient prClient,
+      GitHubPullRequestClient prClient,
       ReviewDiffFormatter diffFormatter,
       InstructionsResolver instructionsResolver,
       RepoSettingsResolver repoSettingsResolver,
