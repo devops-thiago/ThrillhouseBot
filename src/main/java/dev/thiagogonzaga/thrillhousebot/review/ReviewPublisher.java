@@ -81,11 +81,11 @@ public class ReviewPublisher {
   private final PendingReviewGuard pendingReviewGuard;
 
   /**
-   * The summary comment the running round wrote, by pull request: the one comment {@link
-   * #correctManifest} may edit. {@link #publishSummary} drops the entry before it writes and {@link
-   * #postReview} drops it once the review has posted, so a round whose summary was not written
-   * holds none. A pull request's reviews run one at a time, so an entry is always the running
-   * round's.
+   * The summary comment the running round wrote, or found already holding its summary, by pull
+   * request: the one comment {@link #correctManifest} may edit. {@link #publishSummary} drops the
+   * entry before it writes and {@link #postReview} drops it once the review has posted, so a round
+   * whose summary was not written holds none. A pull request's reviews run one at a time, so an
+   * entry is always the running round's.
    */
   private final Map<String, Long> summaryOfRound =
       Collections.synchronizedMap(new LinkedHashMap<>());

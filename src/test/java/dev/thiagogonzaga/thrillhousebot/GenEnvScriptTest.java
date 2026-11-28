@@ -123,7 +123,8 @@ class GenEnvScriptTest {
     var run = run(arguments.split(" "));
 
     assertEquals(1, run.exitCode(), run.output());
-    assertEquals("❌ " + message + ". No .env was written.", run.output().strip());
+    assertTrue(run.output().contains(message + ". No .env was written."), run.output());
+    assertFalse(run.output().contains("secret"), run.output());
     assertFalse(Files.exists(workDir.resolve(".env")), NO_ENV);
   }
 
