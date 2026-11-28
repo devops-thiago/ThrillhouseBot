@@ -110,16 +110,33 @@ public class DeferredReviewRelease {
     }
   }
 
-  /** Hands every due request back to the dispatcher. */
+  /**
+   * Hands every due request back to the dispatcher. One that could not be handed back waits again,
+   * and is counted as skipped once {@link DeferredReviews} refuses to keep it any longer.
+   */
   void release() {
     for (var request : deferred.takeDue()) {
       try {
         handBack(request);
       } catch (RuntimeException e) {
+        boolean waitsAgain = deferred.deferFor(request, RETRY);
         Log.warnf(
-            "Could not hand back the deferred review of %s/%s #%d, trying again: %s",
-            request.owner(), request.repo(), request.prNumber(), LogSafe.oneLine(e.toString()));
-        deferred.deferFor(request, RETRY);
+            "Could not hand back the deferred review of %s/%s #%d, %s: %s",
+            request.owner(),
+            request.repo(),
+            request.prNumber(),
+            waitsAgain ? "trying again" : "giving it up",
+            LogSafe.oneLine(e.toString()));
+        if (!waitsAgain) {
+          skipEmitter.recordSkip(
+              ReviewSkipReason.DISPATCH_REJECTED,
+              request.installationId(),
+              request.owner(),
+              request.repo(),
+              request.prNumber(),
+              "the deferred review could not be handed back and is no longer kept; a later push"
+                  + " or a manual /review reviews it");
+        }
       }
     }
   }
