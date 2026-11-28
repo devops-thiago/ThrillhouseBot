@@ -223,7 +223,7 @@ class CiHoldRevisitTest {
     assertEquals(7L, update.getValue().checkRunId());
     assertEquals("completed", update.getValue().status());
     assertEquals("success", update.getValue().conclusion());
-    assertEquals(CheckRunManager.CHECK_NAME + " ✅", update.getValue().title());
+    assertEquals("Approved ✅", update.getValue().title());
     assertEquals(DETAILS_URL, update.getValue().detailsUrl());
     assertTrue(registry.heldAt("owner", "repo", 42, HEAD).isEmpty());
   }
@@ -255,7 +255,7 @@ class CiHoldRevisitTest {
     var update = ArgumentCaptor.forClass(CheckRunManager.CheckRunUpdate.class);
     verify(checkRunManager).updateCheckRun(update.capture());
     assertEquals("neutral", update.getValue().conclusion());
-    assertEquals(CheckRunManager.CHECK_NAME, update.getValue().title());
+    assertEquals("Held: required checks not green", update.getValue().title());
     assertTrue(
         update.getValue().summary().contains("1 required CI check(s) are still pending or failing"),
         update.getValue().summary());
