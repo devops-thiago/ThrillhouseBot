@@ -195,8 +195,9 @@ public class DeferredReviewRelease {
                   "PR was paused via /pause while its review waited for a limit"))
           : Optional.empty();
     }
-    // The executor refuses when it is saturated or shutting down. The request is then dropped, not
-    // deferred again: a shutdown would loop.
+    // The review executor starts one virtual thread per task and has no size limit, so it refuses
+    // work only once it shuts down. The request is then dropped, not deferred again: a shutdown
+    // would loop.
     return deferred.handBack(request, dispatcher::dispatchDeferred)
             == DeferredReviews.HandedOut.DROPPED
         ? Optional.of(

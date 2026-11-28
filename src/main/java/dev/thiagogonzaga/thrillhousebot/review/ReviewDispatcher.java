@@ -129,9 +129,9 @@ public final class ReviewDispatcher {
    * manual {@code /review} for the head a running review covers is answered instead (#1152).
    *
    * @return {@code true} if the review was queued, coalesced into a running worker, or covered by
-   *     the running review; {@code false} if the executor rejected the task (e.g. it is saturated
-   *     or shutting down) so no review will run. Callers use this to roll back webhook dedup state
-   *     so a redelivery can retry.
+   *     the running review; {@code false} if the executor rejected the task (it is shutting down)
+   *     so no review will run. Callers use this to roll back webhook dedup state so a redelivery
+   *     can retry.
    */
   public boolean dispatch(ReviewOrchestrator.ReviewRequest req) {
     if (!req.isManualTrigger()) {

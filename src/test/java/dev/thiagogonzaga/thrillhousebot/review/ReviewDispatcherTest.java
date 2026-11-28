@@ -1405,7 +1405,7 @@ class ReviewDispatcherTest {
   private static void awaitQuietly(CountDownLatch latch, long millis) {
     try {
       assertFalse(latch.await(millis, TimeUnit.MILLISECONDS));
-    } catch (InterruptedException e) {
+    } catch (InterruptedException _) {
       Thread.currentThread().interrupt();
     }
   }

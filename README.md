@@ -1887,8 +1887,9 @@ reason in the dashboard summary
    being held back an hour after its review was first started.
 7. **Redelivery** (`reason=DUPLICATE_DELIVERY`): GitHub redelivered a webhook
    the bot already handled. This is normal.
-8. **Executor saturated** (`reason=DISPATCH_REJECTED`): the review executor
-   refused the task (overload or shutdown); redeliver the webhook from GitHub.
+8. **Executor refused the review** (`reason=DISPATCH_REJECTED`): the review
+   executor refused the task, which it does only while the bot shuts down;
+   redeliver the webhook from GitHub.
    A review kept for later is counted here too when the executor refuses it as
    it comes due, or when starting it failed for an hour (the log says
    `Could not hand back the deferred review`); push again or comment

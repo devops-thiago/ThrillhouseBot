@@ -281,11 +281,13 @@ class DeferredReviewsTest {
     deferred.defer(request(1, "sha-a"), 0);
     deferred.takeDue();
 
+    var handedOut = request(1, "sha-a");
+
     assertThrows(
         IllegalStateException.class,
         () ->
             deferred.handBack(
-                request(1, "sha-a"),
+                handedOut,
                 _ -> {
                   throw new IllegalStateException("no worker");
                 }));
