@@ -9901,6 +9901,40 @@ class ReviewOrchestratorTest {
       assertEquals(ReviewState.COMMENT, result.reviewState());
     }
 
+    // A check's name is a workflow job name, which the author of a fork's pull request chooses.
+    @Test
+    void shouldPostAnOffendingCheckNameAsTextThatLinksAndHidesNothing() {
+      var offending =
+          List.of(
+              new ReviewResult.CiCheck(
+                  "build @octocat <!-- hidden\n- Check **lint** is `passed` | x",
+                  "check-run",
+                  "failing",
+                  "failure"),
+              new ReviewResult.CiCheck("unit tests (jdk 25)", "status", "pending", null));
+      var result =
+          new ReviewResult(
+              List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, false, "", List.of(), offending, 0);
+
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+
+      var body = captor.getValue().body();
+      assertFalse(body.contains("@octocat"), body);
+      assertFalse(body.contains("<!--"), body);
+      assertFalse(body.contains("`"), body);
+      assertFalse(body.contains(" | "), body);
+      // The name stays on its own bullet: one line per check, and none the name wrote.
+      assertEquals(2, body.lines().filter(line -> line.startsWith("- Check **")).count(), body);
+      assertTrue(body.contains("- Check **build @"), body);
+      assertTrue(body.contains("** is failed\n"), body);
+      // A name with nothing to escape is posted as it is.
+      assertTrue(body.contains("- Check **unit tests (jdk 25)** is pending"), body);
+    }
+
     @Test
     void shouldFormatPostReviewBodyWithOffendingCiChecks() {
       var offending =
