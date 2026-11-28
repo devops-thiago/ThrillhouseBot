@@ -32,13 +32,17 @@ import java.util.regex.Pattern;
  *
  * <ul>
  *   <li>a fenced block, wherever it was nested, is emitted as a top-level backtick fence longer
- *       than any backtick run inside it, with its content byte for byte;
- *   <li>a code span that opens and closes on one line and holds no {@code |} is kept byte for byte.
- *       In a table row GitHub splits the cells at each {@code |} before it reads any span, so a
- *       span holding one is code in a paragraph and text in a row; it is written as text;
+ *       than any backtick run inside it, with each content line as it was written;
+ *   <li>a code span that opens and closes on one line and holds no {@code |} is kept as it was
+ *       written. In a table row GitHub splits the cells at each {@code |} before it reads any span,
+ *       so a span holding one is code in a paragraph and text in a row; it is written as text;
  *   <li>every other backtick becomes {@code &#96;} and every other run of three or more tildes is
  *       escaped, so nothing else can open a span or a fence.
  * </ul>
+ *
+ * <p>Line endings are the one thing code does not keep: a carriage return, alone or before a line
+ * feed, ends a line ({@link #block}) and is written as a line feed, in a fenced block too. A span a
+ * carriage return divides does not close on its line, so its backticks are escaped.
  *
  * <p>Outside code, an {@code @} that could start a mention is followed by a zero-width space
  * ({@code @&#8203;name}, invisible when rendered), and a {@code <} that could open a tag or a

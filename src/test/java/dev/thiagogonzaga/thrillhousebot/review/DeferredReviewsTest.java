@@ -133,6 +133,74 @@ class DeferredReviewsTest {
   }
 
   @Test
+  void aRequestThatComesBackLeavesTheNewerHeadAnEventDeferredInPlace() {
+    deferred.defer(request(1, "sha-a"), 0);
+    assertEquals(List.of(request(1, "sha-a")), deferred.takeDue());
+    // A push arrives while the handed-out request waits for its turn in the dispatcher.
+    deferred.defer(request(1, "sha-b"), 60_000);
+
+    // The older request is turned away again: nothing to record, and the newer head stays.
+    assertTrue(deferred.requeue(request(1, "sha-a"), 10));
+    assertTrue(deferred.requeueFor(request(1, "sha-a"), Duration.ofMillis(10)));
+
+    now.set(10);
+    assertEquals(List.of(), deferred.takeDue());
+    now.set(60_000);
+    assertEquals(List.of(request(1, "sha-b")), deferred.takeDue());
+  }
+
+  @Test
+  void aRequestThatComesBackWaitsAgainUntilTheGiveUpTime() {
+    deferred.defer(request(1, "sha-a"), 0);
+    deferred.takeDue();
+
+    assertTrue(deferred.requeueFor(request(1, "SHA-A"), Duration.ofSeconds(30)));
+    // It is still the head an event deferred, so an older request does not displace it.
+    assertTrue(deferred.requeue(request(1, "sha-old"), 0));
+    assertEquals(List.of(), deferred.takeDue());
+    now.set(30_000);
+    assertEquals(List.of(request(1, "SHA-A")), deferred.takeDue());
+
+    now.set(GIVE_UP_MS);
+    assertFalse(deferred.requeue(request(1, "sha-a"), now.get()));
+    assertTrue(deferred.isEmpty());
+  }
+
+  @Test
+  void aRequestThatComesBackReplacesTheOneThatCameBackBeforeIt() {
+    // Nothing waits for the pull request: its event was dispatched, and a limit turned it away.
+    assertTrue(deferred.requeue(request(1, "sha-a"), 10));
+    // The pull request's worker runs its requests in order, so this one is the newer.
+    assertTrue(deferred.requeue(request(1, "sha-b"), 10));
+    assertTrue(deferred.requeue(request(1, "sha-b"), 10));
+    assertTrue(deferred.requeue(request(1, "sha-c"), 10));
+
+    now.set(10);
+    assertEquals(List.of(request(1, "sha-c")), deferred.takeDue());
+  }
+
+  @Test
+  void aRequestThatComesBackReplacesAnEntryWhenEitherHeadIsUnknown() {
+    deferred.defer(request(1, null), 0);
+    assertTrue(deferred.requeue(request(1, "sha-a"), 0));
+    assertEquals(List.of(request(1, "sha-a")), deferred.takeDue());
+
+    deferred.defer(request(1, "sha-b"), 0);
+    assertTrue(deferred.requeue(request(1, null), 0));
+    assertEquals(List.of(request(1, null)), deferred.takeDue());
+  }
+
+  @Test
+  void pastTheLimitARequestThatComesBackForANewPullRequestIsRefused() {
+    assertTrue(deferred.defer(request(1, "sha-a"), 10));
+    assertTrue(deferred.defer(request(2, "sha-b"), 10));
+    assertTrue(deferred.defer(request(3, "sha-c"), 10));
+
+    assertFalse(deferred.requeue(request(4, "sha-d"), 10));
+    assertEquals(3, deferred.pending.size());
+  }
+
+  @Test
   void aHandedOutEntryIsForgottenOnceItCouldNoLongerComeBack() {
     deferred.defer(request(1, "sha-a"), 0);
     deferred.takeDue();
