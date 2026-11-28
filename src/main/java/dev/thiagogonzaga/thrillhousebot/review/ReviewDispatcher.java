@@ -149,16 +149,32 @@ public final class ReviewDispatcher {
     return enqueue(req);
   }
 
+  /** What the rate window did with an automatic review. */
+  public enum RateWindowHold {
+    /** The window is not open: the review goes ahead. */
+    NOT_HELD,
+    /** The window holds the review back, and it is kept to run when the window closes. */
+    KEPT,
+    /**
+     * The window holds the review back and nothing was kept, so the caller records the skip: the
+     * last automatic review covered this head, or {@link DeferredReviews} refused it.
+     */
+    NOT_KEPT
+  }
+
   /**
-   * Keeps an automatic review the rate window holds back, to run when the window closes.
-   *
-   * @return {@code false} when nothing was kept and the caller records the skip: the last automatic
-   *     review covered this head, the window is over, or {@link DeferredReviews} refused it
+   * Asks the rate window about an automatic review, once, and keeps the review to run when the
+   * window closes if the window holds back a head its last automatic review did not cover.
    */
-  public boolean deferThrottled(ReviewOrchestrator.ReviewRequest req) {
-    var dueAt =
-        autoReviewRateLimiter.reviewDueAt(req.owner(), req.repo(), req.prNumber(), req.commitSha());
-    return dueAt.isPresent() && deferredReviews.defer(req, dueAt.getAsLong());
+  public RateWindowHold holdForRateWindow(ReviewOrchestrator.ReviewRequest req) {
+    var hold = autoReviewRateLimiter.hold(req.owner(), req.repo(), req.prNumber(), req.commitSha());
+    if (!hold.throttled()) {
+      return RateWindowHold.NOT_HELD;
+    }
+    var dueAt = hold.reviewDueAt();
+    return dueAt.isPresent() && deferredReviews.defer(req, dueAt.getAsLong())
+        ? RateWindowHold.KEPT
+        : RateWindowHold.NOT_KEPT;
   }
 
   /** Drops the review a limit held back for the pull request; a newer event ruled it out. */
@@ -437,10 +453,11 @@ public final class ReviewDispatcher {
   }
 
   private boolean skippedAsThrottled(ReviewOrchestrator.ReviewRequest req) {
-    if (!autoReviewRateLimiter.isThrottled(req.owner(), req.repo(), req.prNumber())) {
+    var hold = holdForRateWindow(req);
+    if (hold == RateWindowHold.NOT_HELD) {
       return false;
     }
-    if (!deferThrottled(req)) {
+    if (hold == RateWindowHold.NOT_KEPT) {
       skipEmitter.recordSkip(
           ReviewSkipReason.RATE_LIMITED,
           req.installationId(),

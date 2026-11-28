@@ -51,7 +51,8 @@ gh api --method POST /app-manifests/<code>/conversions \
 
 For an app registered on another GitHub address, ask that GitHub for the
 conversion and pass its web address, so the `.env` gets `GITHUB_URL` (`gh` must
-be signed in there: `gh auth login --hostname <github-host>`):
+be signed in there: `gh auth login --hostname <github-host>`). The address must
+be `https`, or the script writes no `.env`:
 
 ```bash
 gh api --hostname <github-host> --method POST /app-manifests/<code>/conversions \

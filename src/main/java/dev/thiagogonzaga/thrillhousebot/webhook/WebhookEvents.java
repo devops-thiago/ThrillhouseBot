@@ -429,12 +429,14 @@ public class WebhookEvents {
         ACTION_READY_FOR_REVIEW.equals(action)
             && autoReviewRateLimiter.clearForReadyHead(
                 request.owner(), request.repo(), request.prNumber(), request.commitSha());
-    if (liftedForReady
-        || !autoReviewRateLimiter.isThrottled(
-            request.owner(), request.repo(), request.prNumber())) {
+    if (liftedForReady) {
       return false;
     }
-    if (!reviewDispatcher.deferThrottled(request)) {
+    var hold = reviewDispatcher.holdForRateWindow(request);
+    if (hold == ReviewDispatcher.RateWindowHold.NOT_HELD) {
+      return false;
+    }
+    if (hold == ReviewDispatcher.RateWindowHold.NOT_KEPT) {
       skipEmitter.recordSkip(
           ReviewSkipReason.RATE_LIMITED,
           request.installationId(),

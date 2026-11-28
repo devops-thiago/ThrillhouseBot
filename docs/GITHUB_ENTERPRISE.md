@@ -74,7 +74,10 @@ gh api --hostname <github-host> --method POST /app-manifests/<code>/conversions 
 ```
 
 `--github-url` writes `GITHUB_URL` into the generated `.env`. Without it the
-bot would call `github.com` with the new app's credentials.
+bot would call `github.com` with the new app's credentials. The value must be
+an `https` address with no user name or password, the rule the bot applies to
+`GITHUB_URL` when it starts; the script refuses anything else and writes no
+`.env`.
 
 ## What each credential is for
 
