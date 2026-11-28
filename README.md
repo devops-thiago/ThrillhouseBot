@@ -454,13 +454,18 @@ the bot bounds them without any setting:
   bot opening a dozen pull requests) is reviewed a few at a time and nothing is
   lost. Past fifty waiting reviews a new one is set aside and asks for a place
   again every 30 seconds, for up to an hour. It is skipped
-  (`reason=REPOSITORY_QUEUE_FULL`) only when the queue stayed full that long.
+  (`reason=REPOSITORY_QUEUE_FULL`) when the queue stayed full that long, or at
+  once when it cannot be set aside (see below).
 - **Manual commands.** `/review` and `/summary` need write access, so they
   ignore the interval, take no slot and never wait.
 
 These limits are kept in memory in the one bot process and reset on restart.
 A review still waiting for a window to close or for a place in the queue is
-forgotten by a restart; the next push or a `/review` reviews that PR.
+forgotten by a restart; the next push or a `/review` reviews that PR. The bot
+keeps such a review for at most 10,000 pull requests at a time, counting one
+for an hour after its wait ended. Past that, a push held back for another pull
+request is skipped at once, with `reason=RATE_LIMITED` for the window and
+`reason=REPOSITORY_QUEUE_FULL` for the queue.
 
 ### Dimension routing
 
@@ -1888,15 +1893,22 @@ reason in the dashboard summary
    commit already ran within `AUTO_REVIEW_MIN_INTERVAL` (default `1m`), as with
    a reopen or a second ready-for-review. A push inside the window is not
    skipped: its review starts when the window closes, and the log says
-   `deferred` until then.
+   `deferred` until then. The one exception is a push that arrives while
+   10,000 pull requests already have a review kept for later; it is counted
+   here too.
 7. **Redelivery** (`reason=DUPLICATE_DELIVERY`): GitHub redelivered a webhook
    the bot already handled. This is normal.
 8. **Executor saturated** (`reason=DISPATCH_REJECTED`): the review executor
    refused the task (overload or shutdown); redeliver the webhook from GitHub.
+   A review kept for later that could not be started for an hour (the log says
+   `Could not hand back the deferred review`) is counted here too; push again
+   or comment `/review`.
 9. **Repository queue full** (`reason=REPOSITORY_QUEUE_FULL`): as many automatic
    reviews of the repository were waiting as `AUTO_REVIEW_MAX_QUEUED_PER_REPO`
    allows for a whole hour, so the review that kept asking for a place was given
-   up. Push again later or comment `/review`. See
+   up, or the queue was full while 10,000 pull requests already had a review
+   kept for later, so this one was skipped at once. Push again later or comment
+   `/review`. See
    [Limits on automatic reviews](#limits-on-automatic-reviews).
 
 A review that seems slow to start may be waiting for one of the repository's
