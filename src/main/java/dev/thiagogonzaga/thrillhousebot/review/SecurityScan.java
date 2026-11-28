@@ -213,13 +213,25 @@ public class SecurityScan {
    * value. The title shows only the value's first characters and length, which a known format
    * shares across every value. The fingerprint follows the scheme it was made under ({@link
    * #FINGERPRINT_SCHEME}); a marker with no scheme is one 0.9.3 or an earlier version posted.
+   * Whatever the marker holds is read here, so that one this version cannot compare ({@link
+   * #MARKER_VALUE}) is told from a finding stored with no marker.
    */
   private static final Pattern CONTENT_MARKER =
-      Pattern.compile("<!-- thrillhousebot:scan-content=(v2:)?([0-9a-f]+) -->");
+      Pattern.compile("<!-- thrillhousebot:scan-content=([^>]*) -->");
 
-  /** The marker where the scan writes it: alone, at the very end of a finding's description. */
+  /**
+   * What a marker this version can compare holds: a fingerprint, after this version's scheme or
+   * after none. Any other scheme, and anything that is not a fingerprint, is a marker that covers
+   * nothing ({@link #sameContent}).
+   */
+  private static final Pattern MARKER_VALUE = Pattern.compile("(v2:)?([0-9a-f]+)");
+
+  /**
+   * The marker where the scan writes it: alone, at the very end of a finding's description. A
+   * marker of a scheme another version posted is kept as the comment it is too.
+   */
   private static final Pattern TRAILING_CONTENT_MARKER =
-      Pattern.compile("\\n\\n<!-- thrillhousebot:scan-content=(?:v2:)?[0-9a-f]+ -->$");
+      Pattern.compile("\\n\\n<!-- thrillhousebot:scan-content=(?:[a-z0-9]+:)?[0-9a-f]+ -->$");
 
   /**
    * A finding's description as it is posted: prose ({@link MarkdownSafe#prose}), with the hidden
@@ -1105,6 +1117,11 @@ public class SecurityScan {
    * marker's value. The unkeyed fingerprint 0.7.0 posted is not compared for that reason: anyone
    * can compute it, and eight hex digits are few enough to search for a different line that gives
    * the value of a declined finding's marker. A decline recorded under it lapses once.
+   *
+   * <p>Only a finding with no marker at all is covered without a comparison: one stored before
+   * 0.7.0, which {@link #scanFindings} admits on an unchanged head alone. A marker that names a
+   * scheme this version does not know, or holds no fingerprint, covers nothing, so the finding is
+   * raised again rather than held by a decline nothing was compared for.
    */
   private static boolean sameContent(ReviewResponse.Finding prior, Detection detection) {
     IDENTITY_COMPARISONS.incrementAndGet();
@@ -1112,20 +1129,31 @@ public class SecurityScan {
     if (!marker.find()) {
       return true;
     }
+    var value = MARKER_VALUE.matcher(marker.group(1));
+    if (!value.matches()) {
+      return false;
+    }
     var expected =
-        marker.group(1) == null
+        value.group(1) == null
             ? detection.earlierFingerprint()
             : fingerprintOf(detection.finding().description());
-    return marker.group(2).equals(expected);
+    return value.group(2).equals(expected);
   }
 
-  /** The content fingerprint a scan finding's description carries, or {@code null}. */
+  /**
+   * The content fingerprint a scan finding's description carries, or {@code null} when it has no
+   * marker or one this version cannot compare.
+   */
   static String fingerprintOf(String description) {
     if (description == null) {
       return null;
     }
     var marker = CONTENT_MARKER.matcher(description);
-    return marker.find() ? marker.group(2) : null;
+    if (!marker.find()) {
+      return null;
+    }
+    var value = MARKER_VALUE.matcher(marker.group(1));
+    return value.matches() ? value.group(2) : null;
   }
 
   /**
