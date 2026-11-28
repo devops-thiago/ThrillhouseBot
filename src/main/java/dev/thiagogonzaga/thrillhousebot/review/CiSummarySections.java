@@ -25,6 +25,7 @@ final class CiSummarySections {
   static final String HOLD = "ci-hold";
   static final String CHECKS = "ci-checks";
   static final String AGENT_CI = "ci-agent";
+  static final String VERDICT = "ci-verdict";
 
   private CiSummarySections() {}
 
@@ -41,7 +42,11 @@ final class CiSummarySections {
     var approved = ci.reviewState() == ReviewState.APPROVE;
     var hold = approved ? approvedLine() : PrSummaryGenerator.ciHoldText(ci);
     var checks = approved ? greenChecks(ci) : PrSummaryGenerator.ciChecksText(ci);
-    var summary = replace(replace(body, HOLD, hold), CHECKS, checks);
+    var summary =
+        replace(
+            replace(replace(body, HOLD, hold), CHECKS, checks),
+            VERDICT,
+            SummaryRibbon.verdict(ci, ci, 0));
     return replace(summary, AGENT_CI, AgentNextSteps.heldCiText(ci));
   }
 

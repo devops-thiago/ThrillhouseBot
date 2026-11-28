@@ -1154,12 +1154,7 @@ public class VerdictBuilder {
     var scopeNote = reviewScopeNote(summaryInputs);
     if (!scopeNote.isEmpty()) {
       summaryMarkdown =
-          summaryMarkdown.replace(
-              PrSummaryGenerator.SUMMARY_HEADING + "\n\n",
-              PrSummaryGenerator.SUMMARY_HEADING
-                  + "\n\n> **AI review scope:** "
-                  + scopeNote
-                  + "\n\n");
+          AgentNextSteps.embedAfterHeading(summaryMarkdown, "> **AI review scope:** " + scopeNote);
     }
     // Prepended before the coverage banners so those stay outermost: a diff the review never saw
     // in full is the larger caveat, and it is the first thing a reader should meet.

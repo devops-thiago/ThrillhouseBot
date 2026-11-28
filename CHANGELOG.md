@@ -11,6 +11,11 @@ cannot resolve its review threads.
 
 ### Added
 
+- **A ribbon under the PR summary title** (#1446, #1450): the verdict, the open findings by
+  severity with the double-check, description-gap and security-scan counts, `Tests touched`, `First review` or
+  `Follow-up`, `Large PR`, and the first sentence of what the PR does, with no extra model call.
+  `REVIEW_SUMMARY_RIBBON_ENABLED=false` (new, default on) leaves it out;
+  `REVIEW_SUMMARY_IMPACT_LINE_ENABLED=true` (new, default off) adds the highest severity still open.
 - **`GITHUB_URL` alone points the bot at another GitHub** (#1489): an unset or blank
   `GITHUB_API_URL` and `GITHUB_GRAPHQL_URL` are now derived from it, as
   `https://api.github.com` for `github.com`, `https://api.<subdomain>.ghe.com` for a `ghe.com`
