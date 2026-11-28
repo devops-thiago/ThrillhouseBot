@@ -64,6 +64,14 @@ final class GitHubTokenRefresh {
      * the header is not one this process issued and so cannot be traced to an installation.
      */
     Optional<String> replace(String deadAuthHeader);
+
+    /**
+     * The header to send in place of {@code authHeader} when GitHub has already rejected it and it
+     * has been replaced, or empty when it has not.
+     */
+    default Optional<String> successorOf(String authHeader) {
+      return Optional.empty();
+    }
   }
 
   /** Nothing can be replaced — the state before {@link GitHubAuthClient} binds itself. */
@@ -79,6 +87,24 @@ final class GitHubTokenRefresh {
   /** Points this seam at whatever can mint tokens; {@code null} restores {@link #NONE}. */
   void bind(Source replacement) {
     source.set(replacement == null ? NONE : replacement);
+  }
+
+  /**
+   * The header to send for a caller holding {@code auth}: its successor once GitHub has rejected
+   * it, otherwise {@code auth} itself. A review reads its header once and hands the same string to
+   * every later call, so without this each of them would draw its own 401 before being repeated
+   * (#1431). A successor that cannot be had leaves {@code auth} to be sent and healed as before.
+   */
+  String current(String auth) {
+    if (auth == null) {
+      return null;
+    }
+    try {
+      return source.get().successorOf(auth).orElse(auth);
+    } catch (RuntimeException e) {
+      log.warn("Failed to read the replacement installation token", e);
+      return auth;
+    }
   }
 
   /**
@@ -125,16 +151,17 @@ final class GitHubTokenRefresh {
   }
 
   /**
-   * Runs a GitHub call with {@code auth} and, when GitHub rejects the credential, runs it exactly
-   * once more with a fresh one. For the reads (#626) and the writes that have no backoff loop of
-   * their own — {@link GitHubWriteRetry} folds the same refresh into its attempt loop instead, so
-   * one call there can still both refresh and back off.
+   * Runs a GitHub call with {@link #current(String) the current header} for {@code auth} and, when
+   * GitHub rejects the credential, runs it exactly once more with a fresh one. For the reads (#626)
+   * and the writes that have no backoff loop of their own — {@link GitHubWriteRetry} folds the same
+   * refresh into its attempt loop instead, so one call there can still both refresh and back off.
    */
   <T> T retrying(String operation, String auth, Function<String, T> call) {
+    var credential = current(auth);
     try {
-      return call.apply(auth);
+      return call.apply(credential);
     } catch (WebApplicationException e) {
-      var fresh = replacementFor(operation, auth, e);
+      var fresh = replacementFor(operation, credential, e);
       if (fresh.isEmpty()) {
         throw e;
       }
