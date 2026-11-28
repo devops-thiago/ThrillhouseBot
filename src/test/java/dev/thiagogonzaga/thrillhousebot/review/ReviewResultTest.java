@@ -436,7 +436,7 @@ class ReviewResultTest {
     assertTrue(
         clause.contains(
             "1 file(s) could not be reviewed because GitHub provided no diff content for them"
-                + " — binary files, or text diffs too large to display (assets/logo.png)"),
+                + " — binary files, or text diffs too large to display (`assets/logo.png`)"),
         clause);
   }
 
@@ -457,11 +457,11 @@ class ReviewResultTest {
 
     assertTrue(
         clause.contains(
-            "1 file(s) were omitted entirely (big.java) because the diff exceeded the review"
+            "1 file(s) were omitted entirely (`big.java`) because the diff exceeded the review"
                 + " budget"),
         clause);
     assertTrue(clause.contains("no diff content for them"), clause);
-    assertTrue(clause.contains("(blob.bin)"), clause);
+    assertTrue(clause.contains("(`blob.bin`)"), clause);
   }
 
   @Test
@@ -521,6 +521,40 @@ class ReviewResultTest {
     assertFalse(disclosure.contains("budget"), disclosure);
   }
 
+  // A file's name is the pull request author's text: in a code span it mentions and renders
+  // nothing, and one holding a pipe, which gets no span, is escaped text.
+  @Test
+  void coverageGapClausePutsEachFileNameInACodeSpan() {
+    var names = new java.util.ArrayList<String>();
+    names.add("x/@victim");
+    names.add("<img src=x>`.txt");
+    for (var i = 0; i < 9; i++) {
+      names.add("f" + i);
+    }
+    var detail =
+        new ReviewResult.TruncationDetail(
+            names, List.of("a\n# b"), List.of(), List.of(), SummaryDegradation.NONE);
+
+    var clause = ReviewResult.coverageGapClause(12, detail);
+
+    assertTrue(
+        clause.contains(
+            "(`x/@victim`, `<img src=x>.txt`, `f0`, `f1`, `f2`, `f3`, `f4`, `f5`, `f6`, `f7`,"
+                + " +1 more)"),
+        clause);
+    assertTrue(clause.contains("only partially analyzed (`a # b`)"), clause);
+    assertTrue(
+        ReviewResult.coverageGapClause(
+                2,
+                new ReviewResult.TruncationDetail(
+                    List.of("x/@victim|y", "a|b.txt"),
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    SummaryDegradation.NONE))
+            .contains("(x\\/\\@&#8203;victim\\|y, a\\|b\\.txt)"));
+  }
+
   @Test
   void coverageGapClauseNamesTheSpendCeilingSeparatelyFromTheBudgetOmissions() {
     // #499: files skipped because the review's token spend ceiling was reached have a different
@@ -537,12 +571,12 @@ class ReviewResultTest {
 
     var clause = ReviewResult.coverageGapClause(4, detail);
 
-    assertTrue(clause.contains("1 file(s) were omitted entirely (a.java)"), clause);
-    assertTrue(clause.contains("1 file(s) were only partially analyzed (b.java)"), clause);
+    assertTrue(clause.contains("1 file(s) were omitted entirely (`a.java`)"), clause);
+    assertTrue(clause.contains("1 file(s) were only partially analyzed (`b.java`)"), clause);
     assertTrue(
         clause.contains(
             "2 file(s) were not reviewed because the review's token spend ceiling"
-                + " (REVIEW_MAX_TOKENS_PER_REVIEW) was reached (c.java, d.java)"),
+                + " (REVIEW_MAX_TOKENS_PER_REVIEW) was reached (`c.java`, `d.java`)"),
         clause);
   }
 
@@ -606,11 +640,11 @@ class ReviewResultTest {
 
     var clause = ReviewResult.coverageGapClause(2, detail);
 
-    assertTrue(clause.contains("1 file(s) were omitted entirely (a.java)"), clause);
+    assertTrue(clause.contains("1 file(s) were omitted entirely (`a.java`)"), clause);
     assertTrue(
         clause.contains(
             "1 file(s) were not reviewed because the review call for them did not complete"
-                + " (failed.java)"),
+                + " (`failed.java`)"),
         clause);
   }
 
@@ -698,7 +732,7 @@ class ReviewResultTest {
 
     var clause = ReviewResult.coverageGapClause(1, detail);
 
-    assertTrue(clause.contains("1 file(s) were omitted entirely (a.java)"), clause);
+    assertTrue(clause.contains("1 file(s) were omitted entirely (`a.java`)"), clause);
     assertTrue(
         clause.contains(
             "the 7 finding(s) were NOT verified by the second-pass audit — no verdicts were"
@@ -923,7 +957,7 @@ class ReviewResultTest {
 
     var clause = ReviewResult.coverageGapClause(1, detail);
 
-    assertTrue(clause.contains("omitted entirely (a.java)"), clause);
+    assertTrue(clause.contains("omitted entirely (`a.java`)"), clause);
     assertFalse(clause.contains("size budget"), clause);
   }
 
@@ -948,7 +982,7 @@ class ReviewResultTest {
     assertTrue(
         clause.contains("2 file(s) were omitted because the diff exceeded the size budget"),
         clause);
-    assertTrue(clause.contains("(assets/logo.png)"), clause);
+    assertTrue(clause.contains("(`assets/logo.png`)"), clause);
   }
 
   @Test
@@ -1045,11 +1079,11 @@ class ReviewResultTest {
 
     var clause = ReviewResult.coverageGapClause(2, detail);
 
-    assertTrue(clause.contains("1 file(s) were omitted entirely (a.java)"), clause);
+    assertTrue(clause.contains("1 file(s) were omitted entirely (`a.java`)"), clause);
     assertTrue(
         clause.contains(
             "1 file(s) were only partially reviewed because the model's response was cut at its"
-                + " length cap (max-output-tokens) — findings up to the cut were kept (cut.java)"),
+                + " length cap (max-output-tokens) — findings up to the cut were kept (`cut.java`)"),
         clause);
   }
 
@@ -1105,7 +1139,7 @@ class ReviewResultTest {
 
     var clause = ReviewResult.coverageGapClause(1, detail);
 
-    assertTrue(clause.contains("1 file(s) were omitted entirely (a.java)"), clause);
+    assertTrue(clause.contains("1 file(s) were omitted entirely (`a.java`)"), clause);
     assertTrue(
         clause.contains(
             "the summary was shortened because the model's response was cut at its length cap"
@@ -1192,7 +1226,7 @@ class ReviewResultTest {
 
     var clause = ReviewResult.coverageGapClause(1, detail);
 
-    assertTrue(clause.contains("1 file(s) were omitted entirely (a.java)"), clause);
+    assertTrue(clause.contains("1 file(s) were omitted entirely (`a.java`)"), clause);
     assertTrue(
         clause.contains(
             "the summary was skipped because the review's token spend ceiling"
@@ -1251,7 +1285,7 @@ class ReviewResultTest {
 
     var clause = ReviewResult.coverageGapClause(1, detail);
 
-    assertTrue(clause.contains("1 file(s) were omitted entirely (a.java)"), clause);
+    assertTrue(clause.contains("1 file(s) were omitted entirely (`a.java`)"), clause);
     assertTrue(
         clause.contains(
             "the summary was not generated because the summary call failed after its retries —"

@@ -117,6 +117,23 @@ public class SuggestionFormatter {
   }
 
   /**
+   * {@code body} with {@code block} as a paragraph ahead of its last finding marker, or at its end
+   * when it has none. The marker stays the last one in the comment, which is the one every reader
+   * takes, whatever {@code block} repeats from the pull request.
+   *
+   * <p>A body with no marker has nothing to keep last, so a block that holds marker-shaped text
+   * would supply the only one: that block is left off and {@code body} is returned as it is.
+   */
+  static String withBlockBeforeMarker(String body, String block) {
+    var marker = lastMarker(body);
+    if (marker.isEmpty()) {
+      return lastMarker(block).isPresent() ? body : body + "\n\n" + block;
+    }
+    var start = marker.get().start();
+    return body.substring(0, start) + block + "\n\n" + body.substring(start);
+  }
+
+  /**
    * {@code body} with {@code line} added to its last finding marker ({@code line=N}), or {@code
    * body} unchanged when it has none. Only a thread on removed lines carries it (#1360): GitHub
    * shows that thread at base-side line numbers, while the finding, its key and the summary use its

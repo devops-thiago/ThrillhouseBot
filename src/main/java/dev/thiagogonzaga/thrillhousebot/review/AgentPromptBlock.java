@@ -21,6 +21,10 @@ import dev.thiagogonzaga.thrillhousebot.github.CommentBodyLimit;
  * Optional collapsed "Agent prompt" block on inline findings (#1432). Built from fields the
  * pipeline already holds — no extra model call.
  *
+ * <p>The block goes ahead of the comment's hidden finding marker, so the marker stays the last
+ * thing in the comment: the file name printed here is the pull request author's text. A comment
+ * with no marker gets no block whose text is shaped like one.
+ *
  * <p>The block repeats the description's first paragraph, cut at {@value #MAX_PROBLEM_CHARS}
  * characters, and is left off a comment it would push past GitHub's comment-body limit: the cap
  * applied at the client would otherwise cut the comment inside the {@code <details>} element and
@@ -44,7 +48,7 @@ final class AgentPromptBlock {
     if (block.isEmpty()) {
       return body;
     }
-    var withBlock = body + "\n\n" + block;
+    var withBlock = SuggestionFormatter.withBlockBeforeMarker(body, block);
     return withBlock.length() > CommentBodyLimit.MAX_LENGTH - MARKER_RESERVE ? body : withBlock;
   }
 

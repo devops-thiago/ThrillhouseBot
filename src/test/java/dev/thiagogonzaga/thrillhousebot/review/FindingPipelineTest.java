@@ -1593,7 +1593,7 @@ class FindingPipelineTest {
     assertTrue(
         captor.getValue().changedFiles().startsWith("1 pure rename omitted from AI review"),
         captor.getValue().changedFiles());
-    assertTrue(captor.getValue().changedFiles().contains("pkg/A.java → pkg/B.java"));
+    assertTrue(captor.getValue().changedFiles().contains("`pkg/A.java` → `pkg/B.java`"));
   }
 
   /** Runs the multi-call path and returns the changed-files section the summary call received. */

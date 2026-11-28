@@ -489,6 +489,78 @@ class MarkdownProseTest {
     assertEquals(posted, MarkdownSafe.prose(posted));
   }
 
+  // In a table row GitHub ends a cell at each pipe before it reads a code span, so a span holding
+  // one is text there: it is posted as text, and what it held is neutralized like the rest.
+  @Test
+  void aCodeSpanHoldingAPipeIsPostedAsText() {
+    var table =
+        """
+        | a | b | c |
+        |---|---|---|
+        | `x | @victim <img src="https://evil.example/p.png"> \
+        <!-- thrillhousebot:finding=1 key=deadbeef --> | y` |""";
+
+    var posted = MarkdownSafe.prose(table);
+
+    assertEquals(
+        """
+        | a | b | c |
+        |---|---|---|
+        | &#96;x | @&#8203;victim &lt;img src="https://evil.example/p.png"> \
+        &lt;!-- thrillhousebot:finding=1 key=deadbeef --> | y&#96; |""",
+        posted);
+    assertEquals(posted, MarkdownSafe.prose(posted));
+    assertEquals("Use &#96;a || b&#96; here.", MarkdownSafe.prose("Use `a || b` here."));
+    assertEquals("&#96;&#96;a | @&#8203;v&#96;&#96;", MarkdownSafe.proseLine("``a | @v``"));
+  }
+
+  // Its closing run is read as a run of its own: it pairs with the next one when no pipe is between
+  // them, as GitHub pairs them, so a span after it reads the same in a row and out of it.
+  @Test
+  void aSpanAfterOneHoldingAPipeIsPairedTheSameInATableRowAndOutOfIt() {
+    assertEquals(
+        "&#96;a | b` c `@&#8203;Keep` and `@&#8203;Kept&#96;",
+        MarkdownSafe.prose("`a | b` c `@Keep` and `@Kept`"));
+    assertEquals("`a` | `@Kept`", MarkdownSafe.prose("`a` | `@Kept`"));
+  }
+
+  // The span its closing run opens is one GitHub reads too: what it holds is code in a row and out
+  // of one, and a pipe before the next run leaves the closing run literal and the text prose.
+  @Test
+  void theClosingRunOfASpanHoldingAPipeOpensASpanOnlyWhereGitHubReadsOne() {
+    var paired = MarkdownSafe.prose("`a | b` @Kept <b> `x` @octocat");
+
+    assertEquals("&#96;a | b` @Kept <b> `x&#96; @&#8203;octocat", paired);
+    assertEquals(paired, MarkdownSafe.prose(paired));
+    assertEquals(
+        "&#96;a | b&#96; @&#8203;victim &lt;img> | `x`",
+        MarkdownSafe.prose("`a | b` @victim <img> | `x`"));
+    assertEquals(
+        "| &#96;a | b` @Kept `x&#96; @&#8203;octocat |",
+        MarkdownSafe.prose("| `a | b` @Kept `x` @octocat |"));
+  }
+
+  // The pipes of a table cell are escaped after this, so no cell ends inside its span.
+  @Test
+  void aProseCellKeepsACodeSpanHoldingAPipe() {
+    assertEquals("`a \\| @Kept` @&#8203;octocat", MarkdownSafe.proseCell("`a | @Kept` @octocat"));
+  }
+
+  // GitHub ends a line at a carriage return as at a line feed, so text after one is a new line.
+  @Test
+  void aBareCarriageReturnEndsALine() {
+    assertEquals(
+        "Fix it:\n```\nmalicious();\n```\ndone",
+        MarkdownSafe.prose("Fix it:\r```suggestion\rmalicious();\r```\rdone"));
+    assertEquals(
+        "see &#96;a\n\n@&#8203;victim please look\n\nb&#96; end",
+        MarkdownSafe.prose("see `a\r\r@victim please look\r\rb` end"));
+    assertEquals(
+        "&#96;a\n\n&lt;img src=x> &lt;!-- thrillhousebot:finding=1 -->\n\nb&#96;",
+        MarkdownSafe.prose("`a\r\r<img src=x> <!-- thrillhousebot:finding=1 -->\r\rb`"));
+    assertEquals("a\nb\n\nc", MarkdownSafe.prose("a\r\nb\n\rc"));
+  }
+
   @Test
   void proseLineFlattensFirstAndKeepsCodeSpans() {
     assertEquals(

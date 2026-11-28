@@ -1224,14 +1224,20 @@ public record ReviewResult(
   /** How many names the rendered copy lists per class before rolling the rest up as a count. */
   private static final int NAMED_FILES_LIMIT = 10;
 
+  /**
+   * The first {@value #NAMED_FILES_LIMIT} of {@code names}, each through {@link
+   * MarkdownSafe#codeSpan} since a file's name is the pull request author's text, and a count of
+   * the rest.
+   */
   private static String nameList(List<String> names) {
-    if (names.size() <= NAMED_FILES_LIMIT) {
-      return String.join(", ", names);
-    }
-    return String.join(", ", names.subList(0, NAMED_FILES_LIMIT))
-        + ", +"
-        + (names.size() - NAMED_FILES_LIMIT)
-        + " more";
+    var listed =
+        names.stream()
+            .limit(NAMED_FILES_LIMIT)
+            .map(MarkdownSafe::codeSpan)
+            .collect(Collectors.joining(", "));
+    return names.size() <= NAMED_FILES_LIMIT
+        ? listed
+        : listed + ", +" + (names.size() - NAMED_FILES_LIMIT) + " more";
   }
 
   /**

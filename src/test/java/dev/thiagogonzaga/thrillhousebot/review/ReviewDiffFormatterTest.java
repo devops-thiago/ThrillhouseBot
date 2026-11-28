@@ -1326,9 +1326,37 @@ class ReviewDiffFormatterTest {
       assertTrue(
           result
               .text()
-              .contains("1 pure rename omitted from AI review (old/Name.java → new/Name.java)"));
+              .contains(
+                  "1 pure rename omitted from AI review (`old/Name.java` → `new/Name.java`)"));
       assertFalse(result.text().contains("### new/Name.java"));
       assertTrue(result.text().contains("### src/App.java"));
+    }
+
+    // A file's name is the pull request author's text and the rollup is posted in the summary.
+    @Test
+    void pureRenameRollupPutsEachNameInACodeSpan() {
+      var renames =
+          List.of(
+              new GitHubPullRequestClient.FileDiff(
+                  "x/@victim", "renamed", 0, 0, 0, null, "<img src=x>`.txt"),
+              new GitHubPullRequestClient.FileDiff("y/@team\n# h", "renamed", 0, 0, 0, null, " "));
+
+      assertEquals(
+          "2 pure renames omitted from AI review (`<img src=x>.txt` → `x/@victim`, `y/@team # h`)\n",
+          ReviewDiffFormatter.formatPureRenameRollup(renames));
+    }
+
+    // A name holding a pipe would split its span in a table row, so it is escaped text instead.
+    @Test
+    void pureRenameRollupWritesANameHoldingAPipeAsEscapedText() {
+      var renames =
+          List.of(
+              new GitHubPullRequestClient.FileDiff(
+                  "x/@victim|y", "renamed", 0, 0, 0, null, "a|b.txt"));
+
+      assertEquals(
+          "1 pure rename omitted from AI review (a\\|b\\.txt → x\\/\\@&#8203;victim\\|y)\n",
+          ReviewDiffFormatter.formatPureRenameRollup(renames));
     }
 
     @Test
@@ -1344,7 +1372,7 @@ class ReviewDiffFormatterTest {
 
       assertTrue(rollup.startsWith("7 pure renames omitted from AI review ("));
       assertTrue(rollup.contains("and 2 more"));
-      assertTrue(rollup.contains("o0.java → n0.java"));
+      assertTrue(rollup.contains("`o0.java` → `n0.java`"));
       assertFalse(rollup.contains("o5.java"));
     }
 
