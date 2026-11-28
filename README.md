@@ -1751,8 +1751,8 @@ in the summary's scope note.
 
 **Loading and limits.** The file is read from the default branch and cached for
 five minutes. YAML anchors, aliases and merge keys are resolved; an oversized or
-deeply nested document, or one built on a runaway alias expansion, is refused
-whole. Everything else fails soft: a missing file, invalid YAML, an unexpected
+deeply nested document, one built on a runaway alias expansion, or one with a
+mapping or a list used as a key is refused whole. Everything else fails soft: a missing file, invalid YAML, an unexpected
 shape, an uncompilable glob, a repeated key (the last value wins) or a malformed
 `path-instructions` entry is logged and skipped, and the deployment's ignore list
 and instructions stay in force. A read that fails for another reason than "no
