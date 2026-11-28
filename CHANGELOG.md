@@ -37,6 +37,11 @@ cannot resolve its review threads.
 
 ### Changed
 
+- **The PR summary folds its long sections** (#1445): **Changes Overview**, **Changed Files** and
+  **Previous Findings Status** now open on a click, with their counts in the line you click, and so
+  does **Risk Assessment** when there is no critical or high finding. A line above the folded file
+  table names its first files. Nothing is removed from the comment.
+  `REVIEW_SUMMARY_COLLAPSE_ENABLED=false` (new, default on) keeps every section open as before.
 - **The bot does not start with a GitHub address that is not `https`** (#1489): the App JWT,
   installation tokens, the OAuth client secret and user tokens are sent to these addresses. This
   covers `GITHUB_URL`, `GITHUB_API_URL`, `GITHUB_GRAPHQL_URL`, `GITHUB_OAUTH_URL` and the same
