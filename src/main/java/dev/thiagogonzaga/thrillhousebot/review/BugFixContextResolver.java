@@ -73,7 +73,9 @@ public class BugFixContextResolver {
     if (prBody == null || prBody.isBlank()) {
       return false;
     }
-    return BUG_FIX_CHECKBOX.matcher(prBody).find() || CLOSING_REFERENCE.matcher(prBody).find();
+    // Both patterns look for word boundaries, which a run of combining marks makes costly.
+    var body = CombiningMarks.bounded(prBody);
+    return BUG_FIX_CHECKBOX.matcher(body).find() || CLOSING_REFERENCE.matcher(body).find();
   }
 
   /** Issue numbers named by closing references in the PR body, in order, deduplicated, capped. */
@@ -82,7 +84,7 @@ public class BugFixContextResolver {
       return List.of();
     }
     var numbers = new LinkedHashSet<Integer>();
-    var matcher = CLOSING_REFERENCE.matcher(prBody);
+    var matcher = CLOSING_REFERENCE.matcher(CombiningMarks.bounded(prBody));
     while (matcher.find() && numbers.size() < MAX_LINKED_ISSUES) {
       numbers.add(Integer.parseInt(matcher.group(1)));
     }
