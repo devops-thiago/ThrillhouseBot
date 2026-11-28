@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
@@ -27,6 +28,7 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -76,6 +78,8 @@ class FindingsManifestThreadTest {
     when(githubConfig.writeRetryBudget()).thenReturn(Duration.ofMinutes(5));
     when(suggestionFormatter.formatReviewComment(any(), anyBoolean(), anyInt()))
         .thenAnswer(call -> "finding " + call.<Finding>getArgument(0).line());
+    when(commentClient.createComment(any(), any(), any(), any(), anyInt(), any()))
+        .thenReturn(new GitHubCommentClient.CommentResponse(SUMMARY_ID, "u"));
     publisher =
         new ReviewPublisher(
             reviewClient,
@@ -94,6 +98,11 @@ class FindingsManifestThreadTest {
   }
 
   private static ReviewResult result(List<Finding> findings, List<Finding> openPrevious) {
+    return result(findings, openPrevious, true);
+  }
+
+  private static ReviewResult result(
+      List<Finding> findings, List<Finding> openPrevious, boolean firstReview) {
     return new ReviewResult(
         findings,
         0,
@@ -102,7 +111,7 @@ class FindingsManifestThreadTest {
         0,
         null,
         ReviewState.COMMENT,
-        true,
+        firstReview,
         "summary",
         List.of(),
         List.of(),
@@ -206,13 +215,35 @@ class FindingsManifestThreadTest {
   }
 
   private void summaryOnThePullRequest(String body) {
+    summaryOnThePullRequest(SUMMARY_ID, body);
+  }
+
+  private void summaryOnThePullRequest(long id, String body) {
     when(commentClient.listComments(anyString(), anyString(), eq("o"), eq("r"), eq(1)))
         .thenReturn(
             List.of(
                 new GitHubCommentClient.IssueComment(
-                    SUMMARY_ID,
-                    body,
-                    new GitHubReviewClient.ReviewResponse.User("thrillhousebot"))));
+                    id, body, new GitHubReviewClient.ReviewResponse.User("thrillhousebot"))));
+  }
+
+  private static ReviewResult followUpOnTheChangedFile() {
+    return result(threeOnTheChangedFile().findings(), List.of(), false);
+  }
+
+  private void publish(ReviewResult result, DiffLineResolver resolver) {
+    publisher.publishSummary(
+        new ReviewPublisher.SummaryRequest(
+            "auth", "o", "r", 1, result, false, null, resolver, null));
+  }
+
+  /** The bodies written to the comment {@code id}, oldest first. */
+  private List<String> editsOf(long id, int count) {
+    var edit = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient, times(count))
+        .updateComment(anyString(), anyString(), eq("o"), eq("r"), eq(id), edit.capture());
+    return edit.getAllValues().stream()
+        .map(GitHubCommentClient.CreateCommentRequest::body)
+        .toList();
   }
 
   /** GitHub refuses every route of the finding on {@code line}. */
@@ -343,6 +374,169 @@ class FindingsManifestThreadTest {
     post(result, resolver);
 
     verify(commentClient, never()).updateComment(any(), any(), any(), any(), anyLong(), any());
+  }
+
+  // #1526 review: the line alone does not say whose summary it is. A re-run over an unchanged
+  // pull request renders the same line, so when its own summary is not written the newest summary
+  // is the earlier run's, and that one opened the threads it lists.
+  @Test
+  void anEarlierRunsSummaryCarryingTheSameLineIsLeftAloneWhenThisRoundsWasNotWritten()
+      throws Exception {
+    var resolver = new DiffLineResolver(Map.of("src/A.java", LONG_PATCH));
+    var result = threeOnTheChangedFile();
+    publishedSummary(result, resolver);
+    when(commentClient.createComment(any(), any(), any(), any(), anyInt(), any()))
+        .thenThrow(new WebApplicationException(502));
+    assertThrows(WebApplicationException.class, () -> publish(result, resolver));
+    refuseTheFindingOn(2);
+
+    var posted = post(result, resolver);
+
+    verify(commentClient, never()).updateComment(any(), any(), any(), any(), anyLong(), any());
+    assertEquals(
+        Map.of(2, false, 4, true, 5, true),
+        threadsIn(ManifestThreads.openFindings(result, posted).entries(), false));
+  }
+
+  @Test
+  void aRoundWithABlankSummaryEditsNoEarlierSummary() {
+    var resolver = new DiffLineResolver(Map.of("src/A.java", LONG_PATCH));
+    var result = threeOnTheChangedFile();
+    publishedSummary(result, resolver);
+    var blank =
+        new ReviewResult(
+            result.findings(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.COMMENT,
+            true,
+            " ",
+            List.of(),
+            List.of(),
+            0,
+            false,
+            true,
+            null,
+            0,
+            List.of(),
+            false);
+    publish(blank, resolver);
+    refuseTheFindingOn(2);
+
+    post(blank, resolver);
+
+    verify(commentClient, never()).updateComment(any(), any(), any(), any(), anyLong(), any());
+  }
+
+  @Test
+  void aSummaryPostThatReportsNoCommentLeavesTheManifestAsAnnounced() {
+    when(commentClient.createComment(any(), any(), any(), any(), anyInt(), any())).thenReturn(null);
+    var resolver = new DiffLineResolver(Map.of("src/A.java", LONG_PATCH));
+    var result = threeOnTheChangedFile();
+    publishedSummary(result, resolver);
+    refuseTheFindingOn(2);
+
+    post(result, resolver);
+
+    verify(commentClient, never()).updateComment(any(), any(), any(), any(), anyLong(), any());
+  }
+
+  @Test
+  void aNewerSummaryCarryingTheSameLineIsLeftAlone() {
+    var resolver = new DiffLineResolver(Map.of("src/A.java", LONG_PATCH));
+    var result = threeOnTheChangedFile();
+    var summary = publishedSummary(result, resolver);
+    summaryOnThePullRequest(SUMMARY_ID + 1, summary);
+    refuseTheFindingOn(2);
+
+    post(result, resolver);
+
+    verify(commentClient, never()).updateComment(any(), any(), any(), any(), anyLong(), any());
+  }
+
+  // The id is the running round's only: once its review has posted, a later review post that
+  // wrote no summary of its own has nothing to edit.
+  @Test
+  void aReviewPostedWithoutItsOwnSummaryEditsNothing() {
+    var resolver = new DiffLineResolver(Map.of("src/A.java", LONG_PATCH));
+    var result = threeOnTheChangedFile();
+    publishedSummary(result, resolver);
+    post(result, resolver);
+    refuseTheFindingOn(2);
+
+    post(result, resolver);
+
+    verify(commentClient, never()).updateComment(any(), any(), any(), any(), anyLong(), any());
+  }
+
+  @Test
+  void aSummaryEditedInPlaceIsTheOneCorrected() throws Exception {
+    var resolver = new DiffLineResolver(Map.of("src/A.java", LONG_PATCH));
+    var result = followUpOnTheChangedFile();
+    summaryOnThePullRequest(PrSummaryGenerator.SUMMARY_MARKER + "\nolder");
+    publish(result, resolver);
+    summaryOnThePullRequest(editsOf(SUMMARY_ID, 1).get(0));
+    refuseTheFindingOn(2);
+
+    post(result, resolver);
+
+    var edits = editsOf(SUMMARY_ID, 2);
+    assertEquals(Map.of(2, true, 4, true, 5, false), threadsIn(edits.get(0), true));
+    assertEquals(Map.of(2, false, 4, true, 5, true), threadsIn(edits.get(1), true));
+    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+  }
+
+  @Test
+  void aSummaryThatWasAlreadyCurrentIsTheOneCorrected() throws Exception {
+    var resolver = new DiffLineResolver(Map.of("src/A.java", LONG_PATCH));
+    publishedSummary(threeOnTheChangedFile(), resolver);
+    var result = followUpOnTheChangedFile();
+    publish(result, resolver);
+    verify(commentClient, never()).updateComment(any(), any(), any(), any(), anyLong(), any());
+    refuseTheFindingOn(2);
+
+    post(result, resolver);
+
+    assertEquals(Map.of(2, false, 4, true, 5, true), threadsIn(editedSummary(), true));
+  }
+
+  @Test
+  void aSummaryPostedBecauseNoneWasFoundIsTheOneCorrected() throws Exception {
+    var resolver = new DiffLineResolver(Map.of("src/A.java", LONG_PATCH));
+    var result = followUpOnTheChangedFile();
+    publishedSummary(result, resolver);
+    refuseTheFindingOn(2);
+
+    post(result, resolver);
+
+    assertEquals(Map.of(2, false, 4, true, 5, true), threadsIn(editedSummary(), true));
+  }
+
+  // A failed in-place edit posts the summary as a new comment: that comment is the round's, not
+  // the one the edit failed on.
+  @Test
+  void aSummaryRepostedAfterAFailedEditIsTheOneCorrected() throws Exception {
+    var resolver = new DiffLineResolver(Map.of("src/A.java", LONG_PATCH));
+    var result = followUpOnTheChangedFile();
+    var reposted = SUMMARY_ID + 1;
+    summaryOnThePullRequest(PrSummaryGenerator.SUMMARY_MARKER + "\nolder");
+    when(commentClient.updateComment(any(), any(), any(), any(), eq(SUMMARY_ID), any()))
+        .thenThrow(new WebApplicationException(502));
+    when(commentClient.createComment(any(), any(), any(), any(), anyInt(), any()))
+        .thenReturn(new GitHubCommentClient.CommentResponse(reposted, "u"));
+    publish(result, resolver);
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .createComment(anyString(), anyString(), eq("o"), eq("r"), eq(1), body.capture());
+    summaryOnThePullRequest(reposted, body.getValue().body());
+    refuseTheFindingOn(2);
+
+    post(result, resolver);
+
+    assertEquals(Map.of(2, false, 4, true, 5, true), threadsIn(editsOf(reposted, 1).get(0), true));
   }
 
   @Test

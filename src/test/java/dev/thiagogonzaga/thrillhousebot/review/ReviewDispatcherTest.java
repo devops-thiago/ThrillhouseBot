@@ -683,6 +683,14 @@ class ReviewDispatcherTest {
     }
   }
 
+  private static void awaitStateCount(ReviewDispatcher dispatcher, int expected) {
+    var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    while (dispatcher.stateCount() != expected && System.nanoTime() < deadline) {
+      Thread.onSpinWait();
+    }
+    assertEquals(expected, dispatcher.stateCount());
+  }
+
   private static void awaitEmptyDispatcherState(
       ReviewDispatcher dispatcher, long timeout, TimeUnit unit) {
     var deadline = System.nanoTime() + unit.toNanos(timeout);
@@ -1596,6 +1604,65 @@ class ReviewDispatcherTest {
     awaitEmptyDispatcherState(limited, 5, TimeUnit.SECONDS);
     verify(orchestrator, times(1)).review(any(ReviewOrchestrator.ReviewRequest.class));
     assertEquals(0, limits.trackedRepositories());
+  }
+
+  @Test
+  void aHandedBackReviewHeldAgainAtItsSlotLeavesTheNewerHeadDeferredMeanwhile()
+      throws InterruptedException {
+    var limits = new AutoReviewSlots(1, 1);
+    var limited = limitedDispatcher(limits);
+    var started = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    blockReviewUntil(started, release);
+    limited.dispatch(reviewRequest("owner", "repo", 1, "sha1"));
+    assertTrue(started.await(5, TimeUnit.SECONDS));
+
+    // A deferred review is handed back and waits for a slot of the busy repository.
+    assertTrue(limited.dispatchDeferred(reviewRequest("owner", "repo", 2, "sha-old")));
+    awaitWaiting(limits, 1);
+    // A push arrives inside the rate window meanwhile, and its head is kept.
+    long windowEnd = now.get() + WINDOW_MS;
+    when(rateLimiter.hold(eq("owner"), eq("repo"), eq(2), any()))
+        .thenReturn(new AutoReviewRateLimiter.Hold(true, OptionalLong.of(windowEnd)));
+    assertEquals(
+        ReviewDispatcher.RateWindowHold.KEPT,
+        limited.holdForRateWindow(reviewRequest("owner", "repo", 2, "sha-new")));
+
+    // The older request gets its slot, reads the window again and is held too.
+    release.countDown();
+    awaitEmptyDispatcherState(limited, 5, TimeUnit.SECONDS);
+
+    verify(orchestrator, times(1)).review(any(ReviewOrchestrator.ReviewRequest.class));
+    verify(skipEmitter, never()).recordSkip(any(), anyLong(), any(), any(), anyInt(), any());
+    now.set(windowEnd);
+    assertEquals(List.of(reviewRequest("owner", "repo", 2, "sha-new")), deferred.takeDue());
+  }
+
+  @Test
+  void aHandedBackReviewTurnedAwayByAFullQueueLeavesTheNewerHeadDeferredMeanwhile()
+      throws InterruptedException {
+    var limits = new AutoReviewSlots(1, 1);
+    var limited = limitedDispatcher(limits);
+    var started = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    blockReviewUntil(started, release);
+    limited.dispatch(reviewRequest("owner", "repo", 1, "sha1"));
+    assertTrue(started.await(5, TimeUnit.SECONDS));
+    limited.dispatch(reviewRequest("owner", "repo", 2, "sha2"));
+    awaitWaiting(limits, 1);
+
+    // A newer head of the third pull request is deferred before its older one comes back.
+    deferred.defer(reviewRequest("owner", "repo", 3, "sha-new"), now.get() + WINDOW_MS);
+    assertTrue(limited.dispatchDeferred(reviewRequest("owner", "repo", 3, "sha-old")));
+    // Its worker ends once the full queue has turned it away; the other two are still busy.
+    awaitStateCount(limited, 2);
+    release.countDown();
+    awaitEmptyDispatcherState(limited, 5, TimeUnit.SECONDS);
+
+    verify(orchestrator, never()).review(reviewRequest("owner", "repo", 3, "sha-old"));
+    verify(skipEmitter, never()).recordSkip(any(), anyLong(), any(), any(), anyInt(), any());
+    now.addAndGet(WINDOW_MS);
+    assertEquals(List.of(reviewRequest("owner", "repo", 3, "sha-new")), deferred.takeDue());
   }
 
   @Test

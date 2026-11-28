@@ -81,6 +81,16 @@ public class ReviewPublisher {
   private final PendingReviewGuard pendingReviewGuard;
   private final ApprovalWithdrawals approvalWithdrawals;
 
+  /**
+   * The summary comment the running round wrote, or found already holding its summary, by pull
+   * request: the one comment {@link #correctManifest} may edit. {@link #publishSummary} drops the
+   * entry before it writes and {@link #postReview} drops it once the review has posted, so a round
+   * whose summary was not written holds none. A pull request's reviews run one at a time, so an
+   * entry is always the running round's.
+   */
+  private final Map<String, Long> summaryOfRound =
+      Collections.synchronizedMap(new LinkedHashMap<>());
+
   @Inject
   public ReviewPublisher(
       @RestClient GitHubReviewClient reviewClient,
@@ -222,6 +232,7 @@ public class ReviewPublisher {
     var result = summary.result();
     var prText = summary.prText();
     var commitSha = summary.commitSha();
+    summaryOfRound.remove(summaryKey(owner, repo, prNumber));
     if (result.summaryMarkdown().isBlank()) {
       return false;
     }
@@ -250,7 +261,7 @@ public class ReviewPublisher {
                 + "\n"
                 + prose);
     if (postingNew) {
-      commentClient.createComment(auth, ACCEPT, owner, repo, prNumber, request);
+      createSummaryComment(auth, owner, repo, prNumber, request);
       return true;
     }
     upsertSummaryComment(auth, owner, repo, prNumber, request, existing);
@@ -315,9 +326,11 @@ public class ReviewPublisher {
    * Rewrites the summary's manifest line when the threads the review opened are not the ones the
    * summary announced (#1433): GitHub refused a thread, a refusal freed a cap slot, or a batched
    * review was never submitted. A round that posted as announced reads and writes nothing. The edit
-   * replaces only the line this round's summary wrote, so a summary that no longer carries it (a
-   * newer run's, or one whose publish failed) is left alone, and a failed read or edit is logged
-   * and costs the review nothing.
+   * goes only to the comment this round's {@link #publishSummary} wrote, by its id, and replaces
+   * only the line it wrote there. A round whose summary was not written edits nothing, even when an
+   * earlier run's summary carries the same line, and so does one whose comment is no longer the
+   * newest summary or no longer carries the line. A failed read or edit is logged and costs the
+   * review nothing.
    */
   private void correctManifest(
       PostReviewRequest post, ReviewResult result, ManifestThreads.PostedThreads posted) {
@@ -327,8 +340,13 @@ public class ReviewPublisher {
     if (announced.equals(opened)) {
       return;
     }
+    var written = summaryOfRound.get(summaryKey(post.owner(), post.repo(), post.prNumber()));
+    if (written == null) {
+      return;
+    }
     try {
       latestBotSummaryComment(post.auth(), post.owner(), post.repo(), post.prNumber())
+          .filter(comment -> comment.id() == written)
           .filter(comment -> comment.body().contains(announced))
           .ifPresent(
               comment ->
@@ -393,10 +411,11 @@ public class ReviewPublisher {
       Optional<GitHubCommentClient.IssueComment> existing) {
     if (existing.isEmpty()) {
       Log.infof("No summary comment found on %s/%s #%d — posting a new one", owner, repo, prNumber);
-      commentClient.createComment(auth, ACCEPT, owner, repo, prNumber, request);
+      createSummaryComment(auth, owner, repo, prNumber, request);
       return;
     }
     var comment = existing.get();
+    summaryOfRound.put(summaryKey(owner, repo, prNumber), comment.id());
     if (request.body().equals(comment.body())) {
       Log.debugf(
           "Summary comment %d on %s/%s #%d is already current — not editing it",
@@ -414,8 +433,29 @@ public class ReviewPublisher {
           owner,
           repo,
           prNumber);
-      commentClient.createComment(auth, ACCEPT, owner, repo, prNumber, request);
+      summaryOfRound.remove(summaryKey(owner, repo, prNumber));
+      createSummaryComment(auth, owner, repo, prNumber, request);
     }
+  }
+
+  /**
+   * Posts the round's summary as a new comment and keeps its id for {@link #correctManifest}. A
+   * post that reports no comment keeps none, and the manifest of that round is then not corrected.
+   */
+  private void createSummaryComment(
+      String auth,
+      String owner,
+      String repo,
+      int prNumber,
+      GitHubCommentClient.CreateCommentRequest request) {
+    var created = commentClient.createComment(auth, ACCEPT, owner, repo, prNumber, request);
+    if (created != null) {
+      summaryOfRound.put(summaryKey(owner, repo, prNumber), created.id());
+    }
+  }
+
+  private static String summaryKey(String owner, String repo, int prNumber) {
+    return owner + "/" + repo + " #" + prNumber;
   }
 
   /**
@@ -694,10 +734,13 @@ public class ReviewPublisher {
    */
   ManifestThreads.PostedThreads postReview(PostReviewRequest post) {
     var posted = new AtomicReference<>(ManifestThreads.PostedThreads.NONE);
-    GitHubWriteBudget.within(
-        post.owner() + "/" + post.repo() + " #" + post.prNumber(),
-        config.github().writeRetryBudget(),
-        () -> posted.set(publishReview(post)));
+    var pullRequest = summaryKey(post.owner(), post.repo(), post.prNumber());
+    try {
+      GitHubWriteBudget.within(
+          pullRequest, config.github().writeRetryBudget(), () -> posted.set(publishReview(post)));
+    } finally {
+      summaryOfRound.remove(pullRequest);
+    }
     return posted.get();
   }
 
