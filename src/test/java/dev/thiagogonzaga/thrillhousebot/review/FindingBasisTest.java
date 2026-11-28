@@ -58,7 +58,7 @@ class FindingBasisTest {
 
   @Test
   void namesTheRuleTheCheckTheVerdictAndTheLearning() {
-    basis.record(raised(), "kept by the second pass");
+    basis.recordOutcome(raised(), "kept by the second pass");
     basis.shapedByLearning(raised(), 7);
 
     assertEquals(
@@ -92,14 +92,139 @@ class FindingBasisTest {
             CiFailureCitations.parse(section));
 
     assertEquals(
-        "**Basis**\n- CI: cites failing test `returns exactly slots applications when enough are"
-            + " eligible` of check `test`\n",
+        """
+        **Basis**
+        - CI: cites failing test `returns exactly slots applications when enough are eligible` \
+        of check `test`
+        """,
         rendered);
+  }
+
+  // #1435: the CI line carries where the cited check annotated the finding's file.
+  @Test
+  void namesWhereTheCitedCheckAnnotatedTheFindingsFile() {
+    var section =
+        """
+        Checks on this commit that had completed without passing when this review started: 2
+
+        ### test (conclusion: failure)
+        Title: test
+        Annotations (6 of 9):
+        - src/A.java:67 [failure] WaitlistServiceTest: expected: <2> but was: <3>
+        - src/A.java:67 [failure] the same line again
+        - src/A.java [warning] a note on the whole file
+        - src/A.javascript:3 [failure] another file whose path only starts the same
+        - src/Other.java:5 [failure] another file
+        - .github:41 [failure] Process completed with exit code 1.
+        Failing tests named in the job log:
+        - src/A.java:99 is a test line, not an annotation
+
+        ### lint (conclusion: failure)
+        Annotations (1 of 1):
+        - src/A.java:12 [failure] a check the finding does not cite
+        """;
+
+    assertEquals(
+        """
+        **Basis**
+        - CI: cites failing check `test`; annotated at `src/A.java:67`, `src/A.java`
+        """,
+        basis.render(
+            finding("The CI check \"test (conclusion: failure)\" fails on this."),
+            PathScopedInstructions.NONE,
+            CiFailureCitations.parse(section)));
+  }
+
+  @Test
+  void namesAtMostThreeAnnotationLocations() {
+    var section =
+        """
+        ### test (conclusion: failure)
+        Annotations (4 of 4):
+        - src/A.java:1 [failure] one
+        - src/A.java:2 [failure] two
+        - src/A.java:3 [failure] three
+        - src/A.java:4 [failure] four
+        """;
+
+    assertEquals(
+        """
+        **Basis**
+        - CI: cites failing check `test`; annotated at `src/A.java:1`, `src/A.java:2`, \
+        `src/A.java:3`
+        """,
+        basis.render(
+            finding("The CI check \"test (conclusion: failure)\" fails on this."),
+            PathScopedInstructions.NONE,
+            CiFailureCitations.parse(section)));
+  }
+
+  @Test
+  void readsAnAnnotationLocationOnlyAsAPathAndALineNumber() {
+    var section =
+        """
+        ### test (conclusion: failure)
+        Annotations (3 of 3):
+        - src/A.java:x [failure] a colon that opens no line number
+        - src/A.java:
+        - src/A.java:8
+        """;
+
+    assertEquals(
+        "**Basis**\n- CI: cites failing check `test`; annotated at `src/A.java:8`\n",
+        basis.render(
+            finding("The CI check \"test (conclusion: failure)\" fails on this."),
+            PathScopedInstructions.NONE,
+            CiFailureCitations.parse(section)));
+  }
+
+  @Test
+  void aCheckNamedOnlyHasNoAnnotationLocation() {
+    var section =
+        """
+        Also failing, not detailed:
+        - build
+        Annotations (1 of 1):
+        - src/A.java:5 [failure] a list no detailed check opens
+        """;
+
+    assertEquals(
+        "**Basis**\n- CI: cites failing check `build`\n",
+        basis.render(
+            finding("The CI check \"build\" fails on this."),
+            PathScopedInstructions.NONE,
+            CiFailureCitations.parse(section)));
+  }
+
+  @Test
+  void aFindingWithNoFileGetsNoAnnotationLocation() {
+    var section =
+        """
+        ### test (conclusion: failure)
+        Annotations (1 of 1):
+        - src/A.java:1 [failure] one
+        """;
+
+    for (var file : new String[] {null, " "}) {
+      var nowhere =
+          new Finding(
+              RiskLevel.LOW,
+              file,
+              10,
+              "Title",
+              "The CI check \"test (conclusion: failure)\" fails on this.",
+              null,
+              null);
+
+      assertEquals(
+          "**Basis**\n- CI: cites failing check `test`\n",
+          basis.render(nowhere, PathScopedInstructions.NONE, CiFailureCitations.parse(section)));
+    }
   }
 
   @Test
   void aFindingWithoutADescriptionStillCarriesItsVerdict() {
-    basis.record(raised(), "kept by the second pass");
+    basis.recordOutcome(raised(), "kept by the second pass");
 
     assertEquals(
         "**Basis**\n- Verified: kept by the second pass\n",
@@ -128,9 +253,9 @@ class FindingBasisTest {
   void theDiscardingBasisKeepsNothingAndAFindingWithNoFileIsSkipped() {
     var nowhere = new ReviewResponse.Finding("low", "high", null, 1, "Title", "d", null, null);
 
-    FindingBasis.DISCARD.record(raised(), "kept by the second pass");
+    FindingBasis.DISCARD.recordOutcome(raised(), "kept by the second pass");
     FindingBasis.DISCARD.shapedByLearning(raised(), 1);
-    basis.record(nowhere, "kept by the second pass");
+    basis.recordOutcome(nowhere, "kept by the second pass");
     basis.shapedByLearning(nowhere, 1);
 
     for (var from : List.of(basis, FindingBasis.DISCARD)) {

@@ -349,7 +349,8 @@ class ModelSuppliedTextInLogLinesTest {
                     List.of(priorJson),
                     List.of(botComment, maintainerReply),
                     BotIdentity.of("thrillhousebot"),
-                    KnownWriters.ALL));
+                    KnownWriters.ALL,
+                    new DiffLineResolver(Map.of())));
 
     assertRecordCannotBeForged(captured, "Missing null check");
   }

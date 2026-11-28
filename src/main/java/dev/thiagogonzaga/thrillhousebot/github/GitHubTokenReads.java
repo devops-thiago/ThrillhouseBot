@@ -25,7 +25,6 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -370,7 +369,7 @@ public class GitHubTokenReads {
 
   private static InstallationRepository installationRepository(GHRepository repository)
       throws IOException {
-    Date createdAt = repository.getCreatedAt();
+    var createdAt = repository.getCreatedAt();
     return new InstallationRepository(
         repository.getId(),
         repository.getFullName(),

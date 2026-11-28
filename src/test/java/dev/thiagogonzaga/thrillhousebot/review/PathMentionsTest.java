@@ -29,11 +29,16 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.regex.Pattern;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /** {@link PathMentions}: paths the model names must name files that exist (#1076). */
@@ -1411,5 +1416,166 @@ class PathMentionsTest {
       at++;
     }
     return at;
+  }
+
+  /**
+   * A description holding 400,000 characters of letters joined by full stops or hyphens, which a
+   * URL scheme may hold, with no {@code ://} after them. Looking for a URL used to start at every
+   * letter and read the rest of the run: 32,000 characters took 1.7 seconds.
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {"a.", "a-", "b+"})
+  void aLongRunOfSchemeCharactersIsReadOnce(String unit) {
+    var mentions = mentions(ZIG_IMAGE, "", Set.of());
+    var description = "See " + unit.repeat(200_000) + " for the image.";
+
+    assertSame(
+        description,
+        assertTimeoutPreemptively(
+            Duration.ofSeconds(10), () -> mentions.withoutUnresolvedPaths(description)));
+  }
+
+  /** The pattern URLs were found with before, which {@link PathMentions#urlSpans} is held to. */
+  private static final Pattern URL_BEFORE =
+      Pattern.compile("(?i)\\b(?:[a-z][a-z0-9+.-]*+://|www\\.)[^\\s<>()\\[\\]`\"']++");
+
+  /**
+   * What the random texts are made of: the two openings of a URL, the characters a scheme may and
+   * may not hold, what ends a URL, and a combining mark.
+   */
+  private static final String[] URL_PIECES = {
+    "://", "://", "www.", "WwW.", "a", "Z", "h", "7", "_", ".", "-", "+", "/", ":", "é", "\u212A",
+    " ", "\n", "(", "]", "'", "`", "<", "\u000B", "\u00A0", "\u0301"
+  };
+
+  private static List<String> spansBefore(String text) {
+    var spans = new ArrayList<String>();
+    var url = URL_BEFORE.matcher(text);
+    while (url.find()) {
+      spans.add(url.start() + "-" + url.end());
+    }
+    return spans;
+  }
+
+  private static List<String> spansNow(String text) {
+    return PathMentions.urlSpans(text).stream().map(span -> span[0] + "-" + span[1]).toList();
+  }
+
+  @Test
+  void aUrlStartsAtTheFirstLetterItsSchemeCanStartAt() {
+    assertEquals(List.of("4-20"), spansNow("See https://x.io/a/b (the docs)."));
+    // A scheme starts at a letter no word character precedes: after the plus sign, the digit's
+    // word is over at the full stop, and an underscore is a word character.
+    assertEquals(List.of("1-6"), spansNow("+a://x"));
+    assertEquals(List.of("3-8"), spansNow("1a.b://x"));
+    assertEquals(List.of(), spansNow("_a://x"));
+    // Nothing after the slashes, so the address is read as one that opens with "www.".
+    assertEquals(List.of("0-8"), spansNow("www.a://"));
+    assertEquals(List.of("2-7"), spansNow("a.WWW.x a:// www."));
+    // A combining mark on a letter is part of the letter's word; on anything else it is not.
+    assertEquals(List.of(), spansNow("e\u0301\u0301www.x"));
+    assertEquals(List.of("2-7"), spansNow("-\u0301www.x"));
+    assertEquals(List.of("1-6"), spansNow("\u0301www.x"));
+  }
+
+  /**
+   * The rule the file names of a description gap start by, read at a URL's start: a combining mark
+   * is a word character on a letter or digit, and on nothing else.
+   */
+  @ParameterizedTest
+  @MethodSource("urlsBesideACombiningMark")
+  void aCombiningMarkIsPartOfAWordOnlyOnALetterOrDigit(String text, List<String> spans) {
+    assertEquals(spans, spansBefore(text), () -> "the URLs the pattern found in: " + text);
+    assertSpansAsBefore(text);
+  }
+
+  private static void assertSpansAsBefore(String text) {
+    assertEquals(spansBefore(text), spansNow(text), () -> "the URLs of: " + text);
+  }
+
+  private static Stream<Arguments> urlsBesideACombiningMark() {
+    return Stream.of(
+        Arguments.of("e\u0301www.x", List.of()),
+        Arguments.of("e\u0301\u0301www.x", List.of()),
+        Arguments.of("7\u0301www.x", List.of()),
+        Arguments.of("-\u0301www.x", List.of("2-7")),
+        Arguments.of("\u0301www.x", List.of("1-6")),
+        Arguments.of("e\u0301-www.x", List.of("3-8")),
+        Arguments.of("e\u0301a-www.x", List.of("4-9")));
+  }
+
+  @Test
+  void randomTextsHoldTheUrlsThePatternFoundInThem() {
+    var random = new Random(1501);
+    for (int round = 0; round < 150_000; round++) {
+      var text = new StringBuilder();
+      int pieces = random.nextInt(16);
+      for (int piece = 0; piece < pieces; piece++) {
+        text.append(URL_PIECES[random.nextInt(URL_PIECES.length)]);
+      }
+      var written = text.toString();
+      assertSpansAsBefore(written);
+    }
+  }
+
+  /** A combining mark. */
+  private static final String ACUTE = "\u0301";
+
+  /**
+   * What the texts about combining marks are made of: the two openings of a URL, word characters,
+   * letters and digits of other scripts, and marks of every kind, in and beyond the basic plane,
+   * whole and as the halves of a pair.
+   */
+  private static final String[] MARK_PIECES = {
+    "www.",
+    "://",
+    "a",
+    "h",
+    "_",
+    "7",
+    "-",
+    " ",
+    "é",
+    "\u0663",
+    ACUTE,
+    "\u0300",
+    "\u0903",
+    "\u20DD",
+    "\uD834\uDD67",
+    "\uD835\uDC00",
+    "\uD834",
+    "\uDD67"
+  };
+
+  @Test
+  void randomTextsOfCombiningMarksHoldTheUrlsThePatternFoundInThem() {
+    var random = new Random(1523);
+    for (int round = 0; round < 150_000; round++) {
+      var text = new StringBuilder();
+      int pieces = random.nextInt(12);
+      for (int piece = 0; piece < pieces; piece++) {
+        text.append(MARK_PIECES[random.nextInt(MARK_PIECES.length)]);
+      }
+      var written = text.toString();
+      assertSpansAsBefore(written);
+    }
+  }
+
+  /**
+   * 400,000 characters of combining marks, as one run or as a mark on every letter. A letter looks
+   * back over the marks right before it and no further, so each mark is read once.
+   */
+  @ParameterizedTest
+  @ValueSource(ints = {1, 7, 400_000})
+  void aLongRunOfCombiningMarksIsReadOnce(int run) {
+    var marked = (ACUTE.repeat(run) + "h").repeat(400_000 / run);
+    var onALetter = "e" + marked + "ttp://x.io";
+    var onAHyphen = "-" + ACUTE.repeat(400_000) + "www.x";
+
+    assertEquals(
+        List.of(), assertTimeoutPreemptively(Duration.ofSeconds(10), () -> spansNow(onALetter)));
+    assertEquals(
+        List.of("400001-400006"),
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> spansNow(onAHyphen)));
   }
 }

@@ -122,7 +122,7 @@ jobs:
       - name: Lint workflows and composite actions
         run: ./actionlint -color
 
-  # The released-history check runs from the base branch under pull_request_target and never
+  # The released-history check runs from the default branch under pull_request_target and never
   # executes pull request code, so the checker's own tests run here, against the pull request.
   released-history-test:
     runs-on: ubuntu-latest

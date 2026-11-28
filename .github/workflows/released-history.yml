@@ -6,11 +6,11 @@ name: Released history
 # any of them for a version with a vX.Y.Z tag; a correction goes into the next release as an
 # Errata entry. Adding a new release section or a new archive is allowed.
 #
-# pull_request_target, so this file and the checker always come from the base branch: under
-# pull_request a pull request runs its own copy of the workflow and could rewrite the check it is
-# held to. Nothing from the pull request is executed here: its test merge is fetched as git
-# objects and only read through git diff and git show. The checker's tests, which do run the pull
-# request's code, run in ci.yml under pull_request.
+# pull_request_target, so this file and the checker always come from the default branch, whatever
+# branch the pull request targets: under pull_request a pull request runs its own copy of the
+# workflow and could rewrite the check it is held to. Nothing from the pull request is executed
+# here: its test merge is fetched as git objects and only read through git diff and git show. The
+# checker's tests, which do run the pull request's code, run in ci.yml under pull_request.
 on:
   pull_request_target:
     branches: [main, develop, "release/**"]
@@ -23,29 +23,49 @@ jobs:
     name: released-history
     runs-on: ubuntu-latest
     steps:
-      # No ref: under pull_request_target the default checkout is the base branch, which is the
-      # only code this job runs. Naming a pull request ref here, even the base commit, reads as an
-      # untrusted checkout to workflow scanners.
+      # No ref: under pull_request_target the default checkout is the default branch, which is
+      # the only code this job runs. Naming a pull request ref here, even the base commit, reads
+      # as an untrusted checkout to workflow scanners.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
       # The check reads GitHub's test merge of the pull request into its base, against that
       # merge's first parent: exactly what merging would change, however old the branch is.
+      # GitHub rebuilds that merge in the background after a push and serves the previous one
+      # until then, and for good when the new head conflicts with the base. The merge is
+      # therefore used only once its second parent is the head commit this run was started for.
       - name: Fetch the pull request's test merge without checking it out
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          # The checkout keeps no credential, so the token is passed to these two fetches only.
+          # The checkout keeps no credential, so the token is passed to these fetches only.
           # That keeps them working where the repository is not public.
           remote="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
           auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
           # The release tags decide what is locked, so fetch them explicitly rather than rely on
           # what the checkout brought for a commit ref.
           git -c "http.extraheader=${auth}" fetch --no-tags --quiet "$remote" "+refs/tags/v*:refs/tags/v*"
-          if ! git -c "http.extraheader=${auth}" fetch --no-tags --quiet "$remote" "+refs/pull/${PR_NUMBER}/merge:refs/remotes/pull/merge"; then
+          merged_head=""
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            if git -c "http.extraheader=${auth}" fetch --no-tags --quiet "$remote" "+refs/pull/${PR_NUMBER}/merge:refs/remotes/pull/merge"; then
+              merged_head=$(git rev-parse --verify --quiet "refs/remotes/pull/merge^2" || true)
+            fi
+            if [ "$merged_head" = "$PR_HEAD_SHA" ]; then
+              break
+            fi
+            if [ "$attempt" -lt 10 ]; then
+              sleep 6
+            fi
+          done
+          if [ -z "$merged_head" ]; then
             echo "::error::GitHub has no test merge for this pull request; resolve its conflicts with the base branch and push again."
+            exit 1
+          fi
+          if [ "$merged_head" != "$PR_HEAD_SHA" ]; then
+            echo "::error::GitHub's test merge is of ${merged_head}, not of ${PR_HEAD_SHA}, the commit this run checks. If that commit is still the head of the pull request, it conflicts with the base branch: resolve the conflicts and push again. Otherwise the run for the newer head decides."
             exit 1
           fi
           {

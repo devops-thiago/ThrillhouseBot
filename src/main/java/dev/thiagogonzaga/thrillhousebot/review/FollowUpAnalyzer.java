@@ -223,7 +223,7 @@ public class FollowUpAnalyzer {
     if (!structured.isEmpty() || previousResponsePersisted) {
       return structured + stillOpen + answered;
     }
-    var fallback = buildPreviousFindingsContext(priorReviews, botIdentity, writers);
+    var fallback = buildPreviousFindingsContext(priorReviews, botIdentity);
     return fallback + stillOpen + answered;
   }
 
@@ -777,13 +777,16 @@ public class FollowUpAnalyzer {
    *
    * <p>A finding {@link #leftByFix left by the fix} of a prior finding this round resolves is kept
    * (#1388): it reports the defect the replacement code still has, which no open thread covers.
+   * {@code lineResolver} tells such a finding from one that quotes code the pull request left as it
+   * was.
    */
   public ReviewResponse dropRepliedDuplicates(
       ReviewResponse response,
       List<String> priorAiResponseJsons,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       BotIdentity botIdentity,
-      VerifiedWriters writers) {
+      VerifiedWriters writers,
+      DiffLineResolver lineResolver) {
     if (response.findings().isEmpty() || inlineComments.isEmpty()) {
       return response;
     }
@@ -792,13 +795,12 @@ public class FollowUpAnalyzer {
       return response;
     }
 
-    var resolvedNow = resolvedKeys(response.previousFindingsStatus());
+    var fixes = new Fixes(resolvedKeys(response.previousFindingsStatus()), lineResolver);
     var kept = new ArrayList<ReviewResponse.Finding>();
     var dropped = false;
     for (ReviewResponse.Finding finding : response.findings()) {
       ReviewResponse.Finding duplicateOf =
-          findRepliedDuplicate(
-              finding, priorRounds, inlineComments, botIdentity, writers, resolvedNow);
+          findRepliedDuplicate(finding, priorRounds, inlineComments, botIdentity, writers, fixes);
       if (duplicateOf == null) {
         kept.add(finding);
         continue;
@@ -841,10 +843,10 @@ public class FollowUpAnalyzer {
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       BotIdentity botIdentity,
       VerifiedWriters writers,
-      Set<String> resolvedNow) {
+      Fixes fixes) {
     for (List<ReviewResponse.Finding> previous : priorRounds) {
       for (var prior : previous) {
-        if (!isSameFinding(finding, prior) || leftByFix(finding, prior, resolvedNow)) {
+        if (!isSameFinding(finding, prior) || leftByFix(finding, prior, fixes)) {
           continue;
         }
         // Marker indices are only meaningful within their own round; across rounds the same index
@@ -873,28 +875,44 @@ public class FollowUpAnalyzer {
   }
 
   /**
+   * What this round says was fixed, and the diff to hold a claimed gap against.
+   *
+   * @param resolvedNow the keys of the prior findings this round marks resolved
+   * @param lineResolver the review's diff
+   */
+  record Fixes(Set<String> resolvedNow, DiffLineResolver lineResolver) {}
+
+  /**
    * Whether {@code finding} reports what the fix of {@code prior} left in place (#1388): this round
    * marks {@code prior} resolved, and {@code finding} quotes code other than the code {@code prior}
    * quoted: neither quote holds the other, so a larger snippet around the prior code, or a part of
-   * it, is still the prior code. The fix replaced the flagged code, and the replacement can carry
-   * the same defect class through another mechanism, as the {@code madeOn} rewrite on #1342 matched
-   * names by substring where the code it replaced attributed every call to every file. That finding
-   * names the same defect and so reads as a re-raise, yet it is about other code, and the prior's
-   * thread is about to close. A finding with no quote cannot show it is about other code, so it is
-   * still read as a re-raise.
+   * it, is still the prior code. The quote must also reach code the pull request adds ({@link
+   * DiffLineResolver#quotesOnlyUnchangedLines}): a fix leaves its gap in the code it wrote, so a
+   * quote of a neighbouring unchanged line is the prior finding again. A quote the diff cannot
+   * place is not held against the finding. The fix replaced the flagged code, and the replacement
+   * can carry the same defect class through another mechanism, as the {@code madeOn} rewrite on
+   * #1342 matched names by substring where the code it replaced attributed every call to every
+   * file. That finding names the same defect and so reads as a re-raise, yet it is about other
+   * code, and the prior's thread is about to close. A finding with no quote cannot show it is about
+   * other code, so it is still read as a re-raise.
    */
   static boolean leftByFix(
-      ReviewResponse.Finding finding, ReviewResponse.Finding prior, Set<String> resolvedNow) {
+      ReviewResponse.Finding finding, ReviewResponse.Finding prior, Fixes fixes) {
     if (finding.suggestionOld() == null || finding.suggestionOld().isBlank()) {
       return false;
     }
     var priorKey = SuggestionFormatter.findingKey(prior.file(), prior.line(), prior.title());
-    if (!resolvedNow.contains(priorKey)) {
+    if (!fixes.resolvedNow().contains(priorKey)) {
       return false;
     }
     var quoted = quotedCode(finding.suggestionOld());
     var priorQuoted = quotedCode(prior.suggestionOld());
-    return priorQuoted.isEmpty() || !(quoted.contains(priorQuoted) || priorQuoted.contains(quoted));
+    if (!priorQuoted.isEmpty() && (quoted.contains(priorQuoted) || priorQuoted.contains(quoted))) {
+      return false;
+    }
+    return !fixes
+        .lineResolver()
+        .quotesOnlyUnchangedLines(finding.file(), finding.suggestionOld(), finding.line());
   }
 
   /** {@code quote} with its whitespace runs collapsed, so a re-indented quote is the same code. */
@@ -4936,9 +4954,7 @@ public class FollowUpAnalyzer {
    * offered to the model as a prior finding ({@link #isSelfAuthoredStatusBody}).
    */
   public String buildPreviousFindingsContext(
-      List<GitHubReviewClient.ReviewResponse> priorReviews,
-      BotIdentity botIdentity,
-      VerifiedWriters writers) {
+      List<GitHubReviewClient.ReviewResponse> priorReviews, BotIdentity botIdentity) {
     if (priorReviews == null || priorReviews.isEmpty()) return "";
 
     var lastBotReview =

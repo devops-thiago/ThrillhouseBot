@@ -570,7 +570,8 @@ public class FindingPipeline {
             ctx.priorAiResponseJsons(),
             ctx.inlineComments(),
             botIdentity,
-            ctx.verifiedWriters());
+            ctx.verifiedWriters(),
+            lineResolver);
     // #726: a novel lower-confidence hypothesis on an anchor the maintainer has already
     // dispositioned twice is a re-roll of the dice, not a finding to disposition again.
     refined =
@@ -1832,7 +1833,8 @@ public class FindingPipeline {
             ctx.priorAiResponseJsons(),
             ctx.inlineComments(),
             botIdentity,
-            ctx.verifiedWriters());
+            ctx.verifiedWriters(),
+            lineResolver);
     // #726: a novel lower-confidence hypothesis on an anchor the maintainer has already
     // dispositioned twice is a re-roll of the dice, not a finding to disposition again.
     aiResponse =

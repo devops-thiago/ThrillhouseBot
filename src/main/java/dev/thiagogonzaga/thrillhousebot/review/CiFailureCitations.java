@@ -88,6 +88,12 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
   /** The line a detailed check's failing tests are listed under. */
   private static final String FAILING_TESTS = CiFailureContextResolver.FAILING_TESTS;
 
+  /** How the line a detailed check's annotations are listed under opens. */
+  private static final String ANNOTATIONS = CiFailureContextResolver.ANNOTATIONS;
+
+  /** Annotation locations named on a finding's basis; a check lists eight at most. */
+  static final int MAX_ANNOTATION_LOCATIONS = 3;
+
   /** Characters of a check name repeated in a note; names are output the pull request controls. */
   static final int MAX_NAME_CHARS = 120;
 
@@ -309,10 +315,11 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
   }
 
   /**
-   * Each failing check: its name as rendered, as the padded words a finding is matched on, and the
-   * failing tests its job log names.
+   * Each failing check: its name as rendered, as the padded words a finding is matched on, the
+   * failing tests its job log names, and its annotation lines as the section lists them.
    */
-  private record Check(String name, String words, List<FailingTest> tests) {}
+  private record Check(
+      String name, String words, List<FailingTest> tests, List<String> annotations) {}
 
   /**
    * What a finding cites: a check by its name ({@code test} null), or by one of its tests, named or
@@ -352,7 +359,11 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
       String name = reader.names.get(i).strip();
       if (!normalized(name).isBlank()) {
         checks.add(
-            new Check(name, normalized(name), failingTests(reader.testLines.get(i), sources)));
+            new Check(
+                name,
+                normalized(name),
+                failingTests(reader.testLines.get(i), sources),
+                List.copyOf(reader.annotationLines.get(i))));
       }
     }
     return checks.isEmpty() ? NONE : new CiFailureCitations(List.copyOf(checks));
@@ -362,13 +373,18 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
   private enum Listing {
     NONE,
     NAMED_ONLY,
-    FAILING_TESTS
+    FAILING_TESTS,
+    ANNOTATIONS
   }
 
-  /** Reads the rendered section line by line: each check's name, and its failing-test lines. */
+  /**
+   * Reads the rendered section line by line: each check's name, its failing-test lines and its
+   * annotation lines.
+   */
   private static final class SectionReader {
     private final List<String> names = new ArrayList<>();
     private final List<List<String>> testLines = new ArrayList<>();
+    private final List<List<String>> annotationLines = new ArrayList<>();
     private Listing listing = Listing.NONE;
 
     /**
@@ -382,12 +398,15 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
       if (line.startsWith(CHECK_HEADING) && conclusion > CHECK_HEADING.length()) {
         names.add(line.substring(CHECK_HEADING.length(), conclusion));
         testLines.add(new ArrayList<>());
+        annotationLines.add(new ArrayList<>());
         lastIsDetailed = true;
         listing = Listing.NONE;
       } else if (line.equals(NOT_DETAILED)) {
         listing = Listing.NAMED_ONLY;
       } else if (line.equals(FAILING_TESTS) && lastIsDetailed) {
         listing = Listing.FAILING_TESTS;
+      } else if (line.startsWith(ANNOTATIONS) && lastIsDetailed) {
+        listing = Listing.ANNOTATIONS;
       } else if (listing != Listing.NONE && line.startsWith(NAMED_ONLY)) {
         listItem(line.substring(NAMED_ONLY.length()));
       } else {
@@ -399,7 +418,10 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
       if (listing == Listing.NAMED_ONLY) {
         names.add(item);
         testLines.add(List.of());
+        annotationLines.add(List.of());
         lastIsDetailed = false;
+      } else if (listing == Listing.ANNOTATIONS) {
+        annotationLines.getLast().add(item);
       } else {
         testLines.getLast().add(item);
       }
@@ -640,6 +662,44 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
                         + span(citation.check().name()))
         .distinct()
         .toList();
+  }
+
+  /**
+   * Where the checks a finding cites annotated {@code file}, the finding's own (#1435): each {@code
+   * path:line} once, in the section's order, {@link #MAX_ANNOTATION_LOCATIONS} at most. Only an
+   * annotation on that file counts, so what is named is a path the review already holds and a line
+   * number, never text the check wrote.
+   */
+  List<String> annotatedLocations(String file, String title, String description) {
+    if (file == null || file.isBlank()) {
+      return List.of();
+    }
+    return citations(title, description, false).stream()
+        .flatMap(citation -> citation.check().annotations().stream())
+        .map(annotation -> locationOn(annotation, file))
+        .filter(location -> !location.isEmpty())
+        .distinct()
+        .limit(MAX_ANNOTATION_LOCATIONS)
+        .map(CiFailureCitations::span)
+        .toList();
+  }
+
+  /** The {@code path:line} an annotation line opens with when its path is {@code file}, or "". */
+  private static String locationOn(String annotation, String file) {
+    if (!annotation.startsWith(file)) {
+      return "";
+    }
+    int end = file.length();
+    if (annotation.startsWith(":", end)) {
+      int digits = end + 1;
+      while (digits < annotation.length() && Character.isDigit(annotation.charAt(digits))) {
+        digits++;
+      }
+      end = digits > end + 1 ? digits : end;
+    }
+    return end == annotation.length() || annotation.charAt(end) == ' '
+        ? annotation.substring(0, end)
+        : "";
   }
 
   private static String span(String name) {

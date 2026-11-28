@@ -150,9 +150,9 @@ deployment sets `REVIEW_LEARNINGS_ENABLED=true`; otherwise the bot replies that
 learnings are off. `/learnings` lists up to 30 entries.
 
 **Pause.** While a PR is paused, pushes are not reviewed and mentions get no
-answer. `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`,
-`/improve` and `/generate-tests` reply with a short paused notice and do
-nothing else. `/help`, `/resolve`, `/resume` and the learnings commands keep
+answer. A push still dismisses an approval the bot gave an earlier commit.
+`/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve` and
+`/generate-tests` reply with a short paused notice and do nothing else. `/help`, `/resolve`, `/resume` and the learnings commands keep
 working.
 
 **Batching.** `/describe`, `/changelog`, `/add-docs`, `/improve` and
@@ -278,6 +278,16 @@ Create the GitHub App before starting the bot; its credentials go in `.env`.
      | java scripts/GenEnv.java --host <your-host>
    ```
 
+   For an app registered on another GitHub address, ask that GitHub for the
+   conversion and pass its web address, so the `.env` gets `GITHUB_URL`
+   (`gh` must be signed in there: `gh auth login --hostname <github-host>`).
+   The address must be `https`, or the script writes no `.env`:
+
+   ```bash
+   gh api --hostname <github-host> --method POST /app-manifests/<code>/conversions \
+     | java scripts/GenEnv.java --host <your-host> --github-url https://<github-host>
+   ```
+
 > Once the bot is running, `install.html` on its own URL
 > (`https://<your-host>/install.html`, or `http://localhost:8080/install.html`)
 > detects the URL and builds the manifest for you. It has the same two optional
@@ -325,7 +335,7 @@ bounds at boot while it is on.
 | `AI_MODEL` | Chat model name. It also selects the model's entry in the per-model settings and the pricing map. | `deepseek-chat` |
 | `GITHUB_APP_ID` | GitHub App ID, from the App's settings page. Required. | _(none)_ |
 | `GITHUB_PRIVATE_KEY` | GitHub App private key (PEM), on one line with each newline written as `\n`, unquoted. Required. | _(none)_ |
-| `GITHUB_WEBHOOK_SECRET` | The GitHub App's webhook secret, used to check each delivery's HMAC signature. Required. | _(none)_ |
+| `GITHUB_WEBHOOK_SECRET` | The GitHub App's webhook secret, used to check each delivery's HMAC signature. Required. Use a long random value; one shorter than 16 characters logs a warning at start. | _(none)_ |
 | `GITHUB_CLIENT_ID` | OAuth client ID for dashboard login, from the GitHub App's settings. Leave it and `GITHUB_CLIENT_SECRET` unset to disable login. | _(none)_ |
 | `GITHUB_CLIENT_SECRET` | OAuth client secret for dashboard login, from the GitHub App's settings. | _(none)_ |
 | `DASHBOARD_URL` | Public dashboard URL, used for the OAuth callback and the session links posted to GitHub. | `http://localhost:8080` |
@@ -379,8 +389,9 @@ would push past GitHub's size limit is posted without it.
 
 `REVIEW_SHOW_EVIDENCE=true` adds a **Basis** block under each finding's
 description on its inline or file-level comment: the path-scoped rules covering
-the file, the failing check the finding cites, what the second pass did with it,
-and the review learning that demoted it. A line is left out when the review has
+the file, the failing check the finding cites with up to three places where that
+check annotated the finding's file, what the second pass did with it, and the
+review learning that demoted it. A line is left out when the review has
 nothing for it. It says what the review had, not what the model was thinking, and
 makes no model call.
 
@@ -712,32 +723,56 @@ earlier review threads yourself before merging.
 
 ### Withdrawing an earlier approval
 
-GitHub keeps counting a reviewer's approval after the same reviewer posts a
-later `COMMENT` review. So when a review does not end in an approval, the bot
+The bot approves one commit. When commits are pushed to a pull request it
+approved, it dismisses that approval at once, with a message saying that
+commits were pushed after it and naming the new head as not reviewed yet. This
+happens on the push itself, with no model call, whether or not the new head
+will be reviewed: it also covers a draft, a pull request a label, author or
+branch setting excludes, a paused one, and a push the rate window or a full
+queue holds back. If the review of the new head approves, the bot approves
+again, so a pull request that stays clean shows a dismissal followed by a new
+approval for each push. A force-push back to the commit the bot approved
+dismisses nothing while that approval stands.
+
+GitHub also keeps counting a reviewer's approval after the same reviewer posts
+a later `COMMENT` review. So when a review does not end in an approval, the bot
 first dismisses every approval it still has on the pull request, with a message
 naming the head it just reviewed. This covers a review with findings, one with
-an earlier finding still open, a CI hold and a partly reviewed diff. Only the
-bot's own approvals are dismissed, never a person's or another app's, and a
-review that approves again dismisses nothing. An approval held on CI is
-dismissed too and comes back when the checks turn green.
+an earlier finding still open, a CI hold and a partly reviewed diff. An
+approval held on CI is dismissed too and comes back when the checks turn green.
+
+Only the bot's own approvals are dismissed, never a person's or another app's,
+and a review that approves again dismisses nothing.
 
 The call needs the `Pull requests: Read & write` permission the App already
 has. On a protected branch, GitHub's API reference says the caller must also be
 a repository administrator or on the rule's "Restrict who can dismiss pull
 request reviews" list, so GitHub may refuse the dismissal there. The bot then
-logs a warning naming the review, posts its own review as usual, and the old
-approval stays until someone dismisses it. If you see that warning, add the App
+logs a warning naming the review, goes on to review the new head as usual, and
+the old approval stays until someone dismisses it. If you see that warning, add the App
 to the rule's list. A dismissal that fails for another reason (a timeout, a
 rate limit, a review GitHub no longer has) is logged with a warning that says
 so, and the bot goes on to its older approvals.
 
-The approval is withdrawn when a review finishes, not when commits are pushed,
-and not at all when no review runs for the new head (a draft, a label or path
-skip, a paused bot, a failed run) or when the bot could not list the pull
-request's reviews, which it logs as a warning. Where the bot's approval counts towards a
-required review, also turn on "Dismiss stale pull request approvals when new
-commits are pushed" in the branch protection rule or ruleset, so GitHub drops
-it on the push itself.
+Each push costs one request that lists the pull request's reviews, one more
+that reads its head when the bot has an approval to withdraw, and one per
+approval dismissed. The dismissal runs after a review of the same pull request
+that is already in progress. The approval stays only when the bot cannot
+withdraw it: it never received the push event, it restarted before the queued
+dismissal ran, the repository's account was removed from
+`GITHUB_ALLOWED_ACCOUNTS` after the approval (its events are then ignored), it
+could not list the pull request's reviews (logged as a warning), or GitHub
+refused the dismissal. Reopening a pull request whose
+branch gained commits while it was closed dismisses the approval the same way.
+
+A dismissal on a push also makes the bot forget that it reviewed the approved
+commit within `AUTO_REVIEW_MIN_INTERVAL`. So if the branch is then moved back
+to that commit inside the window, the commit is reviewed again when the window
+closes and can be approved again, instead of being skipped as already reviewed.
+Where the bot's approval counts towards a required review, also turn on
+"Dismiss stale pull request approvals when new commits are pushed" in the
+branch protection rule or ruleset, so GitHub drops it on the push whatever
+happens to the bot.
 
 ### Summary comment
 
@@ -777,14 +812,17 @@ findings: `<!-- thrillhousebot:findings v=1 [...] -->`. Each entry gives the
 finding's `key` (the one in its thread marker), `file`, `line`, `risk`,
 `confidence`, `status` (`open`), `thread`, `hasSuggestion` and `carried` (open
 since an earlier review), most severe first. `thread` is `true` when the review
-is set to open an inline thread for the finding: it posts inline, its file is
-part of the pull request and it is within the per-run comment cap. It is
-`false` for a finding listed under "Things to double-check", on a file outside
-the pull request, or past the cap. The summary is written before the review
-posts, so a thread GitHub then refuses still reads `true`; the review body lists
-that finding. The cap counts threads that landed, so after a refusal a finding
-past the cap can still get a thread while it reads `false`. An empty list is `[]`. The list stops at 100 entries or 16,000
-characters, and `omitted=N` after `v=1` counts the entries left out. It contains no model-written text.
+opens an inline thread for the finding: it posts inline, its file is part of the
+pull request and it is within the per-run comment cap. It is `false` for a
+finding listed under "Things to double-check", on a file outside the pull
+request, past the cap, or whose thread GitHub refused; the review body lists a
+refused finding. The summary is written before the review posts, so the line
+first holds the threads the review expects, and the bot edits it once the review
+has posted if GitHub refused a thread or a refusal let a finding past the cap
+take the freed slot. For a finding carried from an earlier review it says only
+that the finding is one that posts inline. An empty list is `[]`. The list stops
+at 100 entries or 16,000 characters, and `omitted=N` after `v=1` counts the
+entries left out. It contains no model-written text.
 
 The risk counts, Key Findings and "Things to double-check" cover the round's
 new findings and every earlier finding still open, each listed once and marked
@@ -1163,14 +1201,20 @@ finding is not raised again while the rule matches the same content (same file,
 title and anchor, and for a secret the same line). A secret finding ends with a
 hidden `thrillhousebot:scan-content` marker holding the first eight hex digits
 of an HMAC-SHA-256 of the flagged line (for a private key, its block), keyed
-from `GITHUB_WEBHOOK_SECRET`, which is how a later round tells a new value with
+from `GITHUB_PRIVATE_KEY`, which is how a later round tells a new value with
 the same prefix and length from the declined one. The key means a reader of the
-pull request cannot test a guessed value against the marker. The same secret
-gives the same marker across rounds and restarts; changing the webhook secret
+pull request cannot test a guessed value against the marker. The same App
+private key gives the same marker across rounds and restarts; replacing it
 makes each declined secret finding come back once, and the next decline stores
-the new marker. A decline recorded under the unkeyed marker of 0.7.0 keeps
-matching its line. A new value, or any other change to the line apart from
-leading and trailing whitespace, is raised again. A secret finding declined
+the new marker. A GitHub App can hold several private keys; instances that
+share a database must be given the same one, for the same reason. Before 0.9.4
+the marker was keyed from `GITHUB_WEBHOOK_SECRET`. A decline recorded under
+such a marker keeps matching its line while the webhook secret stays the same,
+and so does one recorded under the unkeyed marker of 0.7.0. Those older markers
+stay in the comments they were posted in, and a short webhook secret can be
+guessed from them, so replace a short one (see "Startup checks" below). A new
+value, or any other change to the line apart from leading and trailing
+whitespace, is raised again. A secret finding declined
 before 0.7.0 has no fingerprint, so its decline holds only until the head moves;
 it is then raised once more, with the marker.
 
@@ -1458,12 +1502,12 @@ PR title is sent. `NOTIFICATIONS_WEBHOOK_INCLUDE_CONTENT=true` adds
 first, each with `severity`, `file`, `line` and `title`); descriptions and code
 are never sent. `session_url` is built from `DASHBOARD_URL`.
 
-`NOTIFICATIONS_WEBHOOK_INCLUDE_OPEN_FINDINGS=true` adds `review.openFindings`
+`NOTIFICATIONS_WEBHOOK_INCLUDE_OPEN_FINDINGS=true` adds `review.open_findings`
 to the `json` format, with or without content: every finding still open on the pull request, including ones carried from earlier
 rounds, as the summary comment's findings manifest lists them.
 
 ```json
-"openFindings": {
+"open_findings": {
   "v": 1,
   "entries": [
     { "key": "1a2b3c4d", "file": "src/A.java", "line": 12, "risk": "high",
@@ -1511,7 +1555,11 @@ only at a receiver you trust with the metadata above.
 The app checks its configuration at startup and fails fast, naming every
 problem in one message, when `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY`,
 `GITHUB_WEBHOOK_SECRET` or `AI_API_KEY` is missing, or the private key is not a
-valid PEM RSA key. Dashboard OAuth is optional: with `GITHUB_CLIENT_ID` and
+valid PEM RSA key. A `GITHUB_WEBHOOK_SECRET` shorter than 16 characters does not
+stop the start; it logs a warning, because whoever finds the secret out can
+send deliveries the bot accepts as GitHub's. Generate one with
+`openssl rand -hex 32`, set it in the GitHub App's settings and in the bot's
+environment, then restart. Dashboard OAuth is optional: with `GITHUB_CLIENT_ID` and
 `GITHUB_CLIENT_SECRET` unset, dashboard login is disabled.
 
 ### Cost tracking
@@ -2096,7 +2144,8 @@ GITHUB_PRIVATE_KEY=-----BEGIN RSA PRIVATE KEY-----\nMIIEow...\n-----END RSA PRIV
 ```
 
 `GITHUB_WEBHOOK_SECRET` and `AI_API_KEY` only need to be non-empty to boot, but
-webhooks and reviews need the real values. Dashboard OAuth is optional. Then:
+webhooks and reviews need the real values. A webhook secret shorter than 16
+characters logs a warning at start. Dashboard OAuth is optional. Then:
 
 ```bash
 # Terminal 1: Smee proxy

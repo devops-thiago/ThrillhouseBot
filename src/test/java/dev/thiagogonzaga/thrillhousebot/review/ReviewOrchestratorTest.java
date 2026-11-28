@@ -51,6 +51,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -285,7 +286,7 @@ class ReviewOrchestratorTest {
     when(findingVerificationService.verify(
             anyLong(), any(), any(), any(), any(), any(), any(), any()))
         .thenAnswer(invocation -> invocation.getArgument(1));
-    when(followUpAnalyzer.dropRepliedDuplicates(any(), any(), any(), any(), any()))
+    when(followUpAnalyzer.dropRepliedDuplicates(any(), any(), any(), any(), any(), any()))
         .thenAnswer(invocation -> invocation.getArgument(0));
     lenient().when(followUpAnalyzer.parsePreviousResponses(any())).thenReturn(List.of());
     lenient()
@@ -2575,8 +2576,20 @@ class ReviewOrchestratorTest {
         verify(session, never()).setStatus(ReviewSession.STATUS_FAILED);
         assertEquals(1, lifecycleBroadcasts().size());
         // #73: the verdict is on the PR, so a failed session write still announces a completion.
-        verify(notifier).reviewCompleted(any(), anyString(), any(), any());
+        // The open findings are built on demand, from the threads the review opened.
+        var open = new AtomicReference<OpenFindings>();
+        verify(notifier)
+            .reviewCompleted(
+                any(),
+                anyString(),
+                any(),
+                argThat(
+                    findings -> {
+                      open.set(findings.get());
+                      return true;
+                    }));
         verifyNoMoreInteractions(notifier);
+        assertEquals(0, open.get().omitted());
       }
     }
 
@@ -3378,7 +3391,12 @@ class ReviewOrchestratorTest {
                 any());
         verify(followUpAnalyzer)
             .dropRepliedDuplicates(
-                any(), eq(List.of("{\"round\":2}", "{\"round\":1}")), any(), eq(BOT_ID), any());
+                any(),
+                eq(List.of("{\"round\":2}", "{\"round\":1}")),
+                any(),
+                eq(BOT_ID),
+                any(),
+                any());
         // The round did not approve the new head, so the bot's approval of the old one is
         // withdrawn.
         verify(reviewClient)
@@ -3389,7 +3407,7 @@ class ReviewOrchestratorTest {
                 "repo",
                 42,
                 1L,
-                ReviewPublisher.approvalWithdrawnMessage("abcdefgh"));
+                ApprovalWithdrawals.approvalWithdrawnMessage("abcdefgh"));
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
       }
     }

@@ -44,7 +44,7 @@ import java.util.Objects;
  * model output or PR text is sent. {@link NotificationSettings#includeContent()} adds the PR title
  * and, per finding, its severity, file, line and title (at most {@value #MAX_CONTENT_FINDINGS}) —
  * never a finding's description or suggested code. A separate opt-in, {@link
- * NotificationSettings#includeOpenFindings()}, adds {@code openFindings}, the summary comment's
+ * NotificationSettings#includeOpenFindings()}, adds {@code open_findings}, the summary comment's
  * manifest entries, which hold no free text but the file path.
  */
 public final class NotificationPayloads {
@@ -155,7 +155,7 @@ public final class NotificationPayloads {
 
   /** The summary comment's manifest entries, under the manifest's own version (#1443). */
   private static void addOpenFindings(ObjectNode review, OpenFindings open) {
-    var node = review.putObject("openFindings");
+    var node = review.putObject("open_findings");
     node.put("v", 1);
     if (open.omitted() > 0) {
       node.put("omitted", open.omitted());

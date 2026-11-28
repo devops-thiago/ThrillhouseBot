@@ -47,13 +47,13 @@ public class GitHubAppApi {
   static final ScopedValue<GitHubConnector> CONNECTOR = ScopedValue.newInstance();
 
   private final GitHubClientProvider clientProvider;
-  private final GitHubConnector connector;
+  private final GitHubConnector appConnector;
 
   @Inject
   public GitHubAppApi(
       GitHubClientProvider clientProvider, HttpClient httpClient, ThrillhouseConfig config) {
     this.clientProvider = clientProvider;
-    this.connector = new GitHubAppConnector(httpClient, config.httpRequestTimeout());
+    this.appConnector = new GitHubAppConnector(httpClient, config.httpRequestTimeout());
   }
 
   /**
@@ -108,7 +108,7 @@ public class GitHubAppApi {
 
   private GitHub applicationClient() {
     try {
-      return ScopedValue.where(CONNECTOR, connector).call(clientProvider::getApplicationClient);
+      return ScopedValue.where(CONNECTOR, appConnector).call(clientProvider::getApplicationClient);
     } catch (RuntimeException e) {
       log.error("Failed to generate GitHub App JWT", e);
       throw new GitHubAuthException("JWT generation failed", e);

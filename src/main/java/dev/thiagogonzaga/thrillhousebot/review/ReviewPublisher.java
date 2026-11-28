@@ -34,11 +34,11 @@ import jakarta.inject.Inject;
 import jakarta.ws.rs.WebApplicationException;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
@@ -79,6 +79,17 @@ public class ReviewPublisher {
   private final ThrillhouseConfig config;
   private final BotIdentity botIdentity;
   private final PendingReviewGuard pendingReviewGuard;
+  private final ApprovalWithdrawals approvalWithdrawals;
+
+  /**
+   * The summary comment the running round wrote, or found already holding its summary, by pull
+   * request: the one comment {@link #correctManifest} may edit. {@link #publishSummary} drops the
+   * entry before it writes and {@link #postReview} drops it once the review has posted, so a round
+   * whose summary was not written holds none. A pull request's reviews run one at a time, so an
+   * entry is always the running round's.
+   */
+  private final Map<String, Long> summaryOfRound =
+      Collections.synchronizedMap(new LinkedHashMap<>());
 
   @Inject
   public ReviewPublisher(
@@ -100,6 +111,7 @@ public class ReviewPublisher {
     this.config = config;
     this.botIdentity = botIdentity;
     this.pendingReviewGuard = pendingReviewGuard;
+    this.approvalWithdrawals = new ApprovalWithdrawals(reviewClient, config, botIdentity);
   }
 
   /**
@@ -156,25 +168,8 @@ public class ReviewPublisher {
       ReviewResult result,
       boolean forceSummary,
       String prText) {
-    return publishSummary(auth, owner, repo, prNumber, result, forceSummary, prText, null);
-  }
-
-  /**
-   * {@link #publishSummary(String, String, String, int, ReviewResult, boolean, String)}, with the
-   * reviewed head for the opt-in Agent next steps subsection (#1442).
-   */
-  boolean publishSummary(
-      String auth,
-      String owner,
-      String repo,
-      int prNumber,
-      ReviewResult result,
-      boolean forceSummary,
-      String prText,
-      String commitSha) {
     return publishSummary(
-        new SummaryRequest(
-            auth, owner, repo, prNumber, result, forceSummary, prText, null, commitSha));
+        new SummaryRequest(auth, owner, repo, prNumber, result, forceSummary, prText, null, null));
   }
 
   /**
@@ -200,6 +195,10 @@ public class ReviewPublisher {
             req.commitSha()));
   }
 
+  /**
+   * One summary to publish. {@code commitSha} is the reviewed head for the opt-in Agent next steps
+   * subsection (#1442).
+   */
   record SummaryRequest(
       String auth,
       String owner,
@@ -220,12 +219,14 @@ public class ReviewPublisher {
     var result = summary.result();
     var prText = summary.prText();
     var commitSha = summary.commitSha();
+    summaryOfRound.remove(summaryKey(owner, repo, prNumber));
     if (result.summaryMarkdown().isBlank()) {
       return false;
     }
     var scrubbed = PromptLabelScrubber.scrub(result);
     var state = PrSummaryGenerator.currentState(scrubbed);
-    var manifestLine = FindingsManifest.render(state, threadRule(scrubbed, summary.lineResolver()));
+    var manifestLine =
+        FindingsManifest.render(state, announcedThreads(scrubbed, summary.lineResolver()));
     var agentEnabled = agentNextStepsEnabled();
     var prTextLine = prText == null ? "" : DescriptionGapCarryover.prTextMarker(prText) + "\n";
     var headLine = agentEnabled ? AgentNextSteps.headMarker(commitSha) : "";
@@ -247,7 +248,7 @@ public class ReviewPublisher {
                 + "\n"
                 + prose);
     if (postingNew) {
-      commentClient.createComment(auth, ACCEPT, owner, repo, prNumber, request);
+      createSummaryComment(auth, owner, repo, prNumber, request);
       return true;
     }
     upsertSummaryComment(auth, owner, repo, prNumber, request, existing);
@@ -302,51 +303,56 @@ public class ReviewPublisher {
         .reduce((first, second) -> second);
   }
 
-  /**
-   * The open set the summary comment's manifest lists for {@code result} (#1433), over the same
-   * scrubbed findings, so its keys match the comment's.
-   */
-  OpenFindings openFindings(ReviewResult result, DiffLineResolver lineResolver) {
-    var scrubbed = PromptLabelScrubber.scrub(result);
-    return FindingsManifest.collect(
-        PrSummaryGenerator.currentState(scrubbed), threadRule(scrubbed, lineResolver));
+  /** {@link ManifestThreads#announced} under this deployment's inline comment cap. */
+  private Predicate<Finding> announcedThreads(ReviewResult round, DiffLineResolver lineResolver) {
+    return ManifestThreads.announced(
+        round, lineResolver, () -> config.review().maxReviewComments());
   }
 
   /**
-   * Which manifest entries {@link #postReview} is set to open an inline thread for (#1433): of the
-   * round's own findings, in the order they are posted, those that post inline on a changed file
-   * ({@link DiffLineResolver#isChangedFile}), up to {@code maxReviewComments}, the same rules
-   * {@link #postInlineComments} applies. Entries are matched by {@link
-   * SuggestionFormatter#findingKey}, so a re-raised finding the summary lists at an earlier
-   * severity still matches. An entry carried from an earlier round, which this round does not post,
-   * keeps {@link Finding#postsInline}. The rule cannot know which posts GitHub will refuse, so
-   * {@code thread} says a thread is expected, not that it exists, and it errs both ways: a refused
-   * post reads {@code true}, and because the poster counts the cap in threads that landed, a
-   * refusal lets a finding past the cap here take the freed slot while it reads {@code false}.
+   * Rewrites the summary's manifest line when the threads the review opened are not the ones the
+   * summary announced (#1433): GitHub refused a thread, a refusal freed a cap slot, or a batched
+   * review was never submitted. A round that posted as announced reads and writes nothing. The edit
+   * goes only to the comment this round's {@link #publishSummary} wrote, by its id, and replaces
+   * only the line it wrote there. A round whose summary was not written edits nothing, even when an
+   * earlier run's summary carries the same line, and so does one whose comment is no longer the
+   * newest summary or no longer carries the line. A failed read or edit is logged and costs the
+   * review nothing.
    */
-  private Predicate<Finding> threadRule(ReviewResult round, DiffLineResolver lineResolver) {
-    if (lineResolver == null) {
-      return Finding::postsInline;
+  private void correctManifest(
+      PostReviewRequest post, ReviewResult result, ManifestThreads.PostedThreads posted) {
+    var state = PrSummaryGenerator.currentState(result);
+    var announced = FindingsManifest.render(state, announcedThreads(result, post.lineResolver()));
+    var opened = FindingsManifest.render(state, ManifestThreads.posted(result, posted));
+    if (announced.equals(opened)) {
+      return;
     }
-    var roundKeys = new HashSet<String>();
-    var threadKeys = new HashSet<String>();
-    var slots = config.review().maxReviewComments();
-    for (var finding : round.findings()) {
-      var key = manifestKey(finding);
-      roundKeys.add(key);
-      if (slots > 0 && finding.postsInline() && lineResolver.isChangedFile(finding.file())) {
-        threadKeys.add(key);
-        slots--;
-      }
+    var written = summaryOfRound.get(summaryKey(post.owner(), post.repo(), post.prNumber()));
+    if (written == null) {
+      return;
     }
-    return finding -> {
-      var key = manifestKey(finding);
-      return roundKeys.contains(key) ? threadKeys.contains(key) : finding.postsInline();
-    };
-  }
-
-  private static String manifestKey(Finding finding) {
-    return SuggestionFormatter.findingKey(finding.file(), finding.line(), finding.title());
+    try {
+      latestBotSummaryComment(post.auth(), post.owner(), post.repo(), post.prNumber())
+          .filter(comment -> comment.id() == written)
+          .filter(comment -> comment.body().contains(announced))
+          .ifPresent(
+              comment ->
+                  commentClient.updateComment(
+                      post.auth(),
+                      ACCEPT,
+                      post.owner(),
+                      post.repo(),
+                      comment.id(),
+                      new GitHubCommentClient.CreateCommentRequest(
+                          comment.body().replace(announced, opened))));
+    } catch (RuntimeException e) {
+      Log.warnf(
+          e,
+          "Could not correct the findings manifest of the summary on %s/%s #%d (continuing)",
+          post.owner(),
+          post.repo(),
+          post.prNumber());
+    }
   }
 
   /**
@@ -392,10 +398,11 @@ public class ReviewPublisher {
       Optional<GitHubCommentClient.IssueComment> existing) {
     if (existing.isEmpty()) {
       Log.infof("No summary comment found on %s/%s #%d — posting a new one", owner, repo, prNumber);
-      commentClient.createComment(auth, ACCEPT, owner, repo, prNumber, request);
+      createSummaryComment(auth, owner, repo, prNumber, request);
       return;
     }
     var comment = existing.get();
+    summaryOfRound.put(summaryKey(owner, repo, prNumber), comment.id());
     if (request.body().equals(comment.body())) {
       Log.debugf(
           "Summary comment %d on %s/%s #%d is already current — not editing it",
@@ -413,8 +420,29 @@ public class ReviewPublisher {
           owner,
           repo,
           prNumber);
-      commentClient.createComment(auth, ACCEPT, owner, repo, prNumber, request);
+      summaryOfRound.remove(summaryKey(owner, repo, prNumber));
+      createSummaryComment(auth, owner, repo, prNumber, request);
     }
+  }
+
+  /**
+   * Posts the round's summary as a new comment and keeps its id for {@link #correctManifest}. A
+   * post that reports no comment keeps none, and the manifest of that round is then not corrected.
+   */
+  private void createSummaryComment(
+      String auth,
+      String owner,
+      String repo,
+      int prNumber,
+      GitHubCommentClient.CreateCommentRequest request) {
+    var created = commentClient.createComment(auth, ACCEPT, owner, repo, prNumber, request);
+    if (created != null) {
+      summaryOfRound.put(summaryKey(owner, repo, prNumber), created.id());
+    }
+  }
+
+  private static String summaryKey(String owner, String repo, int prNumber) {
+    return owner + "/" + repo + " #" + prNumber;
   }
 
   /**
@@ -668,7 +696,7 @@ public class ReviewPublisher {
    * {@code summaryPosted} to {@code false}, so no review-suppressing skip can fire, and carries no
    * previous round, so nothing is named as closed.
    */
-  void postReview(
+  ManifestThreads.PostedThreads postReview(
       String auth,
       String owner,
       String repo,
@@ -676,7 +704,7 @@ public class ReviewPublisher {
       String commitSha,
       ReviewResult result,
       DiffLineResolver lineResolver) {
-    postReview(
+    return postReview(
         new PostReviewRequest(
             auth, owner, repo, prNumber, commitSha, result, lineResolver, false, List.of()));
   }
@@ -691,14 +719,19 @@ public class ReviewPublisher {
    * budget is why. The ceiling is {@code thrillhousebot.github.write-retry-budget}; zero turns it
    * off.
    */
-  void postReview(PostReviewRequest post) {
-    GitHubWriteBudget.within(
-        post.owner() + "/" + post.repo() + " #" + post.prNumber(),
-        config.github().writeRetryBudget(),
-        () -> publishReview(post));
+  ManifestThreads.PostedThreads postReview(PostReviewRequest post) {
+    var posted = new AtomicReference<>(ManifestThreads.PostedThreads.NONE);
+    var pullRequest = summaryKey(post.owner(), post.repo(), post.prNumber());
+    try {
+      GitHubWriteBudget.within(
+          pullRequest, config.github().writeRetryBudget(), () -> posted.set(publishReview(post)));
+    } finally {
+      summaryOfRound.remove(pullRequest);
+    }
+    return posted.get();
   }
 
-  private void publishReview(PostReviewRequest post) {
+  private ManifestThreads.PostedThreads publishReview(PostReviewRequest post) {
     var auth = post.auth();
     var owner = post.owner();
     var repo = post.repo();
@@ -711,7 +744,7 @@ public class ReviewPublisher {
       // Every round that will not end in an APPROVE review: one with findings posts COMMENT or
       // REQUEST_CHANGES whatever its verdict. Before the round's own post, so a review GitHub
       // refuses or loses cannot skip it.
-      withdrawStandingApprovals(post);
+      approvalWithdrawals.afterRound(auth, owner, repo, prNumber, commitSha, post.priorReviews());
     }
     if (!result.hasIssues()) {
       // Summary-only re-run: skip restating a clean verdict when the summary re-posted and the
@@ -732,29 +765,37 @@ public class ReviewPublisher {
             "Skipping the no-issues review for %s/%s #%d — summary-only re-run on a head the"
                 + " bot already approved",
             owner, repo, prNumber);
-        return;
+        return ManifestThreads.PostedThreads.NONE;
       }
       postNoIssuesReview(post);
-      return;
+      return ManifestThreads.PostedThreads.NONE;
     }
 
     if (config.review().batchedInlineReviewEnabled()
         && hasInlinePostCandidates(result, lineResolver)) {
       // #1434: GitHub keeps one pending review per user, so a thread reply posted while this one
       // is open could land in it; MaintainerReplyService waits on this hold before replying.
+      ManifestThreads.PostedThreads posted;
       try (var _ = pendingReviewGuard.hold(owner, repo, prNumber)) {
-        publishFindings(post, result, openPendingReview(auth, owner, repo, prNumber, commitSha));
+        posted =
+            publishFindings(
+                post, result, openPendingReview(auth, owner, repo, prNumber, commitSha));
       }
-      return;
+      correctManifest(post, result, posted);
+      return posted;
     }
-    publishFindings(post, result, Optional.empty());
+    var posted = publishFindings(post, result, Optional.empty());
+    correctManifest(post, result, posted);
+    return posted;
   }
 
   /**
    * Posts the round's findings: inline threads, on {@code pending} when the round batches them
-   * (#1434), then the review body with the verdict.
+   * (#1434), then the review body with the verdict. Returns the findings whose thread reached the
+   * pull request: none when a batched review could not be submitted, since its threads went with
+   * it.
    */
-  private void publishFindings(
+  private ManifestThreads.PostedThreads publishFindings(
       PostReviewRequest post, ReviewResult result, Optional<PendingReview> pending) {
     var auth = post.auth();
     var owner = post.owner();
@@ -793,7 +834,7 @@ public class ReviewPublisher {
               String.join("\n\n", listingBodyParts(List.of(), inline, result, post)),
               event,
               List.of()));
-      return;
+      return ManifestThreads.PostedThreads.NONE;
     }
 
     var bodyParts = new ArrayList<String>();
@@ -809,11 +850,14 @@ public class ReviewPublisher {
       // Inline threads landed ({@code inline.posted() > 0} — the branch above returned otherwise).
       // Ends publishReview; the orchestrator still runs check-run conclusion, thread resolution
       // and finding-state writes after postReview returns (#1434).
-      submitPendingReviewWithFallback(
-          post,
-          pending.get(),
-          new BatchedSubmit(batchedReviewSubmitBody(bodyParts, event), event, inline, result));
-      return;
+      var submitted =
+          submitPendingReviewWithFallback(
+              post,
+              pending.get(),
+              new BatchedSubmit(batchedReviewSubmitBody(bodyParts, event), event, inline, result));
+      return submitted
+          ? ManifestThreads.PostedThreads.of(inline.threaded())
+          : ManifestThreads.PostedThreads.NONE;
     }
     if (!bodyParts.isEmpty()) {
       createReviewWithFallback(
@@ -824,6 +868,7 @@ public class ReviewPublisher {
           new GitHubReviewClient.CreateReviewRequest(
               commitSha, String.join("\n\n", bodyParts), event, List.of()));
     }
+    return ManifestThreads.PostedThreads.of(inline.threaded());
   }
 
   /**
@@ -901,120 +946,20 @@ public class ReviewPublisher {
         && java.util.Objects.equals(commitSha, latest.commitId());
   }
 
-  /**
-   * Dismisses the approvals this bot still has on the pull request, for a round that does not end
-   * in an approving review. GitHub goes on counting an {@code APPROVED} review after its author
-   * posts a later {@code COMMENT} one, so without this an approval of an earlier head would keep
-   * satisfying a required-review rule for code the bot has since declined to approve.
-   *
-   * <p>Only a review that is still {@code APPROVED} and whose author is one of the bot's own logins
-   * is touched: a person's review, another app's, and one GitHub already dismissed are left alone.
-   * Every such approval is dismissed, newest first, not only the latest, so an older one cannot
-   * count again once the newest is gone.
-   *
-   * <p>The approvals come from the run's one listing of the pull request's reviews, which {@link
-   * GitHubReviewClient#listReviews} pages through (up to 1,000 reviews). A listing that failed
-   * reaches here empty, so that round dismisses nothing; the next one reads the reviews again.
-   * {@link ReviewContextLoader#fetchPriorReviews} logs both that failure and a full walk at warn.
-   *
-   * <p>Best-effort: a dismissal GitHub refuses (on a protected branch its API reference asks for a
-   * repository administrator or a place on the rule's list of who may dismiss reviews) or that
-   * fails is logged and the round is published as usual. The walk stops only at a permission
-   * refusal (a 403 that is not a rate limit, {@link #isPermissionRefusal}), since the same refusal
-   * would meet every other call. Any other failure is about that one call or that one review: a
-   * timeout, a 5xx, a 404 or 422 (the review is gone or was dismissed since the listing), or a rate
-   * limit that outlasted the write retries. The older approvals are still tried after it. An
-   * approval that could not be dismissed stays until a later round withdraws it or a person
-   * dismisses it.
-   */
-  private void withdrawStandingApprovals(PostReviewRequest post) {
-    var reviews = post.priorReviews();
-    for (int i = reviews.size() - 1; i >= 0; i--) {
-      var review = reviews.get(i);
-      if (isStandingBotApproval(review) && dismissApproval(post, review) == Dismissal.REFUSED) {
-        return;
-      }
-    }
+  /** {@link ApprovalWithdrawals#afterPush}, for {@link ApprovalOnPush}. */
+  boolean withdrawApprovalsAfterPush(
+      String auth,
+      String owner,
+      String repo,
+      int prNumber,
+      String headSha,
+      List<GitHubReviewClient.ReviewResponse> reviews) {
+    return approvalWithdrawals.afterPush(auth, owner, repo, prNumber, headSha, reviews);
   }
 
-  /** A submitted approval by this bot that GitHub has not already dismissed. */
-  private boolean isStandingBotApproval(GitHubReviewClient.ReviewResponse review) {
-    // A review from a since-deleted account serializes as user:null.
-    return REVIEW_APPROVED.equals(review.state())
-        && review.user() != null
-        && botIdentity.matches(review.user().login());
-  }
-
-  private static final String DISMISSAL_REFUSED_HINT =
-      "GitHub refused the call, so the bot's older approvals were not tried. Check that the App has"
-          + " Pull requests: write and that branch protection lets it dismiss reviews";
-
-  private static final String DISMISSAL_FAILED_HINT =
-      "The failure is not a permission refusal, so the bot's older approvals are still tried";
-
-  /** How one dismissal call ended. */
-  private enum Dismissal {
-    DONE,
-    /** GitHub answered 403 without throttling: the App may not dismiss reviews here. */
-    REFUSED,
-    /** No answer, a server error, a throttle or a 4xx about this review: the next call may work. */
-    FAILED
-  }
-
-  /** Dismisses one approval, logging a call GitHub refused or that failed. */
-  private Dismissal dismissApproval(
-      PostReviewRequest post, GitHubReviewClient.ReviewResponse approval) {
-    try {
-      reviewClient.dismissReview(
-          post.auth(),
-          ACCEPT,
-          post.owner(),
-          post.repo(),
-          post.prNumber(),
-          approval.id(),
-          approvalWithdrawnMessage(post.commitSha()));
-      Log.infof(
-          "Dismissed approval %d on %s/%s #%d — the round for %s did not approve",
-          approval.id(), post.owner(), post.repo(), post.prNumber(), post.commitSha());
-      return Dismissal.DONE;
-    } catch (RuntimeException e) {
-      var refused = isPermissionRefusal(e);
-      Log.warnf(
-          e,
-          "Could not dismiss approval %d on %s/%s #%d although the round for %s did not approve —"
-              + " it still counts towards the pull request's approvals until someone dismisses it."
-              + " %s",
-          approval.id(),
-          post.owner(),
-          post.repo(),
-          post.prNumber(),
-          post.commitSha(),
-          refused ? DISMISSAL_REFUSED_HINT : DISMISSAL_FAILED_HINT);
-      return refused ? Dismissal.REFUSED : Dismissal.FAILED;
-    }
-  }
-
-  /**
-   * Whether GitHub refused this call for want of permission ({@link
-   * GitHubApiError#isPermissionRefusal()}). Every other answer says nothing about the App's right
-   * to dismiss reviews here: a 404 or 422 is about the one review, and a 429 or a rate-limit 403 is
-   * a throttle the write retries did not outlast.
-   */
-  private static boolean isPermissionRefusal(RuntimeException failure) {
-    return webApplicationFailure(failure)
-        .flatMap(GitHubApiError::of)
-        .filter(GitHubApiError::isPermissionRefusal)
-        .isPresent();
-  }
-
-  /**
-   * The reason GitHub shows on the timeline beside a dismissed approval. It names the round, not a
-   * review, because a round held on CI can withdraw an approval without posting a review.
-   */
-  static String approvalWithdrawnMessage(String commitSha) {
-    return "ThrillhouseBot withdrew this approval: its review round for "
-        + commitSha
-        + " did not approve the pull request.";
+  /** {@link ApprovalWithdrawals#isStandingBotApproval}. */
+  boolean isStandingBotApproval(GitHubReviewClient.ReviewResponse review) {
+    return approvalWithdrawals.isStandingBotApproval(review);
   }
 
   /** One coverage notice for the outcome, including verification-only delta disclosures. */
@@ -2166,8 +2111,10 @@ public class ReviewPublisher {
    * thread. An ambiguous failure after which the review reads as submitted is a success. One whose
    * state cannot be read throws {@link ReviewPostException}, since listing the findings again could
    * duplicate a review that landed.
+   *
+   * @return whether the pending review, and so its threads, reached the pull request
    */
-  private void submitPendingReviewWithFallback(
+  private boolean submitPendingReviewWithFallback(
       PostReviewRequest post, PendingReview pending, BatchedSubmit submit) {
     var auth = post.auth();
     var owner = post.owner();
@@ -2182,11 +2129,11 @@ public class ReviewPublisher {
           prNumber,
           pending.id(),
           new GitHubReviewClient.SubmitReviewRequest(submit.body(), submit.event()));
-      return;
+      return true;
     } catch (RuntimeException e) {
       logReviewRejection(e, owner, repo, prNumber);
       if (!isRefusal(e) && submittedDespite(post, pending, e)) {
-        return;
+        return true;
       }
     }
     Log.warnf(
@@ -2207,6 +2154,7 @@ public class ReviewPublisher {
                     submit.inline().threaded(), submit.inline(), submit.result(), post)),
             submit.event(),
             List.of()));
+    return false;
   }
 
   /**
@@ -2402,7 +2350,7 @@ public class ReviewPublisher {
   }
 
   /** The HTTP-carrying failure in the cause chain, if any — the one whose response can be read. */
-  private static Optional<WebApplicationException> webApplicationFailure(Throwable rejection) {
+  static Optional<WebApplicationException> webApplicationFailure(Throwable rejection) {
     for (Throwable t = rejection; t != null; t = t.getCause()) {
       if (t instanceof WebApplicationException web) {
         return Optional.of(web);

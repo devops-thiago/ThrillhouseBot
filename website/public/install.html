@@ -113,6 +113,14 @@
   <pre>gh api --method POST /app-manifests/&lt;code&gt;/conversions \
   | java scripts/GenEnv.java --host &lt;your-host&gt;</pre>
   <p>
+    If you registered the app on another GitHub address, ask that GitHub for
+    the conversion and pass its web address, so the <code>.env</code> gets
+    <code>GITHUB_URL</code> (<code>gh</code> must be signed in there:
+    <code>gh auth login --hostname &lt;github-host&gt;</code>):
+  </p>
+  <pre>gh api --hostname &lt;github-host&gt; --method POST /app-manifests/&lt;code&gt;/conversions \
+  | java scripts/GenEnv.java --host &lt;your-host&gt; --github-url https://&lt;github-host&gt;</pre>
+  <p>
     Using Smee? Don't pass the Smee URL as <code>--host</code> (that writes
     <code>DASHBOARD_URL=https://&lt;host&gt;</code>); run it without
     <code>--host</code> and then set

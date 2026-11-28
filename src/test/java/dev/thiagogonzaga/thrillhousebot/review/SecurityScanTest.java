@@ -2165,15 +2165,64 @@ class SecurityScanTest {
     when(security.skippedFiles()).thenReturn(SKIPPED);
     var github = mock(ThrillhouseConfig.GitHubConfig.class);
     when(config.github()).thenReturn(github);
+    var appKey = pkcs1Base64();
+    when(github.privateKey()).thenReturn(pem(appKey, "\n"));
     when(github.webhookSecret()).thenReturn("configured-webhook-secret");
     var configured = new SecurityScan(config);
     assertTrue(configured.enabled());
     assertTrue(
         configured.scan(List.of(added("pod.yaml", "  privileged: true"))).detections().isEmpty());
-    // #985: the fingerprint is keyed from the webhook secret.
-    assertEquals(
-        keyed("configured-webhook-secret").contentFingerprint(SecurityRule.JWT, "x"),
-        configured.contentFingerprint(SecurityRule.JWT, "x"));
+
+    // The posted fingerprint is keyed from the App private key, and the webhook secret has no
+    // part in it: a marker gives nothing to test a guessed webhook secret against.
+    var posted = configured.contentFingerprint(SecurityRule.JWT, "x");
+    when(github.webhookSecret()).thenReturn("another-webhook-secret");
+    assertEquals(posted, new SecurityScan(config).contentFingerprint(SecurityRule.JWT, "x"));
+    assertNotEquals(
+        posted,
+        SecurityScan.contentFingerprint(
+            "HmacSHA256",
+            SecurityScan.webhookKey("configured-webhook-secret"),
+            SecurityRule.JWT,
+            "x"));
+    // The same key spelled on one line with \\n escapes, as .env needs, gives the same marker.
+    when(github.privateKey()).thenReturn(pem(appKey, "\\n"));
+    assertEquals(posted, new SecurityScan(config).contentFingerprint(SecurityRule.JWT, "x"));
+    // Another App key gives another.
+    when(github.privateKey()).thenReturn(pem(pkcs1Base64(), "\n"));
+    assertNotEquals(posted, new SecurityScan(config).contentFingerprint(SecurityRule.JWT, "x"));
+  }
+
+  @Test
+  void anAppKeyThatDoesNotParseGivesTheBlankKeyAndNeverTheWebhookSecret() {
+    assertEquals(0, SecurityScan.appKeyMaterial(null).length);
+    assertEquals(0, SecurityScan.appKeyMaterial("not a key").length);
+    assertNotEquals(0, SecurityScan.appKeyMaterial(pem(pkcs1Base64(), "\n")).length);
+    // A missing webhook secret still gives the key earlier markers are compared under.
+    org.junit.jupiter.api.Assertions.assertArrayEquals(
+        SecurityScan.webhookKey(""), SecurityScan.webhookKey(null));
+  }
+
+  /** A fresh 2048-bit RSA key as the base64 of its PKCS#1 form, the one GitHub hands out. */
+  private static String pkcs1Base64() {
+    try {
+      var generator = java.security.KeyPairGenerator.getInstance("RSA");
+      generator.initialize(2048);
+      var pkcs8 = generator.generateKeyPair().getPrivate().getEncoded();
+      // A 2048-bit key's PKCS#8 form is a fixed 26-byte header and then the PKCS#1 key.
+      return java.util.Base64.getEncoder()
+          .encodeToString(java.util.Arrays.copyOfRange(pkcs8, 26, pkcs8.length));
+    } catch (java.security.NoSuchAlgorithmException e) {
+      throw new IllegalStateException(e);
+    }
+  }
+
+  private static String pem(String base64, String lineBreak) {
+    return "-----BEGIN RSA PRIVATE KEY-----"
+        + lineBreak
+        + base64
+        + lineBreak
+        + "-----END RSA PRIVATE KEY-----";
   }
 
   @Test
@@ -2612,7 +2661,7 @@ class SecurityScanTest {
 
   @Test
   void theContentFingerprintNamesAMissingAlgorithm() {
-    var key = SecurityScan.fingerprintKey("s");
+    var key = SecurityScan.fingerprintKey(new byte[] {'s'});
     var thrown =
         org.junit.jupiter.api.Assertions.assertThrows(
             IllegalStateException.class,
@@ -2643,7 +2692,8 @@ class SecurityScanTest {
       for (int i = 0; i < n; i++) {
         var found = modelFinding("src/config.env", i * 10 + 1, "scan identity " + i, "d");
         detections.add(
-            new SecurityScan.Detection(SecurityRule.GENERIC_SECRET, found, null, null, Set.of()));
+            new SecurityScan.Detection(
+                SecurityRule.GENERIC_SECRET, found, Set.of(), null, Set.of()));
         models.add(modelFinding("src/config.env", 1000000 + i, "unrelated allocation " + i, "d"));
       }
       var result = new SecurityScan.Result(detections, List.of(), List.of("src/config.env"));
@@ -2795,6 +2845,60 @@ class SecurityScanTest {
         1,
         mergeAfterDecline(
                 keyed("webhook-secret-two"), response(), files, List.of(), List.of(keyedFinding))
+            .findings()
+            .size());
+  }
+
+  @Test
+  void aDeclineUnderTheWebhookKeyedMarkerKeepsMatchingAfterTheUpgrade() {
+    var line = "T=" + fake.githubToken();
+    var material = "app-key-material".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    var s = new SecurityScan(true, false, 3.5, SKIPPED, material, "webhook-secret-one");
+    var raised =
+        s.merge(response(), s.scan(List.of(added("app.env", line))), List.of(), Set.of())
+            .findings()
+            .get(0);
+    // What the version before posted for this line: keyed from the webhook secret.
+    var webhookMarker =
+        SecurityScan.contentFingerprint(
+            "HmacSHA256",
+            SecurityScan.webhookKey("webhook-secret-one"),
+            SecurityRule.GITHUB_TOKEN,
+            line);
+    assertNotEquals(webhookMarker, SecurityScan.fingerprintOf(raised.description()));
+    var declinedBeforeUpgrade =
+        new ReviewResponse.Finding(
+            raised.risk(),
+            raised.confidence(),
+            raised.file(),
+            raised.line(),
+            raised.title(),
+            raised
+                .description()
+                .replace(SecurityScan.fingerprintOf(raised.description()), webhookMarker),
+            null,
+            null);
+
+    // After a push, on the same content: still covered, so it is not raised again.
+    var files = List.of(added("app.env", "X=1", line));
+    assertTrue(
+        mergeAfterDecline(s, response(), files, List.of(), List.of(declinedBeforeUpgrade))
+            .findings()
+            .isEmpty());
+    // A rotated value is raised.
+    var rotated = List.of(added("app.env", "X=1", "T=" + fake.githubToken()));
+    assertEquals(
+        1,
+        mergeAfterDecline(s, response(), rotated, List.of(), List.of(declinedBeforeUpgrade))
+            .findings()
+            .size());
+    // With the webhook secret changed since, the old marker no longer matches and the finding
+    // is raised again: the holding direction.
+    var afterRotation = new SecurityScan(true, false, 3.5, SKIPPED, material, "webhook-secret-two");
+    assertEquals(
+        1,
+        mergeAfterDecline(
+                afterRotation, response(), files, List.of(), List.of(declinedBeforeUpgrade))
             .findings()
             .size());
   }

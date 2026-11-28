@@ -67,13 +67,98 @@ cannot resolve its review threads.
   (#1487).
 - **Open findings in the review webhook** (#1443): with `NOTIFICATIONS_WEBHOOK_INCLUDE_OPEN_FINDINGS`
   (new, default off), a `review.completed` payload in the `json` format carries
-  `review.openFindings`, the entries of the summary comment's findings manifest: file paths and
+  `review.open_findings`, the entries of the summary comment's findings manifest: file paths and
   lines, no titles. Off, nothing new leaves the process.
 - **The App asks for `Contents: Read & write`** (#1471): GitHub refuses to resolve a review
   thread without it, so an app registered from the manifest or installer never could. The bot
   writes no file, commit or branch.
 - **A GitHub Enterprise setup guide**: `docs/GITHUB_ENTERPRISE.md` and a docs-site page say which
   GitHub Enterprise products work and what to set up on GitHub for an organization (#1488).
+### Fixed
+
+- **A review no longer drifts into another language** (#1467): no prompt said which language to
+  write in, so a model could answer an English pull request with a summary in another one. Every
+  prompt now asks for English prose, with code, identifiers, paths and quotations left as they are.
+  That includes replies and the `/describe`, `/changelog`, `/add-docs`, `/improve` and `/generate-tests` commands.
+- **A review that outlives its installation token switches to the new one** (#1431): the first
+  call GitHub rejects still gets a replacement and is repeated, and every later call made with the
+  old token now sends that replacement. Before, each of them drew its own `401 Bad credentials`
+  first, so a long review made two requests for every one it needed and logged a warning for each.
+- **A review names the earlier findings it says are still open** (#1436): a review with no new
+  findings used to state only how many remain unresolved. Its body now lists each of them by
+  `path:line` and title, most severe first, with a link to its review thread or a mark saying it
+  has none (a "Things to double-check" item, or no thread found). A review that also raises
+  findings lists them under its delta section (`REVIEW_FOLLOW_UP_SUMMARY_ENABLED`), which states
+  the still-open count. A list too long for GitHub's comment limit ends with the number of rows
+  left out.
+- **A clear or decline comment says what it matched** (#1463): the reply lists the open findings
+  the comment names by `path:line` and title, and gives the title on record for a `path:line` named
+  with another one, where it used to promise to close whatever was named even when nothing was. A
+  title containing a backtick, `<` or `|` now also matches as the summary's source escapes it.
+- **GitHub Enterprise Server can be used.** The bot called `https://api.github.com` and linked to
+  `https://github.com` whatever the deployment: the REST and GraphQL clients, the GitHub App
+  extension, dashboard sign-in and sign-out, pull request links in notifications and learnings, and
+  the App install page were all fixed to github.com. `GITHUB_URL`, `GITHUB_API_URL` and
+  `GITHUB_GRAPHQL_URL` now set the web, REST and GraphQL endpoints (for example
+  `https://ghes.example.com`, `https://ghes.example.com/api/v3` and
+  `https://ghes.example.com/api/graphql`), and `GITHUB_OAUTH_URL` follows `GITHUB_URL` unless set.
+  The defaults are unchanged.
+- **A refused thread resolve says why** (#1471): GitHub's reason is logged instead of being
+  discarded, and a missing permission is named in the reply to a `resolved` directive and to
+  `/resolve`, which no longer answers that there is nothing to resolve.
+- **Dashboard links and issue URLs follow `GITHUB_URL`** (#1491): the two pull request links in the
+  dashboard's session history pointed at `github.com` whatever was configured, and a linked issue
+  written as a full URL was only recognised there. The session payloads now carry
+  `pullRequestUrl`, and only issue URLs on the configured web address are read.
+- **A one-line private key no longer stops the application at start** (#1314): the extension, which
+  reads `GITHUB_PRIVATE_KEY` too, rejected the form `.env.example` asks for (one line with literal
+  `\n` escapes) and a key without its PEM header and footer. Every key the start-up check accepts
+  is now handed to the extension in a form it can read, and a padded `GITHUB_APP_ID` is stripped
+  for it as the bot's own signer did.
+- **The summary comment follows a verdict held on CI** (#1462): when CI turns green and the held
+  approval is posted, the summary no longer says it cannot be approved or lists the checks as
+  pending. While the hold stays, its table shows the checks' current state. The Agent next steps
+  section, when on, follows it too. A summary posted before this change is not rewritten.
+- **A push inside the automatic review window is reviewed when the window closes**: a push that
+  arrived inside `AUTO_REVIEW_MIN_INTERVAL` was skipped and never reviewed, so an approval of the
+  previous commit could stay on code the bot had not read. The bot now keeps the latest pushed head
+  and reviews it when the window closes. A reopen or a repeated ready-for-review of the commit
+  just reviewed is still skipped. The waiting review is held in memory: a restart loses it, and a
+  push is still skipped when 10,000 pull requests already have a review waiting.
+- **A failed read of a pull request's reviews is logged as a warning**: it was a debug line that
+  read as a normal first review. Reaching the limit of 1,000 reviews read per pull request is logged
+  too.
+- **A review does not approve when no earlier review of the pull request can be read**: when the
+  stored results of every earlier review were missing or unreadable, a follow-up review had nothing
+  to check them against and approved if it found nothing new. It now ends as `COMMENT`, and the
+  summary, the review body and the check run say that the earlier reviews could not be read. A
+  first review, and a pull request with at least one readable earlier review, are unchanged.
+- **A re-raised finding that quotes unchanged code is a repeat, not a gap (#1397)**: a finding
+  raised again after its fix was kept as "a gap the fix left" even when its quote sat only on lines
+  the pull request did not change. It is now dropped as a repeat of the answered finding.
+- **An added line that starts with `++` is read as added (#1396)**: a line such as `++i;` was
+  mistaken for the diff's file header when the bot collected changed names and configuration keys,
+  so what it declared was missed. The file header a patch may carry was also scanned for environment
+  reads, so a path that spells one (such as `process.env.ts`) could spend a fetch for
+  configuration-key context; it is now skipped.
+- **A suggestion's new code loses a copied line number (#1364)**: when the quoted old code kept its
+  diff markers and a new line dropped them, the copied line number stayed in the suggestion.
+- **An environment read named in a docstring is not a read (#1473)**: a read named inside a
+  multi-line docstring or block comment counted as one when the bot chose which changed files to
+  fetch for configuration-key context.
+- **The findings manifest's `thread` value follows the threads that were opened (#1465)**: when
+  GitHub refused a thread, or a refusal let a finding past the comment cap take the freed slot, the
+  summary's manifest still carried the value announced before the review posted. The bot now
+  corrects the manifest line after the review posts.
+- **`/resolve` says when it could not read or resolve the threads (#1471)**: it answered that there
+  were no open finding threads when GitHub failed to return the pull request's review threads, and
+  reported nothing when every resolve attempt failed. It now says the threads could not be read, or
+  how many it tried and GitHub left open.
+- **`scripts/GenEnv.java` refuses arguments it cannot read**: an unknown option, a stray argument or
+  an option given without a value was dropped without a word, so `--host` given last wrote the
+  `<your-host>` placeholder. The script now stops with a message and writes no `.env`. `--host=...`
+  is accepted too.
+
 ### Security
 
 - **Text a model wrote can no longer notify people, post raw HTML or offer its own suggestion**:
@@ -228,6 +313,26 @@ cannot resolve its review threads.
   stale pull request approvals when new commits are pushed" wherever the bot's approval counts;
   it is also the only protection for a push the bot does not review (a skipped, failed or
   superseded run). Affects every release up to 0.9.3.
+- **An approval is withdrawn when commits are pushed, and when a later review does not approve**:
+  the bot approved a pull request and more commits were pushed. The approval of the old head kept
+  satisfying a required-review rule for code the bot had not approved: until the new head was
+  reviewed, for good when it was not (a draft, a filtered or paused pull request, a failed run), and
+  even after a review that ended as `COMMENT` (findings, an earlier finding still open, a CI hold, a
+  partly reviewed diff), because GitHub goes on counting an approval after its author posts a
+  comment review. The bot now dismisses its approvals of earlier commits as soon as the push arrives
+  (or the pull request is reopened on another commit), without a model call and whether or not the
+  new head will be reviewed, with a message saying commits were pushed after the approval and naming
+  the new head. A review that does not end in an approval also dismisses every approval the bot
+  still has before it posts, with a message naming the head it reviewed. Only the bot's own reviews
+  are dismissed. A review that approves posts a new approval, so a pull request that stays clean
+  shows a dismissal and a new approval for each push; a force-push back to the approved commit
+  dismisses nothing. Each push costs one request to list the pull request's reviews. The dismissal
+  uses the `Pull requests: Read & write` permission the App already has. On a protected branch
+  GitHub may refuse it unless the App is allowed to dismiss reviews there (the rule's "Restrict who
+  can dismiss pull request reviews" list): the bot then logs a warning, reviews as usual and the old
+  approval stays. Keep "Dismiss stale pull request approvals when new commits are pushed" on
+  wherever the bot's approval counts, for a push the bot never hears about or cannot act on. Affects
+  every release up to 0.9.3.
 - **Only someone with write access can get a finding closed or declined.** A reply on a finding's
   thread was shown to the model whoever wrote it, and a finding the model then reported as
   declined (`justified`) no longer held the approval, so a reply from the pull request's author
@@ -329,6 +434,15 @@ cannot resolve its review threads.
   `REVIEW_AGENT_PROMPT_ENABLED`, the block came after the comment's hidden finding marker and
   printed the file name, so a crafted file name could stand in for the marker and detach the thread
   from its finding. The block is now placed before the marker.
+- **Nine patterns over model-written text read each run once**: the URL pattern in finding text, the
+  quoted-passage patterns and the file-name, trailing-stop and omission patterns of the
+  description-gap screen took quadratic time on a long run of one kind of character, so 64,000 such
+  characters could hold a review worker for several seconds per pattern. The matches are unchanged.
+- **The secret-scan marker is keyed from the GitHub App private key**: the hidden marker a
+  secret-scan finding carries was keyed from the webhook secret, so a pull request author could use
+  posted markers to test guesses of a short webhook secret. Declines recorded under earlier markers
+  keep matching. A `GITHUB_WEBHOOK_SECRET` shorter than 16 characters now logs a warning at start.
+  If yours is short, replace it: markers already posted stay public.
 
 ## [0.9.3] - 2026-11-26
 

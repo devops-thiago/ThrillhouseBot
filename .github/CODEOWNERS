@@ -11,5 +11,5 @@
 /scripts/dco/ @devops-thiago @omatheusmesmo @matheusandre1
 # Deletes container image versions; a wrong rule removes published images.
 /scripts/ghcr-prune/ @devops-thiago @omatheusmesmo @matheusandre1
-# The required released-history check runs this checker from the base branch.
+# The required released-history check runs this checker from the default branch.
 /scripts/released-history/ @devops-thiago @omatheusmesmo @matheusandre1

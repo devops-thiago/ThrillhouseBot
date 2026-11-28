@@ -497,7 +497,10 @@ class CommentCommandServiceTest {
     verify(reviewThreadService).resolve(any(), eq("T100"));
     verify(reviewThreadService).resolve(any(), eq("T102"));
     verify(reviewThreadService, never()).resolve(any(), eq("T200"));
-    assertTrue(postedBody().contains("Resolved 1"));
+    assertEquals(
+        "✅ Resolved 1 ThrillhouseBot finding thread(s). ⚠️ 1 more could not be resolved and"
+            + " stay(s) open; the bot's log has GitHub's reason.",
+        postedBody());
   }
 
   @Test
@@ -666,6 +669,79 @@ class CommentCommandServiceTest {
 
     verify(reviewThreadService).resolve(any(), eq("T102"));
     assertTrue(postedBody().contains("Resolved 1"));
+  }
+
+  @Test
+  void resolveReportsOnlyTheCountWhenEveryThreadWasResolved() {
+    authorize(true);
+    when(reviewClient.listPullRequestComments(any(), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(List.of(comment(100L, null, "thrillhousebot[bot]")));
+    when(reviewThreadService.threadsByRootComment(any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(Map.of(100L, new ReviewThreadService.ThreadRef("T100", false)));
+    when(reviewThreadService.resolve(any(), eq("T100"))).thenReturn(true);
+
+    service.handle(ctx(CommentCommand.RESOLVE));
+
+    assertEquals("✅ Resolved 1 ThrillhouseBot finding thread(s).", postedBody());
+  }
+
+  // #1471: a thread list GitHub did not return is a failure, not a PR with nothing to resolve.
+  @Test
+  void resolveSaysTheThreadsCouldNotBeReadWhenTheListingFails() {
+    authorize(true);
+    when(reviewClient.listPullRequestComments(any(), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(List.of(comment(100L, null, "thrillhousebot[bot]")));
+    var errors = JsonNodeFactory.instance.arrayNode();
+    errors.addObject().put("message", "Something went wrong");
+    when(reviewThreadService.threadsByRootComment(any(), eq("owner"), eq("repo"), eq(7)))
+        .thenThrow(GitHubGraphQLException.from(errors));
+
+    service.handle(ctx(CommentCommand.RESOLVE));
+
+    assertEquals(CommentCommandService.RESOLVE_LISTING_FAILED_NOTICE, postedBody());
+    verify(reviewThreadService, never()).resolve(any(), any());
+  }
+
+  @Test
+  void resolveSaysTheAppIsNotPermittedWhenTheListingIsRefusedForThat() {
+    authorize(true);
+    when(reviewClient.listPullRequestComments(any(), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(List.of(comment(100L, null, "thrillhousebot[bot]")));
+    var errors = JsonNodeFactory.instance.arrayNode();
+    errors.addObject().put("message", "Resource not accessible by integration");
+    when(reviewThreadService.threadsByRootComment(any(), eq("owner"), eq("repo"), eq(7)))
+        .thenThrow(GitHubGraphQLException.from(errors));
+
+    service.handle(ctx(CommentCommand.RESOLVE));
+
+    assertEquals(CommentCommandService.RESOLVE_NOT_PERMITTED_NOTICE, postedBody());
+  }
+
+  @Test
+  void resolveSaysSoWhenEveryAttemptFailed() {
+    authorize(true);
+    when(reviewClient.listPullRequestComments(any(), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(
+            List.of(
+                comment(100L, null, "thrillhousebot[bot]"),
+                comment(102L, null, "thrillhousebot[bot]")));
+    when(reviewThreadService.threadsByRootComment(any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(
+            Map.of(
+                100L, new ReviewThreadService.ThreadRef("T100", false),
+                102L, new ReviewThreadService.ThreadRef("T102", false)));
+    var errors = JsonNodeFactory.instance.arrayNode();
+    errors.addObject().put("message", "Could not resolve to a node");
+    when(reviewThreadService.resolve(any(), eq("T100")))
+        .thenThrow(GitHubGraphQLException.from(errors));
+    when(reviewThreadService.resolve(any(), eq("T102"))).thenReturn(false);
+
+    service.handle(ctx(CommentCommand.RESOLVE));
+
+    assertEquals(
+        "⚠️ 2 ThrillhouseBot finding thread(s) could not be resolved and stay(s) open; the bot's"
+            + " log has GitHub's reason.",
+        postedBody());
   }
 
   @Test

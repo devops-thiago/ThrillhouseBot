@@ -415,8 +415,7 @@ class SummaryAcrossRoundsTest {
     return new FollowUpAnalyzer(new ObjectMapper())
         .buildPreviousFindingsContext(
             List.of(new GitHubReviewClient.ReviewResponse(1L, body, "COMMENTED", "sha", BOT_USER)),
-            BOT,
-            KnownWriters.ALL);
+            BOT);
   }
 
   private String postedReviewBody(

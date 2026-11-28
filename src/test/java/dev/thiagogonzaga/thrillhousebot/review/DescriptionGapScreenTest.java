@@ -18,11 +18,21 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Random;
+import java.util.regex.Pattern;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /** Dropping description gaps that misquote the description or cite nothing it says (#946). */
@@ -920,5 +930,234 @@ class DescriptionGapScreenTest {
       })
   void aBulletStatingAMismatchAssertsSomething(String gap) {
     assertFalse(DescriptionGapScreen.assertsNothing(gap));
+  }
+
+  /**
+   * An omission bullet holding one name of 400,000 characters with no extension after it. Each file
+   * name pattern used to start again after every hyphen or dot of the name and read the rest of it:
+   * 64,000 characters took 8 seconds a pattern.
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {"a-", "a.", "-_"})
+  void aLongNameInAnOmissionBulletIsReadOnce(String unit) {
+    var gap = "The description does not mention the README or " + unit.repeat(200_000) + "!";
+
+    assertTrue(
+        assertTimeoutPreemptively(
+            Duration.ofSeconds(10),
+            () -> DescriptionGapScreen.falseOmission(gap, "Rewrites the README.")));
+  }
+
+  /** A path ending in 400,000 full stops and a letter: the stops are read once, not from each. */
+  @Test
+  void aLongRunOfFullStopsInsideANameIsReadOnce() {
+    var gap =
+        "The description does not mention the README or docs/api/" + ".".repeat(400_000) + "x";
+
+    // Of the two names only the README is in the text, which is not most of them.
+    assertFalse(
+        assertTimeoutPreemptively(
+            Duration.ofSeconds(10),
+            () -> DescriptionGapScreen.falseOmission(gap, "Rewrites the README.")));
+  }
+
+  /**
+   * A bullet of 130,000 single quotes that each open a passage nothing closes: every one is
+   * followed by a letter. Each used to be read to the end of the line: 16,000 characters took 0.8
+   * seconds.
+   */
+  @Test
+  void quotesThatNeverCloseAreReadOnce() {
+    var gap = "The description says" + " 'a".repeat(130_000);
+
+    assertFalse(
+        assertTimeoutPreemptively(
+            Duration.ofSeconds(10), () -> DescriptionGapScreen.misquotes(gap, "rows are kept")));
+    assertFalse(
+        assertTimeoutPreemptively(
+            Duration.ofSeconds(10), () -> DescriptionGapScreen.assertsNothing(gap)));
+  }
+
+  /**
+   * A quote of 400,000 opening brackets that nothing closes. Each used to be read to the end of the
+   * quote: 16,000 characters took 0.8 seconds.
+   */
+  @Test
+  void bracketsThatNeverCloseInAQuoteAreReadOnce() {
+    var quote = "rows are kept " + "[".repeat(400_000) + " for a day";
+
+    assertTrue(
+        assertTimeoutPreemptively(
+            Duration.ofSeconds(10),
+            () -> DescriptionGapScreen.appearsIn(quote, "rows are kept for a day")));
+  }
+
+  /** The patterns names were found with before, which the names found now are held to. */
+  private static final List<Pattern> NAMED_FILES_BEFORE =
+      List.of(
+          Pattern.compile("(?<![\\w/.-])[\\w.-]*+(?:/[\\w.-]++){2,}+"),
+          Pattern.compile("\\b[\\w.-]++/(?![\\w-]|\\.\\w)"),
+          Pattern.compile("\\b[\\w-]++\\.(?:md|ya?ml|json|toml|xml|txt|sh|env|cfg|ini|lock)\\b"),
+          Pattern.compile("\\b[\\w-]++\\.(?:java|kts?|scala|py|go|rs|zig|c|h|rb|php|cs)\\b"),
+          Pattern.compile("\\b[\\w-]++\\.(?:[jt]sx?|mjs|vue|html|css|sql|gradle|properties)\\b"),
+          Pattern.compile("(?i)\\b[\\w]++-ci\\b"),
+          Pattern.compile("\\b(?:Dockerfile|Containerfile|Makefile|Jenkinsfile|README)\\b"));
+
+  private static final Pattern TRAILING_DOTS_BEFORE = Pattern.compile("\\.++$");
+
+  private static final Pattern OMISSION_BEFORE = Pattern.compile("\\[[^]]*+]|\\.{3}|…");
+
+  /**
+   * What the random bullets are made of: what a name holds, what ends one, what is neither, and a
+   * combining mark.
+   */
+  private static final String[] NAME_PIECES = {
+    "a", "B", "7", "_", "-", "-", ".", ".", "/", "/", " ", "\n", "é", ".md", ".c", ".ts", ".go",
+    "-ci", "README", ",", "x.yml", "\u0301"
+  };
+
+  private static final String[] OMISSION_PIECES = {"[", "[", "]", ".", ".", "…", "a", " ", "\n"};
+
+  private static String randomText(Random random, String[] pieces, int most) {
+    var text = new StringBuilder();
+    int count = random.nextInt(most);
+    for (int piece = 0; piece < count; piece++) {
+      text.append(pieces[random.nextInt(pieces.length)]);
+    }
+    return text.toString();
+  }
+
+  private static List<String> namesBefore(String gap) {
+    var names = new LinkedHashSet<String>();
+    for (var pattern : NAMED_FILES_BEFORE) {
+      var m = pattern.matcher(gap);
+      while (m.find()) {
+        names.add(TRAILING_DOTS_BEFORE.matcher(m.group()).replaceAll("").toLowerCase(Locale.ROOT));
+      }
+    }
+    return List.copyOf(names);
+  }
+
+  @Test
+  void aNameStartsAtItsFirstWordCharacter() {
+    assertEquals(
+        List.of("docs/api/v2", "ops/", "a-b.md", "x.yml", "python-ci", "readme"),
+        List.copyOf(
+            DescriptionGapScreen.namedFiles(
+                "README, docs/api/v2., ops/, --a-b.md, -x.yml and the python-ci job")));
+    // A name that follows straight on another starts at the hyphen between them.
+    assertEquals(
+        List.of("a.md", "-b.md"), List.copyOf(DescriptionGapScreen.namedFiles("a.md-b.md")));
+    assertEquals(List.of("b/"), List.copyOf(DescriptionGapScreen.namedFiles("..b/ -- .")));
+  }
+
+  /**
+   * One rule places every start: a combining mark is a word character on a letter or digit, and on
+   * nothing else. On a letter it carries the word on into the name, which then starts at the first
+   * hyphen or full stop; on a hyphen or at the start of the text the word starts after it, and so
+   * does the name.
+   */
+  @ParameterizedTest
+  @MethodSource("namesBesideACombiningMark")
+  void aCombiningMarkIsPartOfAWordOnlyOnALetterOrDigit(String gap, List<String> names) {
+    assertEquals(names, namesBefore(gap), () -> "the names the patterns found in: " + gap);
+    assertNamedAsBefore(gap);
+  }
+
+  private static void assertNamedAsBefore(String gap) {
+    assertEquals(
+        namesBefore(gap),
+        List.copyOf(DescriptionGapScreen.namedFiles(gap)),
+        () -> "the names in: " + gap);
+  }
+
+  private static Stream<Arguments> namesBesideACombiningMark() {
+    var afterTheWord = List.of("-b.md");
+    var whole = List.of("a-b.md");
+    return Stream.of(
+        Arguments.of("e\u0301a-b.md", afterTheWord),
+        Arguments.of("e\u0301a.b/", List.of(".b/")),
+        Arguments.of("e\u0301-/", List.of("-/")),
+        Arguments.of("7\u0301a-b.md", afterTheWord),
+        Arguments.of("e\u0301\u0301a-b.md", afterTheWord),
+        Arguments.of("\u0301a-b.md", whole),
+        Arguments.of("-\u0301a-b.md", whole),
+        Arguments.of(" \u0301a.b/", List.of("a.b/")),
+        Arguments.of("e\u0301 a-b.md", whole));
+  }
+
+  /**
+   * What the bullets about combining marks are made of: what a name holds, letters and digits of
+   * other scripts, and marks of every kind, in and beyond the basic plane, whole and as the halves
+   * of a pair.
+   */
+  private static final String[] MARKED_NAME_PIECES = {
+    "a",
+    "7",
+    "_",
+    "-",
+    ".",
+    "/",
+    " ",
+    ".md",
+    "-ci",
+    "é",
+    "\u0663",
+    "\u0301",
+    "\u0300",
+    "\u0903",
+    "\u20DD",
+    "\uD834\uDD67",
+    "\uD835\uDC00",
+    "\uD834",
+    "\uDD67"
+  };
+
+  @Test
+  void randomBulletsOfCombiningMarksNameTheFilesThePatternsFoundInThem() {
+    var random = new Random(1523);
+    for (int round = 0; round < 150_000; round++) {
+      var gap = randomText(random, MARKED_NAME_PIECES, 12);
+      assertNamedAsBefore(gap);
+    }
+  }
+
+  @Test
+  void randomBulletsNameTheFilesThePatternsFoundInThem() {
+    var random = new Random(1501);
+    for (int round = 0; round < 150_000; round++) {
+      var gap = randomText(random, NAME_PIECES, 14);
+      assertNamedAsBefore(gap);
+    }
+  }
+
+  @Test
+  void aQuoteIsSplitAtItsOmissions() {
+    assertEquals(
+        List.of("the cache ", " bounded", " by ", "TTL [and"),
+        DescriptionGapScreen.betweenOmissions("the cache [is] bounded... by …TTL [and"));
+    assertEquals(List.of("", ""), DescriptionGapScreen.betweenOmissions("[]"));
+    assertEquals(List.of(""), DescriptionGapScreen.betweenOmissions(""));
+  }
+
+  /** The parts are those the pattern split a quote into, but for the empty ones that end it. */
+  @Test
+  void randomQuotesAreSplitWhereThePatternSplitThem() {
+    var random = new Random(1501);
+    for (int round = 0; round < 150_000; round++) {
+      var quote = randomText(random, OMISSION_PIECES, 14);
+      assertEquals(
+          withoutEmptyEnd(List.of(OMISSION_BEFORE.split(quote))),
+          withoutEmptyEnd(DescriptionGapScreen.betweenOmissions(quote)),
+          () -> "the parts of: " + quote);
+    }
+  }
+
+  private static List<String> withoutEmptyEnd(List<String> parts) {
+    var kept = new ArrayList<>(parts);
+    while (!kept.isEmpty() && kept.getLast().isEmpty()) {
+      kept.removeLast();
+    }
+    return kept;
   }
 }

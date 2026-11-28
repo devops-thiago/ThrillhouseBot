@@ -100,6 +100,9 @@ arrives while a review of the same PR runs replaces any request already waiting,
 newest head is reviewed next. A manual `/review` first reads the head: if the running review
 already covers that commit, the command acknowledges it without queuing another run. A moved
 head or a failed head read queues a run. A CI-hold recheck runs once no review of that PR is queued.
+A `synchronize` or `reopened` event also queues the withdrawal of the bot's approval of an earlier head
+(`ApprovalOnPush`): the worker runs it after a review in flight and before the review the push
+queued, and it runs even when the pause, a trigger filter or the rate window stops that review.
 
 ## A review, step by step
 
@@ -364,7 +367,7 @@ The scan also tracks its own findings across rounds:
   not.
 - A detection that matches a scan finding a maintainer declined (a round recorded it `justified`)
   is not raised again while the content is the same: same file, title and anchor, and for a secret
-  the same line, compared through a short HMAC, keyed from `GITHUB_WEBHOOK_SECRET`, kept in a
+  the same line, compared through a short HMAC, keyed from `GITHUB_PRIVATE_KEY`, kept in a
   hidden `thrillhousebot:scan-content` marker in the finding's text. A new value on that line is
   raised again.
 
@@ -560,9 +563,9 @@ it held. A maintainer-reply thread write waits, for at most two minutes, until t
 submitted or deleted. With `REVIEW_AGENT_PROMPT_ENABLED`, each inline finding comment ends with a collapsed
 "Agent prompt" block built from the finding already posted, with no model call. With
 `REVIEW_SHOW_EVIDENCE`, `FindingBasis` prints under the description the covering path-scoped rules,
-the cited failing check, the verifier's outcome (recorded per finding through
-`FindingEvidence.outcomes`) and the demoting review learning; names, paths, ids and fixed phrases
-only.
+the cited failing check and where it annotated the finding's file, the verifier's outcome
+(recorded per finding through `FindingEvidence.outcomes`) and the demoting review learning; names,
+paths, ids and fixed phrases only.
 
 ## Context sections
 

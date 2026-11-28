@@ -124,12 +124,13 @@ same diff.
 | Follow-up status reconciliation, in order: supersede, decline re-check, conversation clears, phantom ids, double-check replacement, approval backstop, still-open set | `review/VerdictBuilder.build` over `FollowUpAnalyzer` (`supersedeVanished`, `recheckDeclines`, `clearNamedInConversation`, `withoutPhantomUnresolved`, `replacedPriors`, `heldPreviousFindings`, `stillOpenFindings`) |
 | Verdict and check-run text | `review/VerdictBuilder.buildResult` |
 | Inline thread or "Things to double-check": one severity × confidence table, read through `Finding.postsInline` by every surface, on the grade after the verifier's floors and the calibrator (#1077). Critical and high are inline at any confidence; medium and low go to double-check only at low confidence | `review/FindingPlacement` |
-| Post review, inline comments, thread resolution. With `REVIEW_BATCHED_INLINE_REVIEW_ENABLED`, one pending review per round when `hasInlinePostCandidates` sees at least one changed-file finding that posts inline: inline threads attach through the GraphQL `addPullRequestReviewThread` mutation on the pending review's `node_id` (`ReviewThreadService.addPendingReviewThread`; the REST comment route documents no review-id input), with the same per-thread fallbacks as the REST path, then a single submit (#1434); off, each comment is its own write as before. A stranded bot PENDING review is deleted by `dismissPendingBotReviews`, which the orchestrator runs over the reviews it already listed; the publisher lists nothing again. A round that will not end in an `APPROVE` review first dismisses the bot's own `APPROVED` reviews from that same listing (`withdrawStandingApprovals`). A refused submit, or an ambiguous one (timeout, 5xx) after which `getReview` still reads `PENDING`, deletes the pending review first and then posts a review whose body lists every finding it held, like the no-inline path; an ambiguous failure whose review reads as submitted is a success, and one whose state cannot be read throws `ReviewPostException`. `PendingReviewGuard` is held from opening the pending review to its submit or delete, and `MaintainerReplyService` waits for it (bounded, two minutes) before a thread reply, since GitHub keeps one pending review per user. With `REVIEW_AGENT_PROMPT_ENABLED`, `AgentPromptBlock` appends a collapsed agent prompt to each inline (not file-level) finding comment (#1432), ahead of the hidden `finding=` marker so the marker stays the last one in the comment (`SuggestionFormatter.withBlockBeforeMarker`; every reader takes the last match), and a comment with no marker gets no block whose text is shaped like one; the path in its code span goes through `MarkdownSafe.inlineCode`, the repeated paragraph is cut at `MAX_PROBLEM_CHARS`, and the block is dropped when it would push the comment past `CommentBodyLimit.MAX_LENGTH`, so the cap never cuts inside `<details>`. A finding on a path the pull request does not change (`DiffLineResolver.isChangedFile`, over every changed file, patch or not) is listed in the review body without trying a route (#925) and does not open a pending shell in batched mode. A finding whose `suggestion_old` is on no head-side line but on lines the patch removes, selected by its line (`DiffLineResolver.locateRemovedQuote`, never by being the only match), is posted on those lines with `side: LEFT` and no suggestion block; `finding.line` stays a head-side number (#1321) | `review/ReviewPublisher`, `review/AgentPromptBlock`, `review/CheckRunManager` |
+| Post review, inline comments, thread resolution. With `REVIEW_BATCHED_INLINE_REVIEW_ENABLED`, one pending review per round when `hasInlinePostCandidates` sees at least one changed-file finding that posts inline: inline threads attach through the GraphQL `addPullRequestReviewThread` mutation on the pending review's `node_id` (`ReviewThreadService.addPendingReviewThread`; the REST comment route documents no review-id input), with the same per-thread fallbacks as the REST path, then a single submit (#1434); off, each comment is its own write as before. A stranded bot PENDING review is deleted by `dismissPendingBotReviews`, which the orchestrator runs over the reviews it already listed; the publisher lists nothing again. A round that will not end in an `APPROVE` review first dismisses the bot's own `APPROVED` reviews from that same listing (`ApprovalWithdrawals.afterRound`); a push dismisses them earlier through the same walk (`ApprovalWithdrawals.afterPush`, from `ApprovalOnPush`). `ApprovalWithdrawals` is a plain class the publisher builds and owns, not a bean. A refused submit, or an ambiguous one (timeout, 5xx) after which `getReview` still reads `PENDING`, deletes the pending review first and then posts a review whose body lists every finding it held, like the no-inline path; an ambiguous failure whose review reads as submitted is a success, and one whose state cannot be read throws `ReviewPostException`. `PendingReviewGuard` is held from opening the pending review to its submit or delete, and `MaintainerReplyService` waits for it (bounded, two minutes) before a thread reply, since GitHub keeps one pending review per user. With `REVIEW_AGENT_PROMPT_ENABLED`, `AgentPromptBlock` appends a collapsed agent prompt to each inline (not file-level) finding comment (#1432), ahead of the hidden `finding=` marker so the marker stays the last one in the comment (`SuggestionFormatter.withBlockBeforeMarker`; every reader takes the last match), and a comment with no marker gets no block whose text is shaped like one; the path in its code span goes through `MarkdownSafe.inlineCode`, the repeated paragraph is cut at `MAX_PROBLEM_CHARS`, and the block is dropped when it would push the comment past `CommentBodyLimit.MAX_LENGTH`, so the cap never cuts inside `<details>`. A finding on a path the pull request does not change (`DiffLineResolver.isChangedFile`, over every changed file, patch or not) is listed in the review body without trying a route (#925) and does not open a pending shell in batched mode. A finding whose `suggestion_old` is on no head-side line but on lines the patch removes, selected by its line (`DiffLineResolver.locateRemovedQuote`, never by being the only match), is posted on those lines with `side: LEFT` and no suggestion block; `finding.line` stays a head-side number (#1321) | `review/ReviewPublisher`, `review/AgentPromptBlock`, `review/CheckRunManager` |
 | Summary comment: render over the round plus the still-open set, edit in place by marker. The Description vs. Implementation section names each description finding (`descriptionFindings`) instead of a boilerplate line (#964), only one that quotes or paraphrases the PR text or linked issue (`DescriptionGapScreen.echoes`, over `PrSummaryGenerator.DescriptionSources` the orchestrator hands `VerdictBuilder.build`), plus, on an unchanged head, every open finding the previous summary named there (`DescriptionGapCarryover.previousFindingBullets`, #1074). A gap restating a finding is dropped only when the first inline finding it restates is one the section names (`SummarySurfaceDeduplicator.collapse`, given `DescriptionSources.echoedBy`); otherwise the gap stays, and a later named match does not take it. Gap is compared with gap without the gap template's wording, a run of two or more `FRAME_WORDS` such as "no changed file declares any" (`gapClaim`, #1205). A gap crediting its claim to a review pass or a finding (`DescriptionGapScreen.creditsReview`: a review or finding noun within five words of a crediting verb in one clause the description is not said to state; "shows", "indicates" and "reveals" count only with that noun as their subject or after their "by", as in "the FindingPipeline finding shows"; a noun a "no", "not", "nor", "never" or "n't" negates, up to four words before it with no determiner but "any" and no "and" between them, is no credit, as in "no changed file or finding shows", and so is a verb such a negation binds, between the noun and the verb ("the review did not flag") or up to four words before a verb the noun follows ("wasn't flagged by the reviewer"), #1203) is rendered only while a finding of the round plus the still-open set states it, demoted ones included (`PrSummaryGenerator.backedByFindings`, #1127); a gap restating a finding the round resolved leaves, unless the two name different identifiers (`DescriptionGapCarryover.withoutResolved`, the same restatement test plus the #1383 identifier veto), and so does a gap that only says the material does not show or cannot confirm something ("(unconfirmed)", "no changed file shows", "nothing confirms") with no mismatch of its own in any clause and every code name it gives (a code span, a camel-case or snake-case name) on an added line of the pull request, comments and documentation included, a removed line not (`DescriptionGapScreen.withoutAnsweredByDiff`, over `DescriptionSources.previousFindings` and `addedCode`, #1387); the next round carries only what was rendered. With exactly one issue linked, every criterion the round states unmet (an open finding citing the issue, an overview sentence saying it is not met, or a negated walkthrough clause, matched by content words) gets a `Linked issue #N: <criterion>` line unless a linked-issue gap names it; a line pointing at a finding replaces that finding's bullet and is not carried as a gap (`LinkedIssueCriteria`, read from `DescriptionSources.linkedIssues`, never from the claim text, #1093). The review call also judges each criterion against the diff (`linked_issue_criteria`: met, unmet or unclear, `TicketContextPrompts.REVIEW_REQUEST`). The parser reads that field apart and leniently, the pipeline records each call's verdicts on `ReviewEvidence.criterionVerdicts` before anything rebuilds the response, and the orchestrator hands them to the summary through `VerdictBuilder.LinkedIssueContext`. A criterion some call judged met is met; one judged unmet by a call and met by none gets its line even when nothing else names it. A met criterion gets no line from the overview or the walkthrough, and a `Linked issue` gap naming it leaves (`LinkedIssueCriteria.withoutMet`), since only the review call reads the diff (#1200). Its overview sentence boundaries use `SentenceBreaks`, so common abbreviations and name titles keep a citation with its unmet criterion; punctuation inside a quoted passage never splits it. The overview's sentence on each failing CI check is computed when the summary is rendered, over the round plus the still-open set, by the same citation reading as the confidence floor; the summary call's own sentences of that kind are removed (`CiFailureOverview`, from `VerdictBuilder.buildResult`, #1075) | `review/PrSummaryGenerator` (`currentState`), `review/ReviewPublisher.publishSummary` / `upsertSummaryComment` |
 | CI hold and revisit | `review/CiHoldRegistry`, `review/CiHoldRevisit` |
+| Withdrawing the bot's approval when commits are pushed | `review/ApprovalOnPush` (queued by `WebhookEvents`, run by `ReviewDispatcher`, dismissed through `ReviewPublisher.withdrawApprovalsAfterPush`, which hands the walk to `review/ApprovalWithdrawals`) |
 | Opt-in review learnings: capture after the post, from the round's final statuses | `review/ReviewLearnings.captureSurvivingDeclines` → `review/FollowUpAnalyzer.survivingDeclines` → `review/ReviewLearningService.save` |
 | `/learnings`, `/remember`, `/forget` | `webhook/LearningCommands` (routed by `CommentCommandService`) |
-| Maintainer replies and mentions. A clear directive replied on a finding's thread is applied, never answered by the model: the thread is resolved and a fixed acknowledgement posted (`clearFromThread`, #1066). GitHub refuses `resolveReviewThread` without the App's `Contents: Read & write`, in the `errors` of an HTTP 200: `ReviewThreadService.resolve` raises them as `GitHubGraphQLException`, and a missing permission is named to the maintainer here and on `/resolve` (#1471). That permission serves nothing else; the bot writes no repository content. The reply and the review accept the same lines for it (`FollowUpAnalyzer.threadLines`): the thread's line and original line, and, on a thread posted on removed lines, the finding's head-side line its marker carries (`line=`, `SuggestionFormatter.withMarkedLine`, #1360) | `review/MaintainerReplyService`, `review/MaintainerReplyDispatcher` |
+| Maintainer replies and mentions. A clear directive replied on a finding's thread is applied, never answered by the model: the thread is resolved and a fixed acknowledgement posted (`clearFromThread`, #1066). GitHub refuses `resolveReviewThread` without the App's `Contents: Read & write`, in the `errors` of an HTTP 200: `ReviewThreadService.resolve` raises them as `GitHubGraphQLException`, and a missing permission is named to the maintainer here and on `/resolve` (#1471). `threadsByRootComment` raises the same exception for `errors` with no thread list, so a failed read is never taken for a pull request without threads: `/resolve` then says the threads could not be read, and it counts the threads it tried and GitHub left open instead of answering that there was nothing to resolve. That permission serves nothing else; the bot writes no repository content. The reply and the review accept the same lines for it (`FollowUpAnalyzer.threadLines`): the thread's line and original line, and, on a thread posted on removed lines, the finding's head-side line its marker carries (`line=`, `SuggestionFormatter.withMarkedLine`, #1360) | `review/MaintainerReplyService`, `review/MaintainerReplyDispatcher` |
 | On-request commands (`/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`) | `review/AbstractPrSuggestionGenerator` and its subclasses |
 
 ## Model-call invariants
@@ -317,8 +318,8 @@ same diff.
   spans take their parent from `Context.current()` on the thread that makes the call. The
   `@ReviewExecutor` (`ReviewExecutorProducer`) and the batch executor in
   `FindingPipeline.runMultiCall` are wrapped with `Context.taskWrapping`; a new executor on the
-  review path needs the same. `ReviewDispatcher` runs each review and CI re-evaluation in a root
-  span (`review`, `review.ci-recheck`) that links to the span current at each `dispatch` it
+  review path needs the same. `ReviewDispatcher` runs each review, CI re-evaluation and approval
+  withdrawal in a root span (`review`, `review.ci-recheck`, `review.approval-withdrawal`) that links to the span current at each `dispatch` it
   serves, coalesced ones and a `/review` the running review covers included, rather than continuing
   the webhook's trace: the review outlives the delivery's 200 by minutes. Links stop at
   `MAX_LINKED_TRIGGERS`; `thrillhouse.review.requests` counts every request the run serves.
@@ -362,9 +363,32 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   summary banner, the review body, the check-run summary and `heldOnCiOnly` (no CI revisit) read.
   A first review, and a readable round that raised nothing, are not this
   (`UnconfirmedDeclineAcrossRoundsTest`).
+- **A push withdraws the bot's approval of an earlier head, with or without a review.** A
+  `pull_request` `synchronize` or `reopened` event (a closed pull request's branch can gain
+  commits) queues `ApprovalOnPush.withdraw` through
+  `ReviewDispatcher.dispatchApprovalWithdrawal` before the pause check, the trigger filters and
+  the rate window in `WebhookEvents.handlePullRequest`: those stop the review of the new head,
+  which is exactly when an approval of the old one would otherwise stay. It never runs on the
+  webhook thread. The pull request's worker runs it after a review in flight (so an approval that
+  review posts is seen) and before the review the push queued, takes no repository slot and makes
+  no model call. It lists the reviews once; nothing records the bot's last verdict per pull
+  request reliably (`reviewsession` has no verdict, the limiter and the CI hold are in memory), so
+  do not skip the listing on such a signal. While a standing bot approval is for the head, nothing
+  is dismissed (a force-push back to the approved commit keeps it). Otherwise the head is read
+  once, because a delivery can be late or redelivered after the head moved again; an unreadable
+  head falls back to the event's, since a kept approval is the worse outcome. The dismissals go
+  through `ReviewPublisher.withdrawApprovalsAfterPush` to `ApprovalWithdrawals.afterPush`, the walk
+  below with `approvalWithdrawnOnPushMessage`: a fixed text, no model or user text. A failure is logged at
+  warn and never stops the queued review (`ReviewDispatcher.withdrawApproval`); a rejected
+  executor frees the delivery for a redelivery. The queued withdrawal is in memory, so a restart
+  before it runs loses it. When at least one approval was dismissed, `ApprovalOnPush` calls
+  `AutoReviewRateLimiter.forgetCoveredHead`: the window stays, but the head its review covered is
+  forgotten, so a force-push back to that commit inside the window is deferred to the window's
+  end (`AutoReviewRateLimiter.hold`) and reviewed, not skipped as covered with no approval left. The
+  ready-for-review lift memory is separate; leave it alone there.
 - **A round that does not approve withdraws the bot's standing approvals.** GitHub keeps counting
   an `APPROVED` review after its author posts a `COMMENT` one, so `ReviewPublisher.publishReview`
-  calls `withdrawStandingApprovals` before any post unless the round ends in an `APPROVE` review
+  calls `ApprovalWithdrawals.afterRound` before any post unless the round ends in an `APPROVE` review
   (a verdict other than `APPROVE`, or any round with findings, since those post `COMMENT`): every
   review in the run's listing that is still `APPROVED` and written by a `BotIdentity` login is
   dismissed (`GitHubReviewClient.dismissReview`), newest first, whatever head it approved. It runs
@@ -378,7 +402,8 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   dismisses nothing, because the earlier approvals could not be checked) and so is one that fills
   the 1,000-review walk, where the unread reviews are the newest. A pull request with no reviews
   lists as empty without failing, so keep the failure at warn. Do not narrow the walk to the
-  bot's latest review, and never dismiss a review the bot did not write.
+  bot's latest review, and never dismiss a review the bot did not write. An approval the push
+  already dismissed lists as `DISMISSED` and is skipped.
 - **No "no issues" wording while anything is open** (#933). Every surface reads
   `ReviewResult.unresolvedPreviousCount()`; `ReviewPublisher.noIssuesBody` leads with the
   unresolved-previous message and `LargePrNudge` stays silent.
@@ -532,9 +557,11 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   `FollowUpAnalyzer.justifiedPriorFindings` hands every persisted `justified` scan finding to
   `SecurityScan.merge`, which does not raise a detection with the same file, title, anchor and, for
   a secret, the same `<!-- thrillhousebot:scan-content=… -->` fingerprint (8 hex digits of an
-  HMAC-SHA-256 over the rule and the stripped line, keyed from the webhook secret by
-  `SecurityScan.fingerprintKey`, #985; a decline under the unkeyed 0.7.0 marker still matches
-  through `Detection.legacyFingerprint`). Each decline covers one detection
+  HMAC-SHA-256 over the rule and the stripped line, keyed from the App private key by
+  `SecurityScan.fingerprintKey`, #985; a decline under the unkeyed 0.7.0 marker, or under the
+  marker keyed from the webhook secret that 0.7.1 to 0.9.3 posted, still matches through
+  `Detection.earlierFingerprints`). The marker is public and a pull request's author chooses its
+  input, so never key it from a secret an operator chooses. Each decline covers one detection
   (`DeclinedScanFindingAcrossRoundsTest`).
 - **Summary carry-over preserves every distinct path.** `PriorOverviewCarryover` uses
   `PathIndex.contains` for coverage membership, preserving `FilePaths.same` directory-suffix
@@ -569,13 +596,25 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   computed over the scrubbed title). It is a view, never a source of truth: nothing reads it back.
   Entries hold identifiers and enums only (`key`, `file`, `line`, `risk`, `confidence`, `status`
   always `open`, `thread`, `hasSuggestion`, `carried`), most severe first; no title, description
-  or suggestion enters it. `thread` comes from `ReviewPublisher.threadRule`, which applies the
+  or suggestion enters it. `thread` comes from `ManifestThreads.announced`, which applies the
   rules `postInlineComments` posts by: a round finding that posts inline, on a path
   `DiffLineResolver.isChangedFile` accepts, within `maxReviewComments` in posting order, matched by
   key; a carried finding keeps `Finding.postsInline`. The summary is written before the review, so
-  `thread` means a thread is expected, not that GitHub took it: a refused post reads `true`, and
-  since `postInlineComments` counts the cap in landed threads, a refusal frees a slot that a finding
-  `threadRule` put past the cap can take while it reads `false`. The path is the only free text and is escaped so it
+  `announced` can only say which threads the round expects: it cannot know a post GitHub refuses,
+  nor that `postInlineComments`, which counts the cap in landed threads, then gives the freed slot
+  to a finding past the cap. `postReview` therefore returns the threads that landed
+  (`ManifestThreads.PostedThreads`; none when a batched review was never submitted), and when they
+  differ from the announced ones `ReviewPublisher.correctManifest` rewrites the line in a second
+  summary edit. The edit goes only to the comment this round's `publishSummary` wrote (or found
+  already current), by the id the publisher keeps from then until the review has posted, and
+  replaces only the exact line it wrote there. Another run's summary is never touched, even one
+  carrying the same line: a round whose summary was not written (a blank one, a failed post) holds
+  no id and edits nothing, and so does one whose comment is no longer the newest summary. The id
+  is only for this edit; the summary itself is still found by its marker. A round that posted as
+  announced reads and writes nothing, and a failed edit is logged and never re-posts the summary.
+  The webhook's `review.open_findings` is built from the same `PostedThreads`
+  (`ManifestThreads.openFindings`). A review
+  post that throws leaves the announced line. The path is the only free text and is escaped so it
   can never write `-->`; the line stays one line. An empty set renders `[]` (so "nothing open" differs
   from a comment older than the manifest), and a set over `MAX_ENTRIES` entries or
   `MAX_ARRAY_CHARS` rendered characters (the path has no length bound) is cut with `omitted=N` in

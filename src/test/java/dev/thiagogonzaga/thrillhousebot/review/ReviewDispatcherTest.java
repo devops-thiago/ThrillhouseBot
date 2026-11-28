@@ -64,6 +64,7 @@ class ReviewDispatcherTest {
   @Mock private AutoReviewRateLimiter rateLimiter;
   @Mock private ReviewSkipEmitter skipEmitter;
   @Mock private CiHoldRevisit ciHoldRevisit;
+  @Mock private ApprovalOnPush approvalOnPush;
   @Mock private RunningReviewCoverage coverage;
 
   /** The shipped per-repository limits; the tests of the limit build their own. */
@@ -92,6 +93,7 @@ class ReviewDispatcherTest {
             deferred,
             skipEmitter,
             ciHoldRevisit,
+            approvalOnPush,
             coverage,
             OpenTelemetry.noop());
   }
@@ -110,6 +112,171 @@ class ReviewDispatcherTest {
             })
         .when(orchestrator)
         .review(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  private static ApprovalOnPush.Push push(int prNumber, String sha) {
+    return new ApprovalOnPush.Push("owner", "repo", prNumber, sha, 1L);
+  }
+
+  @Test
+  void shouldWithdrawTheApprovalOnAPushWithNoReviewToFollow() {
+    var push = push(42, "sha2");
+
+    assertTrue(dispatcher.dispatchApprovalWithdrawal(push));
+
+    verify(approvalOnPush, timeout(2000)).withdraw(push);
+    verify(orchestrator, never()).review(any());
+    awaitEmptyDispatcherState(dispatcher, 2, TimeUnit.SECONDS);
+  }
+
+  @Test
+  void shouldWithdrawTheApprovalBeforeTheReviewThePushQueued() throws InterruptedException {
+    var started = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    blockReviewUntil(started, release);
+    var push = push(42, "sha2");
+    var review = reviewRequest("owner", "repo", 42, "sha2");
+
+    // The review of sha1 is in flight when sha2 is pushed: the withdrawal waits for it, so an
+    // approval it posts is seen, and runs ahead of the review of sha2.
+    dispatcher.dispatch(reviewRequest("owner", "repo", 42, "sha1"));
+    started.await(2, TimeUnit.SECONDS);
+    assertTrue(dispatcher.dispatchApprovalWithdrawal(push));
+    dispatcher.dispatch(review);
+    verify(approvalOnPush, after(200).never()).withdraw(any());
+
+    release.countDown();
+
+    verify(orchestrator, timeout(5000)).review(review);
+    var order = inOrder(orchestrator, approvalOnPush);
+    order.verify(orchestrator).review(reviewRequest("owner", "repo", 42, "sha1"));
+    order.verify(approvalOnPush).withdraw(push);
+    order.verify(orchestrator).review(review);
+  }
+
+  @Test
+  void shouldWithdrawTheApprovalWhenTheRateWindowHoldsTheReviewBack() {
+    when(rateLimiter.hold("owner", "repo", 42, "sha2"))
+        .thenReturn(new AutoReviewRateLimiter.Hold(true, OptionalLong.of(now.get() + WINDOW_MS)));
+    var push = push(42, "sha2");
+
+    assertTrue(dispatcher.dispatchApprovalWithdrawal(push));
+    dispatcher.dispatch(reviewRequest("owner", "repo", 42, "sha2"));
+
+    verify(approvalOnPush, timeout(2000)).withdraw(push);
+    awaitEmptyDispatcherState(dispatcher, 2, TimeUnit.SECONDS);
+    verify(orchestrator, never()).review(any());
+    assertFalse(deferred.isEmpty(), "the review of the new head waits for the window");
+  }
+
+  @Test
+  void shouldRunTheReviewWhenTheApprovalWithdrawalFails() {
+    doThrow(new IllegalStateException("no token")).when(approvalOnPush).withdraw(any());
+    var review = reviewRequest("owner", "repo", 42, "sha2");
+
+    assertTrue(dispatcher.dispatchApprovalWithdrawal(push(42, "sha2")));
+    assertTrue(dispatcher.dispatch(review));
+
+    verify(orchestrator, timeout(2000)).review(review);
+    verify(approvalOnPush).withdraw(push(42, "sha2"));
+  }
+
+  @Test
+  void shouldWithdrawOnlyForTheLatestPushWhileOneWaits() throws InterruptedException {
+    var started = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    blockReviewUntil(started, release);
+
+    dispatcher.dispatch(reviewRequest("owner", "repo", 42, "sha1"));
+    started.await(2, TimeUnit.SECONDS);
+    dispatcher.dispatchApprovalWithdrawal(push(42, "sha2"));
+    dispatcher.dispatchApprovalWithdrawal(push(42, "sha3"));
+
+    release.countDown();
+
+    verify(approvalOnPush, timeout(5000)).withdraw(push(42, "sha3"));
+    verify(approvalOnPush, after(300).times(1)).withdraw(any());
+  }
+
+  @Test
+  void shouldRunTheApprovalWithdrawalAheadOfAQueuedCiRecheck() throws InterruptedException {
+    var started = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    blockReviewUntil(started, release);
+
+    dispatcher.dispatch(reviewRequest("owner", "repo", 42, "sha1"));
+    started.await(2, TimeUnit.SECONDS);
+    dispatcher.dispatchCiRecheck(recheck(42, "sha1"));
+    dispatcher.dispatchApprovalWithdrawal(push(42, "sha2"));
+
+    release.countDown();
+
+    verify(ciHoldRevisit, timeout(5000)).revisit(recheck(42, "sha1"));
+    var order = inOrder(approvalOnPush, ciHoldRevisit);
+    order.verify(approvalOnPush).withdraw(push(42, "sha2"));
+    order.verify(ciHoldRevisit).revisit(recheck(42, "sha1"));
+  }
+
+  @Test
+  void shouldReturnFalseWhenExecutorRejectsTheApprovalWithdrawal() {
+    var rejecting = mock(ExecutorService.class);
+    doThrow(new RejectedExecutionException("saturated")).when(rejecting).execute(any());
+    var saturated =
+        new ReviewDispatcher(
+            rejecting,
+            orchestrator,
+            rateLimiter,
+            slots,
+            deferred,
+            skipEmitter,
+            ciHoldRevisit,
+            approvalOnPush,
+            coverage,
+            OpenTelemetry.noop());
+
+    assertFalse(saturated.dispatchApprovalWithdrawal(push(42, "sha2")));
+    assertEquals(0, saturated.stateCount());
+  }
+
+  @Test
+  void shouldNotReviveRetiredStateOnApprovalWithdrawal() {
+    var key = new ReviewDispatcher.PrKey("owner", "repo", 9);
+    var retired = new ReviewDispatcher.PerPrState();
+    retired.markRetired();
+    dispatcher.seedState(key, retired);
+
+    assertTrue(dispatcher.dispatchApprovalWithdrawal(push(9, "sha2")));
+
+    verify(approvalOnPush, timeout(2000)).withdraw(push(9, "sha2"));
+  }
+
+  @Test
+  void reviewQueuedBehindOnlyAnApprovalWithdrawalIsNotCountedAsCoalesced() {
+    var state = new ReviewDispatcher.PerPrState();
+    var trigger = SpanContext.getInvalid();
+
+    state.onWithdrawal(push(42, "sha2"), trigger);
+    // The worker took the withdrawal; the push's review arrives while it runs.
+    assertEquals(push(42, "sha2"), state.takeNext().withdrawal());
+    var first = state.onDispatch(reviewRequest("owner", "repo", 42, "sha2"), trigger);
+    var second = state.onDispatch(reviewRequest("owner", "repo", 42, "sha3"), trigger);
+
+    assertEquals(0, first.coalescedCount(), "nothing was superseded by the push's own review");
+    assertEquals(1, second.coalescedCount());
+  }
+
+  @Test
+  void reviewQueuedBehindAReviewInFlightIsStillCountedAsCoalesced() {
+    var state = new ReviewDispatcher.PerPrState();
+    var trigger = SpanContext.getInvalid();
+
+    state.onDispatch(reviewRequest("owner", "repo", 42, "sha1"), trigger);
+    state.takeNext();
+    state.onWithdrawal(push(42, "sha2"), trigger);
+    var queued = state.onDispatch(reviewRequest("owner", "repo", 42, "sha2"), trigger);
+
+    assertEquals(1, queued.coalescedCount());
+    assertFalse(state.tryRetireIfIdle(), "the withdrawal still waits");
   }
 
   @Test
@@ -254,6 +421,7 @@ class ReviewDispatcherTest {
             deferred,
             skipEmitter,
             ciHoldRevisit,
+            approvalOnPush,
             coverage,
             OpenTelemetry.noop());
 
@@ -404,6 +572,7 @@ class ReviewDispatcherTest {
             deferred,
             skipEmitter,
             ciHoldRevisit,
+            approvalOnPush,
             coverage,
             OpenTelemetry.noop());
 
@@ -549,6 +718,7 @@ class ReviewDispatcherTest {
             deferred,
             skipEmitter,
             ciHoldRevisit,
+            approvalOnPush,
             coverage,
             OpenTelemetry.noop());
 
@@ -583,6 +753,7 @@ class ReviewDispatcherTest {
             deferred,
             skipEmitter,
             ciHoldRevisit,
+            approvalOnPush,
             coverage,
             OpenTelemetry.noop());
 
@@ -1017,6 +1188,7 @@ class ReviewDispatcherTest {
         kept,
         skipEmitter,
         ciHoldRevisit,
+        approvalOnPush,
         coverage,
         OpenTelemetry.noop());
   }
@@ -1040,6 +1212,7 @@ class ReviewDispatcherTest {
         kept,
         skipEmitter,
         ciHoldRevisit,
+        approvalOnPush,
         coverage,
         OpenTelemetry.noop());
   }
@@ -1230,6 +1403,7 @@ class ReviewDispatcherTest {
             deferred,
             skipEmitter,
             ciHoldRevisit,
+            approvalOnPush,
             coverage,
             OpenTelemetry.noop());
     var push = reviewRequest("owner", "repo", 42, "sha2");
@@ -1340,6 +1514,7 @@ class ReviewDispatcherTest {
             deferred,
             skipEmitter,
             ciHoldRevisit,
+            approvalOnPush,
             coverage,
             OpenTelemetry.noop());
     var older = reviewRequest("owner", "repo", 42, "sha1");

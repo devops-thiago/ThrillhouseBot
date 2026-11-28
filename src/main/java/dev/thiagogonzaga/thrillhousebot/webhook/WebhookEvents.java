@@ -21,6 +21,7 @@ import dev.thiagogonzaga.thrillhousebot.github.AllowedAccounts;
 import dev.thiagogonzaga.thrillhousebot.github.InstallationChange;
 import dev.thiagogonzaga.thrillhousebot.github.PullRequestClosure;
 import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
+import dev.thiagogonzaga.thrillhousebot.review.ApprovalOnPush;
 import dev.thiagogonzaga.thrillhousebot.review.AutoReviewRateLimiter;
 import dev.thiagogonzaga.thrillhousebot.review.CiHoldRegistry;
 import dev.thiagogonzaga.thrillhousebot.review.CiHoldRevisit;
@@ -71,6 +72,13 @@ public class WebhookEvents {
   /** pull_request actions that trigger an automatic review. */
   private static final Set<String> AUTO_REVIEW_ACTIONS =
       Set.of("opened", ACTION_REOPENED, ACTION_SYNCHRONIZE, ACTION_READY_FOR_REVIEW);
+
+  /**
+   * pull_request actions after which the head may not be the commit the bot approved: a push, and a
+   * reopening, since the branch of a closed pull request can gain commits.
+   */
+  private static final Set<String> HEAD_MOVING_ACTIONS =
+      Set.of(ACTION_SYNCHRONIZE, ACTION_REOPENED);
 
   private static final String EVENT_PULL_REQUEST = "pull_request";
   private static final String ACTION_CLOSED = "closed";
@@ -288,9 +296,9 @@ public class WebhookEvents {
   }
 
   /**
-   * @return {@code false} only when a review was attempted but the dispatcher rejected it (so the
-   *     dedup slot should be rolled back); {@code true} when the event was handled or legitimately
-   *     ignored.
+   * @return {@code false} only when a review or the withdrawal of an approval on a push was
+   *     attempted but the dispatcher rejected it (so the dedup slot should be rolled back); {@code
+   *     true} when the event was handled or legitimately ignored.
    */
   private boolean handlePullRequest(WebhookPayload payload) {
     var action = payload.action();
@@ -314,6 +322,10 @@ public class WebhookEvents {
           yield true;
         }
 
+        // Before the pause, the trigger filters and the rate window: they decide whether the new
+        // head is reviewed, and an approval of the old head must go whether or not it is.
+        boolean withdrawalQueued = withdrawalQueued(payload);
+
         if (prPauseService.isPaused(
             scope(payload), repo.owner().login(), repo.name(), pr.number())) {
           skipEmitter.recordSkip(
@@ -324,7 +336,7 @@ public class WebhookEvents {
               pr.number(),
               "PR is paused via /pause");
           reviewDispatcher.forgetDeferred(scope(payload), pr.number());
-          yield true;
+          yield withdrawalQueued;
         }
 
         var skipReason = triggerFilter.skipReason(pr, () -> gatedLabels(payload));
@@ -338,7 +350,7 @@ public class WebhookEvents {
               skipReason.get().detail());
           // The pull request is not to be reviewed now, so neither is a head a limit held back.
           reviewDispatcher.forgetDeferred(scope(payload), pr.number());
-          yield true;
+          yield withdrawalQueued;
         }
 
         var request =
@@ -356,7 +368,7 @@ public class WebhookEvents {
                 false,
                 pr.base().ref());
         if (heldByRateWindow(action, request)) {
-          yield true;
+          yield withdrawalQueued;
         }
 
         log.info("Dispatching review for PR #{} in {}", pr.number(), repo.fullName());
@@ -370,7 +382,7 @@ public class WebhookEvents {
               pr.number(),
               "review executor rejected the task; a webhook redelivery can retry");
         }
-        yield queued;
+        yield queued && withdrawalQueued;
       }
       case ACTION_CONVERTED_TO_DRAFT -> {
         forgetDeferredOfFilteredPullRequest(payload);
@@ -381,6 +393,29 @@ public class WebhookEvents {
         yield true;
       }
     };
+  }
+
+  /**
+   * On a push ({@code synchronize}) or a reopening, queues the withdrawal of the approvals the bot
+   * gave earlier heads of the pull request ({@link ApprovalOnPush}). It is queued for a paused pull
+   * request, a draft and one a label, author or branch filter excludes as well: those stop the
+   * review of the new head, which is when an approval of the old one would otherwise stay for good.
+   * A pull request reopened on the commit the bot approved keeps the approval ({@link
+   * ApprovalOnPush}).
+   *
+   * @return {@code false} only when the executor rejected the task, so the delivery is forgotten
+   *     and a redelivery can retry
+   */
+  private boolean withdrawalQueued(WebhookPayload payload) {
+    var pr = payload.pullRequest();
+    var headSha = pr.head().sha();
+    if (!HEAD_MOVING_ACTIONS.contains(payload.action()) || headSha == null || headSha.isBlank()) {
+      return true;
+    }
+    var repo = payload.repository();
+    return reviewDispatcher.dispatchApprovalWithdrawal(
+        new ApprovalOnPush.Push(
+            repo.owner().login(), repo.name(), pr.number(), headSha, payload.installation().id()));
   }
 
   /**

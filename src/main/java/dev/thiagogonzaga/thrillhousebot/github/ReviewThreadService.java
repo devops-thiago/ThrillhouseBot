@@ -51,6 +51,9 @@ public class ReviewThreadService {
   // Stops a malformed pageInfo from looping forever.
   private static final int MAX_THREAD_PAGES = 20;
 
+  /** The field of a GraphQL answer that lists what GitHub refused. */
+  private static final String ERRORS = "errors";
+
   private static final String RESOLVE_MUTATION =
       """
       mutation($threadId: ID!) {
@@ -101,6 +104,9 @@ public class ReviewThreadService {
    * Maps each thread's root-comment database id to the thread's node id and resolution state. Walks
    * every page so a PR with more than 100 review threads still has all its threads resolvable —
    * otherwise {@code /resolve} would silently skip bot findings past the first page.
+   *
+   * @throws GitHubGraphQLException when GitHub answers a page with {@code errors} and no thread
+   *     list, which is a read that failed and not a pull request without threads (#1471)
    */
   public Map<Long, ThreadRef> threadsByRootComment(
       String auth, String owner, String repo, int prNumber) {
@@ -115,13 +121,15 @@ public class ReviewThreadService {
       if (after != null) {
         variables.put("after", after);
       }
+      var response =
+          graphQLClient.execute(
+              auth, new GitHubGraphQLClient.GraphQLRequest(THREADS_QUERY, variables));
       var reviewThreads =
-          graphQLClient
-              .execute(auth, new GitHubGraphQLClient.GraphQLRequest(THREADS_QUERY, variables))
-              .path("data")
-              .path("repository")
-              .path("pullRequest")
-              .path("reviewThreads");
+          response.path("data").path("repository").path("pullRequest").path("reviewThreads");
+      var errors = response.path(ERRORS);
+      if (reviewThreads.isMissingNode() && !errors.isEmpty()) {
+        throw GitHubGraphQLException.from(errors);
+      }
       for (JsonNode node : reviewThreads.path("nodes")) {
         var firstComment = node.path("comments").path("nodes").path(0);
         if (firstComment.path("databaseId").isNumber() && node.path("id").isTextual()) {
@@ -201,7 +209,7 @@ public class ReviewThreadService {
     if (created.isTextual()) {
       return created.asText();
     }
-    var refusal = GitHubGraphQLException.from(response.path("errors"));
+    var refusal = GitHubGraphQLException.from(response.path(ERRORS));
     throw refusal.isThrottled() ? refusal.asHttpThrottle() : refusal;
   }
 
@@ -229,7 +237,7 @@ public class ReviewThreadService {
             .path("isResolved")
             .asBoolean(false);
     if (!resolved) {
-      var errors = response.path("errors");
+      var errors = response.path(ERRORS);
       if (!errors.isEmpty()) {
         throw GitHubGraphQLException.from(errors);
       }

@@ -27,6 +27,7 @@ import dev.thiagogonzaga.thrillhousebot.github.InstallationChange;
 import dev.thiagogonzaga.thrillhousebot.github.PullRequestClosure;
 import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
+import dev.thiagogonzaga.thrillhousebot.review.ApprovalOnPush;
 import dev.thiagogonzaga.thrillhousebot.review.AutoReviewRateLimiter;
 import dev.thiagogonzaga.thrillhousebot.review.CiHoldRegistry;
 import dev.thiagogonzaga.thrillhousebot.review.CiHoldRevisit;
@@ -117,6 +118,7 @@ class WebhookEventsTest {
     when(config.review()).thenReturn(reviewConfig);
     when(reviewConfig.conversationalRepliesEnabled()).thenReturn(true);
     doReturn(installationEvents).when(beanManager).getEvent();
+    when(reviewDispatcher.dispatchApprovalWithdrawal(any())).thenReturn(true);
     when(reviewDispatcher.holdForRateWindow(any()))
         .thenReturn(ReviewDispatcher.RateWindowHold.NOT_HELD);
     events = newEvents(triggerFilter);
@@ -848,6 +850,147 @@ class WebhookEventsTest {
 
     verify(reviewDispatcher).forgetDeferred(any(RepoScope.class), eq(55));
     verify(reviewDispatcher, never()).holdForRateWindow(any());
+  }
+
+  private static final ApprovalOnPush.Push PUSH_TO_55 =
+      new ApprovalOnPush.Push("owner", "repo", 55, "sha55", 12345L);
+
+  @Test
+  void aPushQueuesTheApprovalWithdrawalAheadOfItsReview() {
+    when(reviewDispatcher.dispatch(any(ReviewOrchestrator.ReviewRequest.class))).thenReturn(true);
+
+    deliverPullRequest("push", "synchronize", 55, "owner/repo", "sha55");
+
+    var order = inOrder(reviewDispatcher);
+    order.verify(reviewDispatcher).dispatchApprovalWithdrawal(PUSH_TO_55);
+    order.verify(reviewDispatcher).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+    verify(deduplicator, never()).forget(anyString());
+  }
+
+  @Test
+  void aPushTheRateWindowHoldsBackStillQueuesTheApprovalWithdrawal() {
+    when(reviewDispatcher.holdForRateWindow(any(ReviewOrchestrator.ReviewRequest.class)))
+        .thenReturn(ReviewDispatcher.RateWindowHold.KEPT);
+
+    deliverPullRequest("push-in-window", "synchronize", 55, "owner/repo", "sha55");
+
+    verify(reviewDispatcher).dispatchApprovalWithdrawal(PUSH_TO_55);
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+    verify(deduplicator, never()).forget(anyString());
+  }
+
+  @Test
+  void aPushToAPausedPullRequestStillQueuesTheApprovalWithdrawal() {
+    when(prPauseService.isPaused(any(), eq("owner"), eq("repo"), eq(55))).thenReturn(true);
+
+    deliverPullRequest("push-paused", "synchronize", 55, "owner/repo", "sha55");
+
+    verify(reviewDispatcher).dispatchApprovalWithdrawal(PUSH_TO_55);
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+    verify(deduplicator, never()).forget(anyString());
+  }
+
+  @Test
+  void aPushTheFiltersRejectStillQueuesTheApprovalWithdrawal() {
+    when(triggerFilter.skipReason(any(), any()))
+        .thenReturn(
+            Optional.of(new ReviewTriggerFilter.Skip(ReviewSkipReason.DRAFT, "PR is a draft")));
+
+    deliverPullRequest("push-draft", "synchronize", 55, "owner/repo", "sha55");
+
+    verify(reviewDispatcher).dispatchApprovalWithdrawal(PUSH_TO_55);
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+    verify(deduplicator, never()).forget(anyString());
+  }
+
+  @Test
+  void aReopenedPullRequestQueuesTheApprovalWithdrawalAheadOfItsReview() {
+    when(reviewDispatcher.dispatch(any(ReviewOrchestrator.ReviewRequest.class))).thenReturn(true);
+
+    deliverPullRequest("reopened", "reopened", 55, "owner/repo", "sha55");
+
+    var order = inOrder(reviewDispatcher);
+    order.verify(reviewDispatcher).dispatchApprovalWithdrawal(PUSH_TO_55);
+    order.verify(reviewDispatcher).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
+  void aReopenedPullRequestTheFiltersRejectStillQueuesTheApprovalWithdrawal() {
+    when(triggerFilter.skipReason(any(), any()))
+        .thenReturn(
+            Optional.of(new ReviewTriggerFilter.Skip(ReviewSkipReason.DRAFT, "PR is a draft")));
+
+    deliverPullRequest("reopened-draft", "reopened", 55, "owner/repo", "sha55");
+
+    verify(reviewDispatcher).dispatchApprovalWithdrawal(PUSH_TO_55);
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"opened", "ready_for_review"})
+  void anActionThatLeavesTheHeadAloneQueuesNoApprovalWithdrawal(String action) {
+    when(reviewDispatcher.dispatch(any(ReviewOrchestrator.ReviewRequest.class))).thenReturn(true);
+
+    deliverPullRequest("not-a-push", action, 55, "owner/repo", "sha55");
+
+    verify(reviewDispatcher, never()).dispatchApprovalWithdrawal(any());
+    verify(reviewDispatcher).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"\" \"", "null"})
+  void aPushWithNoHeadCommitQueuesNoApprovalWithdrawal(String sha) {
+    when(reviewDispatcher.dispatch(any(ReviewOrchestrator.ReviewRequest.class))).thenReturn(true);
+    var body =
+        buildPullRequestPayload("synchronize", 55, "owner/repo", "sha55", "main")
+            .replace("\"sha\":\"sha55\"", "\"sha\":" + sha);
+
+    deliver(
+        "pull_request",
+        event("pull_request", "push-blank-head", body.getBytes(StandardCharsets.UTF_8)));
+
+    verify(reviewDispatcher, never()).dispatchApprovalWithdrawal(any());
+    verify(deduplicator, never()).forget(anyString());
+  }
+
+  @Test
+  void aPushFromAnAccountThatIsNotAllowedQueuesNoApprovalWithdrawal() {
+    allowedAccounts = new AllowedAccounts(List.of("someone-else"));
+    events = newEvents(triggerFilter);
+
+    deliverPullRequest("push-not-allowed", "synchronize", 55, "owner/repo", "sha55");
+
+    verify(reviewDispatcher, never()).dispatchApprovalWithdrawal(any());
+  }
+
+  @Test
+  void anApprovalWithdrawalTheExecutorRejectsFreesTheDeliveryForARetry() {
+    when(reviewDispatcher.dispatchApprovalWithdrawal(any())).thenReturn(false);
+    when(prPauseService.isPaused(any(), eq("owner"), eq("repo"), eq(55))).thenReturn(true);
+
+    deliverPullRequest("push-rejected", "synchronize", 55, "owner/repo", "sha55");
+
+    verify(deduplicator).forget("push-rejected");
+  }
+
+  @Test
+  void aRejectedApprovalWithdrawalFreesTheDeliveryOnEveryPathThatEndsThePush() {
+    when(reviewDispatcher.dispatchApprovalWithdrawal(any())).thenReturn(false);
+    when(reviewDispatcher.dispatch(any(ReviewOrchestrator.ReviewRequest.class))).thenReturn(true);
+    deliverPullRequest("push-reviewed", "synchronize", 55, "owner/repo", "sha55");
+
+    when(reviewDispatcher.holdForRateWindow(any(ReviewOrchestrator.ReviewRequest.class)))
+        .thenReturn(ReviewDispatcher.RateWindowHold.NOT_KEPT);
+    deliverPullRequest("push-throttled", "synchronize", 55, "owner/repo", "sha55");
+
+    when(triggerFilter.skipReason(any(), any()))
+        .thenReturn(
+            Optional.of(new ReviewTriggerFilter.Skip(ReviewSkipReason.DRAFT, "PR is a draft")));
+    deliverPullRequest("push-draft", "synchronize", 55, "owner/repo", "sha55");
+
+    verify(deduplicator).forget("push-reviewed");
+    verify(deduplicator).forget("push-throttled");
+    verify(deduplicator).forget("push-draft");
   }
 
   @Test

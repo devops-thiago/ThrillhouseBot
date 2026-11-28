@@ -33,10 +33,12 @@ security limits. To report a vulnerability, see
   closed. This lasts one review: the held review is stored and can be read, so
   the next one is judged against it and what the unreadable reviews raised is
   no longer tracked.
-- A review that does not approve dismisses the approvals the bot gave earlier
-  on the same pull request, so an approval of an older head does not go on
-  counting for code the bot declined to approve. Only the bot's own reviews are
-  dismissed.
+- The bot's approval is for one commit. When commits are pushed to a pull
+  request the bot approved, it dismisses its approval at once, before any
+  review of the new head and whether or not one will run, so an approval of an
+  older head does not go on counting for code the bot has not reviewed. A
+  review that does not approve dismisses any approval the bot still has, too.
+  Only the bot's own reviews are dismissed.
 
 ## What you cannot expect
 
@@ -49,29 +51,42 @@ security limits. To report a vulnerability, see
   HTTPS to work.
 - OAuth sessions and some review state live in memory in a single process (see
   Known limitations in the README). A restart signs dashboard users out.
-- The bot's approval is not withdrawn at the moment commits are pushed. It is
-  dismissed when the review of the new head finishes without approving, and it
-  stays if that review never runs or fails, if the bot could not read the pull
-  request's reviews, or if a branch protection rule stops the App from
-  dismissing reviews. The bot logs a warning in each of the last two cases:
-  one when the reviews could not be listed, saying that earlier approvals were
-  not checked, and one for each approval it could not dismiss. A refusal for
-  want of permission (a 403 that is not a rate limit) ends the attempt for
-  that round. Any other failure (a timeout, a server error, a rate limit, or a
-  404 or 422 for one review) leaves that approval in place and the bot goes on
-  to its older ones. The bot reads at most 1,000 reviews per pull request,
-  oldest first, and logs a warning when it reaches that limit, since an
-  approval past it is not seen. A push inside `AUTO_REVIEW_MIN_INTERVAL` or
-  past a full repository queue is kept and reviewed late instead of skipped,
-  so timing a push to land inside the window does not by itself avoid the
-  review. That later review is held in memory. It does not run if the bot
-  restarts while it waits, if 10,000 pull requests already have one kept, if
-  the repository's queue stays full for an hour, if the review cannot be
-  started (the executor refuses it, or starting it fails for an hour), or if
-  the pull request is paused meanwhile, or converted to a draft while drafts
-  are skipped. If the bot's
-  approval counts towards a required review, turn on "Dismiss stale pull
-  request approvals when new commits are pushed" for the branch.
+- The bot's approval of an earlier commit stays after a push only when the bot
+  cannot withdraw it: it did not receive the push event (the bot was down, or
+  the delivery failed and was not redelivered), it restarted or its review
+  executor turned the work away before the dismissal ran (the dismissal is
+  queued in memory), the repository's account was taken off
+  `GITHUB_ALLOWED_ACCOUNTS` after the approval (the bot then ignores every
+  event from it), it could not list the pull request's reviews, or GitHub
+  did not let it dismiss the review, which a branch protection rule that
+  restricts who may dismiss reviews does. An event that arrives late or is
+  redelivered and names a commit the bot approved dismisses nothing by itself;
+  the event for the newer head does. A pull request reopened with commits
+  added while it was closed is treated like a push. The bot
+  logs a warning when the reviews could not be listed, saying that earlier
+  approvals were not checked, and one for each approval it could not dismiss.
+  A refusal for want of permission (a 403 that is not a rate limit) ends that
+  attempt. Any other failure (a timeout, a server error, a rate limit, or a 404
+  or 422 for one review) leaves that approval in place and the bot goes on to
+  its older ones. A later push, or a later review that does not approve, tries
+  again. The bot reads at most 1,000 reviews per pull request, oldest first,
+  and logs a warning when it reaches that limit, since an approval past it is
+  not seen. The dismissal waits for a review of the same pull request that is
+  already running or waiting for a review slot, so for that long the old
+  approval still counts. If the
+  bot's approval counts towards a required review, also turn on "Dismiss stale
+  pull request approvals when new commits are pushed" for the branch, so
+  GitHub drops it on the push whatever happens to the bot.
+- A push inside `AUTO_REVIEW_MIN_INTERVAL` or past a full repository queue is
+  kept and reviewed late instead of skipped, so timing a push to land inside
+  the window does not by itself avoid the review. That later review is held in
+  memory. It does not run if the bot restarts while it waits, if 10,000 pull
+  requests already have one kept, if the repository's queue stays full for an
+  hour, if the review cannot be started (the executor refuses it, or starting
+  it fails for an hour), or if the pull request is paused meanwhile, or
+  converted to a draft while drafts are skipped. The approval of the old head
+  is dismissed on the push all the same, so the pull request is then left
+  without the bot's approval, not with a stale one.
 - Only the latest release gets security fixes.
 
 ## Threat model
@@ -140,7 +155,9 @@ and decide dashboard access.
 
 `WebhookEvents` runs behind the Quarkiverse GitHub App extension's route, which rejects a
 request whose signature header is missing or does not match the body, and the application does
-not start without a webhook secret. With `GITHUB_ALLOWED_ACCOUNTS` set,
+not start without a webhook secret. It starts with a short one, and logs a warning when the
+secret has fewer than 16 characters: whoever learns the secret can send deliveries the bot
+accepts, so use a long random value. With `GITHUB_ALLOWED_ACCOUNTS` set,
 an event from an installation on any other account is ignored before any work,
 so a public App installed by a stranger never spends the operator's budget. The dashboard refuses a login it
 has never been able to check with GitHub, keeps a known login's last answer for
@@ -216,7 +233,7 @@ manager and rotated with a restart, without rebuilding.
 | Guessable session IDs (CWE-330) | 256-bit IDs from `SecureRandom`, 8-hour expiry | `dashboard/DashboardSessionStore` |
 | SQL injection (CWE-89) | Panache and JPQL queries with bound parameters only | `dashboard/`, `review/FindingFeedbackService` |
 | Improper certificate validation (CWE-295) | No custom `TrustManager`, `HostnameVerifier` or trust-all setting; the JDK and Vert.x defaults verify certificates and host names | `config/HttpClientProducer`, `application.properties` |
-| Slow or failing parsers on hostile text (CWE-1333, CWE-400) | The patterns run on a pull request's description and added lines read a bounded stretch of text from each place they can start, and an added line over 1,000 characters is not scanned for parser-like code. Ignore and path-scope globs from a repository's settings are matched without backtracking, in time proportional to the glob's length times the path's, and a glob over 500 characters is dropped. A hunk header whose line number fits no `int` opens no hunk instead of failing the review | `review/HeuristicCodeDetector`, `review/BugFixContextResolver`, `review/LinearGlob`, `review/PatchIndex` |
+| Slow or failing parsers on hostile text (CWE-1333, CWE-400) | The patterns run on a pull request's description and added lines read a bounded stretch of text from each place they can start, and an added line over 1,000 characters is not scanned for parser-like code. Ignore and path-scope globs from a repository's settings are matched without backtracking, in time proportional to the glob's length times the path's, and a glob over 500 characters is dropped. A hunk header whose line number fits no `int` opens no hunk instead of failing the review. The screens that look in the model's findings and description gaps for quoted passages, URLs and file names read a run of letters, digits, quotes or punctuation once rather than again from each of its characters | `review/HeuristicCodeDetector`, `review/BugFixContextResolver`, `review/LinearGlob`, `review/PatchIndex`, `review/QuotedPassages`, `review/PathMentions`, `review/DescriptionGapScreen` |
 | Unchecked input (CWE-20) | Webhook event types and dashboard parameters are matched against fixed lists, page sizes are clamped, configuration ranges are checked at startup | `webhook/WebhookEvents`, `dashboard/DashboardResource`, `config/StartupConfigValidator` |
 | Vulnerable dependencies (CWE-1395) | Dependabot, Dependency Review on every pull request, Trivy on the source tree and images, weekly scheduled scans | `.github/dependabot.yml`, `.github/workflows/` |
 

@@ -383,17 +383,8 @@ public class ReviewOrchestrator {
       var inlineComments = ctx.inlineComments();
       var lineResolver = ctx.lineResolver();
       var earlyReading = ciFuture == null ? null : ciFuture.join();
-      var ciFailures =
-          earlyReading == null
-              ? ""
-              : ciFailureContext.resolve(auth, req.owner(), req.repo(), earlyReading);
-      // #34: the annotations completed checks attached to the changed files; "" when the feature
-      // is off or there are none.
-      var staticFindings =
-          earlyReading == null
-              ? ""
-              : staticAnalysis.resolve(
-                  auth, req.owner(), req.repo(), earlyReading, ctx.reviewableFiles());
+      var ciFailures = ciFailuresIn(auth, req, earlyReading);
+      var staticFindings = staticFindingsIn(auth, req, earlyReading, ctx);
       // #58: the linked issues' text, read-only and best-effort; "" when the feature is off.
       var linkedIssues =
           ticketContext.resolve(
@@ -492,23 +483,25 @@ public class ReviewOrchestrator {
           auth, req.owner(), req.repo(), req.prNumber(), priorReviews);
       // summaryPosted gates the redundant-review skips: a failed summary post leaves review
       // posting enabled.
-      reviewPublisher.postReview(
-          new ReviewPublisher.PostReviewRequest(
-              auth,
-              req.owner(),
-              req.repo(),
-              req.prNumber(),
-              req.commitSha(),
-              result,
-              lineResolver,
-              summaryPosted,
-              previousFindings,
-              followUpDelta,
-              priorReviews,
-              config.review().showEvidence()
-                  ? finding -> evidence.basis().render(finding, ctx.pathInstructions(), ciCitations)
-                  : finding -> "",
-              inlineComments));
+      var postedThreads =
+          reviewPublisher.postReview(
+              new ReviewPublisher.PostReviewRequest(
+                  auth,
+                  req.owner(),
+                  req.repo(),
+                  req.prNumber(),
+                  req.commitSha(),
+                  result,
+                  lineResolver,
+                  summaryPosted,
+                  previousFindings,
+                  followUpDelta,
+                  priorReviews,
+                  config.review().showEvidence()
+                      ? finding ->
+                          evidence.basis().render(finding, ctx.pathInstructions(), ciCitations)
+                      : finding -> "",
+                  inlineComments));
 
       resultSurfaced = true;
       final var doneReq = req;
@@ -587,7 +580,7 @@ public class ReviewOrchestrator {
       // #73: the verdict is final for this run once it is on the pull request. A superseded run
       // returned above without reaching here, and a verdict held on CI is announced now, not again
       // when CiHoldRevisit posts the approval.
-      var openFindings = openFindingsOf(reviewPublisher, result, ctx.lineResolver());
+      var openFindings = openFindingsOf(result, postedThreads);
       runPostResultStep(
           doneReq,
           "send the outcome notification",
@@ -616,6 +609,29 @@ public class ReviewOrchestrator {
       }
     }
     return resultSurfaced;
+  }
+
+  /** The failed checks of the early CI reading (#59); "" when CI was not read early. */
+  private String ciFailuresIn(
+      String auth, ReviewRequest req, CiStatusEvaluator.CiEvaluation earlyReading) {
+    return earlyReading == null
+        ? ""
+        : ciFailureContext.resolve(auth, req.owner(), req.repo(), earlyReading);
+  }
+
+  /**
+   * The annotations completed checks attached to the changed files (#34); "" when CI was not read
+   * early, the feature is off or there are none.
+   */
+  private String staticFindingsIn(
+      String auth,
+      ReviewRequest req,
+      CiStatusEvaluator.CiEvaluation earlyReading,
+      ReviewContextLoader.ReviewContext ctx) {
+    return earlyReading == null
+        ? ""
+        : staticAnalysis.resolve(
+            auth, req.owner(), req.repo(), earlyReading, ctx.reviewableFiles());
   }
 
   /** Tells the dashboard's live activity page which step the review is on (#66). */
@@ -876,8 +892,8 @@ public class ReviewOrchestrator {
    * the orchestrator and everything it references.
    */
   private static Supplier<OpenFindings> openFindingsOf(
-      ReviewPublisher publisher, ReviewResult result, DiffLineResolver lineResolver) {
-    return () -> publisher.openFindings(result, lineResolver);
+      ReviewResult result, ManifestThreads.PostedThreads posted) {
+    return () -> ManifestThreads.openFindings(result, posted);
   }
 
   /**
