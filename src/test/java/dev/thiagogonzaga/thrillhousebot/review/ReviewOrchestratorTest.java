@@ -184,7 +184,7 @@ class ReviewOrchestratorTest {
             new PullRequestLabelGate(
                 mock(ReviewTriggerFilter.class),
                 authClient,
-                mock(GitHubLabelClient.class),
+                mock(GitHubTokenReads.class),
                 new CheckRunManager(checkRunClient),
                 skipEmitter));
     ThrillhouseConfig.GitHubConfig githubConfig = mock(ThrillhouseConfig.GitHubConfig.class);
