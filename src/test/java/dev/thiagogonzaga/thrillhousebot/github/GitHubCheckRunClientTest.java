@@ -235,6 +235,23 @@ class GitHubCheckRunClientTest {
     }
 
     @Test
+    void aCheckRunCreationRejectedForItsCredentialIsRepeatedWithAFreshOne() {
+      GitHubTokenRefresh.SHARED.bind(_ -> Optional.of(FRESH));
+      var client = mock(GitHubCheckRunClient.class);
+      doCallRealMethod()
+          .when(client)
+          .createCheckRun(anyString(), anyString(), anyString(), anyString(), any());
+      var created = new GitHubCheckRunClient.CheckRunResponse(7L, "https://github.test/run/7");
+      when(client.createCheckRunOnce(DEAD, "json", "o", "r", null)).thenThrow(badCredentials());
+      when(client.createCheckRunOnce(FRESH, "json", "o", "r", null)).thenReturn(created);
+
+      assertSame(created, client.createCheckRun(DEAD, "json", "o", "r", null));
+
+      verify(client, times(2))
+          .createCheckRunOnce(anyString(), anyString(), anyString(), anyString(), any());
+    }
+
+    @Test
     void aRejectionThatNoFreshTokenCanFixStillPropagates() {
       var client = updatingClient();
       var rejection = badCredentials();

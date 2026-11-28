@@ -33,16 +33,29 @@ public interface GitHubCheckRunClient {
   int CI_PER_PAGE = 100;
   int CI_MAX_PAGES = 50;
 
+  /** One HTTP attempt at creating a check run. Callers want {@link #createCheckRun} instead. */
   @POST
   @Path("/repos/{owner}/{repo}/check-runs")
   @Produces(MediaType.APPLICATION_JSON)
   @Consumes(MediaType.APPLICATION_JSON)
-  CheckRunResponse createCheckRun(
+  CheckRunResponse createCheckRunOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
       @PathParam("repo") String repo,
       CreateCheckRunRequest request);
+
+  /**
+   * Creates a check run, repeating the call once with a replacement token when GitHub rejects the
+   * credential. A rejected call created nothing, so the repeat cannot leave two check runs.
+   */
+  default CheckRunResponse createCheckRun(
+      String auth, String accept, String owner, String repo, CreateCheckRunRequest request) {
+    return GitHubTokenRefresh.SHARED.retrying(
+        "check run creation on " + owner + "/" + repo,
+        auth,
+        credential -> createCheckRunOnce(credential, accept, owner, repo, request));
+  }
 
   /** One HTTP attempt at updating a check run. Callers want {@link #updateCheckRun} instead. */
   @PATCH

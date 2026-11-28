@@ -35,18 +35,26 @@ import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 @RegisterProvider(GitHubErrorLogger.class)
 public interface GitHubInstallationClient {
 
-  /**
-   * The repository by name. A renamed repository answers its old name with a 301 whose {@code
-   * Location} ends in {@code /repositories/{id}}; redirects are not followed, so the caller reads
-   * the id from it (#1220).
-   */
+  /** One HTTP attempt at the repository lookup. Callers want {@link #getRepository} instead. */
   @GET
   @Path("/repos/{owner}/{repo}")
-  Response getRepository(
+  Response getRepositoryOnce(
       @HeaderParam("Authorization") String authorization,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
       @PathParam("repo") String repo);
+
+  /**
+   * The repository by name. A renamed repository answers its old name with a 301 whose {@code
+   * Location} ends in {@code /repositories/{id}}; redirects are not followed, so the caller reads
+   * the id from it (#1220). A rejected credential is replaced and the lookup repeated once.
+   */
+  default Response getRepository(String authorization, String accept, String owner, String repo) {
+    return GitHubTokenRefresh.SHARED.retrying(
+        "repository lookup " + owner + "/" + repo,
+        authorization,
+        credential -> getRepositoryOnce(credential, accept, owner, repo));
+  }
 
   /**
    * An installation of the App; {@code suspendedAt} is set while its owner has it suspended, and

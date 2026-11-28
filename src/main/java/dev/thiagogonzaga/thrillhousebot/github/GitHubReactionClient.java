@@ -35,11 +35,15 @@ import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 @RegisterProvider(GitHubErrorLogger.class)
 public interface GitHubReactionClient {
 
+  /**
+   * One HTTP attempt at reacting to a conversation comment. Callers want {@link
+   * #createIssueCommentReaction} instead.
+   */
   @POST
   @Path("/repos/{owner}/{repo}/issues/comments/{commentId}/reactions")
   @Produces(MediaType.APPLICATION_JSON)
   @Consumes(MediaType.APPLICATION_JSON)
-  void createIssueCommentReaction(
+  void createIssueCommentReactionOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
@@ -47,17 +51,58 @@ public interface GitHubReactionClient {
       @PathParam("commentId") long commentId,
       CreateReactionRequest request);
 
+  /**
+   * Reacts to a conversation comment, repeating the call once with a replacement token when GitHub
+   * rejects the credential. GitHub keeps one reaction of a kind per user, so a repeat adds nothing.
+   */
+  default void createIssueCommentReaction(
+      String auth,
+      String accept,
+      String owner,
+      String repo,
+      long commentId,
+      CreateReactionRequest request) {
+    GitHubTokenRefresh.SHARED.retrying(
+        "reaction to comment " + commentId + " on " + owner + "/" + repo,
+        auth,
+        credential -> {
+          createIssueCommentReactionOnce(credential, accept, owner, repo, commentId, request);
+          return null;
+        });
+  }
+
+  /**
+   * One HTTP attempt at reacting to an inline comment. Callers want {@link
+   * #createReviewCommentReaction} instead.
+   */
   @POST
   @Path("/repos/{owner}/{repo}/pulls/comments/{commentId}/reactions")
   @Produces(MediaType.APPLICATION_JSON)
   @Consumes(MediaType.APPLICATION_JSON)
-  void createReviewCommentReaction(
+  void createReviewCommentReactionOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
       @PathParam("repo") String repo,
       @PathParam("commentId") long commentId,
       CreateReactionRequest request);
+
+  /** Reacts to an inline comment, with the same repeat as {@link #createIssueCommentReaction}. */
+  default void createReviewCommentReaction(
+      String auth,
+      String accept,
+      String owner,
+      String repo,
+      long commentId,
+      CreateReactionRequest request) {
+    GitHubTokenRefresh.SHARED.retrying(
+        "reaction to inline comment " + commentId + " on " + owner + "/" + repo,
+        auth,
+        credential -> {
+          createReviewCommentReactionOnce(credential, accept, owner, repo, commentId, request);
+          return null;
+        });
+  }
 
   // GitHub serves up to 100 reactions per page.
   int REACTIONS_PER_PAGE = 100;

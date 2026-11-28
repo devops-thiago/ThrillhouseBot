@@ -132,6 +132,25 @@ class GitHubTokenReadsTest {
   }
 
   @Test
+  void aRepositoryListingRejectedForItsCredentialIsRepeatedWithAFreshOne() {
+    var listing =
+        json(200, "{\"total_count\":1,\"repositories\":[{\"id\":1,\"full_name\":\"o/a\"}]}");
+    var rejected = json(401, "{\"message\":\"Bad credentials\"}");
+    stub.on(
+        REPOSITORIES,
+        exchange -> {
+          var dead = DEAD.equals(exchange.getRequestHeaders().getFirst("Authorization"));
+          (dead ? rejected : listing).to(exchange);
+        });
+
+    var repositories = reads.installationRepositories(DEAD);
+
+    assertEquals(
+        List.of(new GitHubTokenReads.InstallationRepository(1L, "o/a", null)), repositories);
+    assertEquals(List.of(DEAD, FRESH), credentials());
+  }
+
+  @Test
   void aRepositoryListingThatNeverEndsIsCutOff() {
     stub.on(
         REPOSITORIES,
