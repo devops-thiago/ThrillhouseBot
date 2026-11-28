@@ -29,9 +29,9 @@ import java.util.function.LongSupplier;
  * completed less than {@code thrillhousebot.review.auto-review-min-interval} ago, new {@code
  * pull_request} events for it do not start a review — even when the head SHA changed — so noisy
  * repositories that push frequently do not burn AI spend and GitHub API budget on every commit. An
- * event for the head that review covered is skipped. One for another head is reviewed when the
- * window closes ({@link #hold}, {@link DeferredReviews}), so a push inside the window is
- * late, never unreviewed.
+ * event for the head that review covered is skipped. One for another head is kept to be reviewed
+ * when the window closes ({@link #hold}, {@link DeferredReviews}), so a push inside the window is
+ * reviewed late instead of skipped, unless {@link DeferredReviews} cannot keep it or loses it.
  *
  * <p>Only the automatic path consults this limiter; a manual {@code /review} (or {@code
  * @thrillhousebot review}) never checks it and never records into it, so explicit triggers always
@@ -110,7 +110,7 @@ public class AutoReviewRateLimiter {
    * @param throttled whether an automatic review of the PR completed within the configured
    *     interval, so no automatic review starts now
    * @param reviewDueAt the epoch millis the window closes at, when the event is throttled and its
-   *     head is not the one that review covered, so it is reviewed then; empty when the event is
+   *     head is not the one that review covered, so its review is due then; empty when the event is
    *     not throttled, when its head is unknown, and when that review already covered the head, in
    *     which case the event needs no review at all
    */
@@ -187,8 +187,8 @@ public class AutoReviewRateLimiter {
    * Callers must not record manual reviews — an explicit {@code /review} should not delay the next
    * automatic review. No-op when throttling is disabled.
    *
-   * @param headSha the head the review covered; an event for another head inside the window is
-   *     reviewed when the window closes
+   * @param headSha the head the review covered; an event for another head inside the window is held
+   *     back with the time the window closes at, for a review then
    */
   public void recordCompletion(String owner, String repo, int prNumber, String headSha) {
     if (intervalMillis <= 0) {

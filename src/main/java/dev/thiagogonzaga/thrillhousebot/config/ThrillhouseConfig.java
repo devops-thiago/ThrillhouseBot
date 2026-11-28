@@ -620,10 +620,10 @@ public interface ThrillhouseConfig {
     Duration ackReactionTimeout();
 
     /**
-     * Minimum time between automatic reviews of one PR. A push inside the window is reviewed when
-     * the window closes, the latest head only; a reopen or a repeated ready-for-review of the head
-     * already reviewed is skipped (in memory, per replica). {@code /review} always runs. {@code 0}
-     * reviews every event.
+     * Minimum time between automatic reviews of one PR. A push inside the window is kept, the
+     * latest head only, and reviewed when the window closes, unless the bot restarts first or
+     * cannot keep it; a reopen or a repeated ready-for-review of the head already reviewed is
+     * skipped (in memory, per replica). {@code /review} always runs. {@code 0} reviews every event.
      *
      * <p>A manual {@code /review} never shifts the window. A negative value also disables
      * throttling. The first ready-for-review of a head runs inside the window; a later one of the

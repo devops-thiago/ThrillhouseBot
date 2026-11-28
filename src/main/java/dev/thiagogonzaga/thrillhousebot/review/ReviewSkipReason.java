@@ -39,8 +39,8 @@ public enum ReviewSkipReason {
   EXCLUDED_AUTHOR,
   /**
    * An automatic review of the same head completed within {@code review.auto-review-min-interval}.
-   * An event for another head is not skipped: it is reviewed when the window closes ({@link
-   * DeferredReviews}), and counted here only when it could not be kept.
+   * An event for another head is kept to be reviewed when the window closes ({@link
+   * DeferredReviews}), and is counted here when it could not be kept.
    */
   RATE_LIMITED,
   /**
