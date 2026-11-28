@@ -40,7 +40,7 @@ public class ReviewThreadService {
         repository(owner: $owner, name: $name) {
           pullRequest(number: $number) {
             reviewThreads(first: 100, after: $after) {
-              nodes { id isResolved comments(first: 1) { nodes { databaseId } } }
+              nodes { id isResolved comments(first: 1) { nodes { id databaseId isMinimized } } }
               pageInfo { hasNextPage endCursor }
             }
           }
@@ -83,8 +83,17 @@ public class ReviewThreadService {
    */
   public static final String RESOLVE_PERMISSION = "`Contents: Read & write`";
 
-  /** A review thread keyed by its root comment, with its GraphQL node id. */
-  public record ThreadRef(String id, boolean resolved) {}
+  /**
+   * A review thread keyed by its root comment, with its GraphQL node id. {@code visibleRootId} is
+   * the root comment's node id while that comment is not minimized, otherwise {@code null}.
+   */
+  public record ThreadRef(String id, boolean resolved, String visibleRootId) {
+
+    /** A thread whose root comment cannot be minimized. */
+    public ThreadRef(String id, boolean resolved) {
+      this(id, resolved, null);
+    }
+  }
 
   private final GitHubGraphQLClient graphQLClient;
   private final GitHubWriteRetry writeRetry;
@@ -133,9 +142,14 @@ public class ReviewThreadService {
       for (JsonNode node : reviewThreads.path("nodes")) {
         var firstComment = node.path("comments").path("nodes").path(0);
         if (firstComment.path("databaseId").isNumber() && node.path("id").isTextual()) {
+          var visibleRootId =
+              firstComment.path("isMinimized").asBoolean()
+                  ? null
+                  : firstComment.path("id").asText(null);
           threads.put(
               firstComment.path("databaseId").asLong(),
-              new ThreadRef(node.path("id").asText(), node.path("isResolved").asBoolean()));
+              new ThreadRef(
+                  node.path("id").asText(), node.path("isResolved").asBoolean(), visibleRootId));
         }
       }
       var pageInfo = reviewThreads.path("pageInfo");

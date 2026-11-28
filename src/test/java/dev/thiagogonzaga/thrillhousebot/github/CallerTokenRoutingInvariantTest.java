@@ -62,9 +62,14 @@ class CallerTokenRoutingInvariantTest {
           // A dashboard user's own access token.
           "GitHubUserClient.listInstallations");
 
-  /** Callers outside the interface that route a single attempt themselves. */
+  /**
+   * Callers outside the interface that route a single attempt themselves. {@code
+   * CommentVisibilityService} minimizes a comment inside its own {@link GitHubWriteRetry} call,
+   * which replaces a rejected token and backs off on a throttle.
+   */
   private static final Set<String> ROUTED_ELSEWHERE =
       Set.of(
+          "CommentVisibilityService.java calls GitHubGraphQLClient.executeOnce",
           // Creates a pending review thread inside its own GitHubWriteRetry call, which also
           // records a write that was lost.
           "ReviewThreadService.java calls GitHubGraphQLClient.executeOnce");

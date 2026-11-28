@@ -74,6 +74,24 @@ class ReviewThreadServiceTest {
   }
 
   @Test
+  void namesTheRootCommentOnlyWhileItIsNotMinimized() throws Exception {
+    stubResponse(
+        """
+        {"data": {"repository": {"pullRequest": {"reviewThreads": {"nodes": [
+          {"id": "T1", "isResolved": false,
+           "comments": {"nodes": [{"id": "C1", "databaseId": 100, "isMinimized": false}]}},
+          {"id": "T2", "isResolved": false,
+           "comments": {"nodes": [{"id": "C2", "databaseId": 200, "isMinimized": true}]}}
+        ]}}}}}
+        """);
+
+    var threads = service.threadsByRootComment("auth", "owner", "repo", 7);
+
+    assertEquals("C1", threads.get(100L).visibleRootId());
+    assertNull(threads.get(200L).visibleRootId());
+  }
+
+  @Test
   void shouldWalkAllPagesWhenThreadsSpanMoreThanOnePage() throws Exception {
     var page1 =
         mapper.readTree(

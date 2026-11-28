@@ -34,6 +34,8 @@ import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -127,6 +129,7 @@ public class ReviewOrchestrator {
   private final ReviewNotifier notifier;
 
   private final FindingStates findingStates;
+  private final OutdatedOutputHider outdatedOutput;
 
   /**
    * Parameter object for the {@link #review(ReviewRequest)} method.
@@ -263,7 +266,9 @@ public class ReviewOrchestrator {
       StaticAnalysisContextResolver staticAnalysis,
       TicketContextResolver ticketContext,
       ReviewLearnings learnings,
-      FindingStates findingStates) {
+      FindingStates findingStates,
+      OutdatedOutputHider outdatedOutput) {
+    this.outdatedOutput = outdatedOutput;
     this.config = config;
     this.authClient = authClient;
     this.broadcaster = broadcaster;
@@ -321,6 +326,7 @@ public class ReviewOrchestrator {
    */
   @ActivateRequestContext
   public boolean review(ReviewRequest request) {
+    var startedAt = Instant.now();
     Log.infof(
         "Starting review for %s/%s #%d (sha: %s)",
         request.owner(), request.repo(), request.prNumber(), request.commitSha());
@@ -520,12 +526,20 @@ public class ReviewOrchestrator {
                       checkTitle,
                       checkSummary,
                       sessionUrl(session))));
+      var refusedThreads = new ArrayList<String>();
       runPostResultStep(
           doneReq,
           "resolve addressed threads",
           () ->
-              reviewPublisher.resolveAddressedThreads(
-                  auth, doneReq, previousFindings, inlineComments, result.previousStatuses()));
+              refusedThreads.addAll(
+                  reviewPublisher.resolveAddressedThreads(
+                      auth, doneReq, previousFindings, inlineComments, result.previousStatuses())));
+      runPostResultStep(
+          doneReq,
+          "hide outdated bot output",
+          () ->
+              outdatedOutput.hide(
+                  auth, doneReq, startedAt, refusedThreads, result.openPreviousFindings()));
       runPostResultStep(
           doneReq,
           "capture finding feedback",

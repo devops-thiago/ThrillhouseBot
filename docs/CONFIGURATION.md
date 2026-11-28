@@ -214,6 +214,12 @@ Prices used for cost tracking, keyed by model name (the `AI_MODEL` value) like t
 |---|---|---|---|
 | `REVIEW_FOLLOW_UP_SUMMARY_ENABLED`<br>`thrillhousebot.review.follow-up-summary.enabled` | Include new, resolved and still-open counts in the follow-up review outcome, naming closed findings once. No separate delta comment; nothing is added when no finding is raised or closed. | boolean | `false` |
 
+## `thrillhousebot.review.hide-outdated`
+
+| Variable | Description | Type | Default |
+|---|---|---|---|
+| `REVIEW_HIDE_OUTDATED_ENABLED`<br>`thrillhousebot.review.hide-outdated.enabled` | Minimize the bot's superseded comments and reviews after posting a review. | boolean | `false` |
+
 ## `thrillhousebot.review.labels`
 
 | Variable | Description | Type | Default |
