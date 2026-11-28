@@ -139,6 +139,10 @@ cannot resolve its review threads.
 
 ### Fixed
 
+- **A review no longer drifts into another language** (#1467): no prompt said which language to
+  write in, so a model could answer an English pull request with a summary in another one. Every
+  prompt now asks for English prose, with code, identifiers, paths and quotations left as they are.
+  That includes replies and the `/describe`, `/changelog`, `/add-docs`, `/improve` and `/generate-tests` commands.
 - **A review names the earlier findings it says are still open** (#1436): a review with no new
   findings used to state only how many remain unresolved. Its body now lists each of them by
   `path:line` and title, most severe first, with a link to its review thread or a mark saying it
