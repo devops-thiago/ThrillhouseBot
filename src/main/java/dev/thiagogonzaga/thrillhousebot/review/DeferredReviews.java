@@ -37,11 +37,12 @@ import java.util.function.LongSupplier;
  *
  * <p>Bounds. A pull request has one entry, and a newer request replaces it, so a burst of pushes
  * costs one review. At most {@link #MAX_PENDING} pull requests have an entry; past that a new one
- * is refused and the caller records the skip, as it did before. An entry leaves when it is handed
- * out and its review runs, when the pull request is closed or merged, when a newer event for the
- * pull request is dispatched or filtered out, and at shutdown. A handed-out entry is remembered for
- * {@link #GIVE_UP_AFTER} so a request that keeps coming back (a repository queue that stays full)
- * is refused after that long instead of retried without end.
+ * is refused and the caller records the skip, as it did before. An entry leaves when the pull
+ * request is closed or merged, when a newer event for the pull request is dispatched or filtered
+ * out, and at shutdown. Handing an entry out does not remove it, and neither does its review
+ * running: it stays, counted towards the limit, until {@link #GIVE_UP_AFTER} has passed since it
+ * was first handed out, so a request that keeps coming back (a repository queue that stays full) is
+ * refused after that long instead of retried without end.
  *
  * <p>State is in memory, like the limits it serves: a restart forgets the reviews still waiting.
  */

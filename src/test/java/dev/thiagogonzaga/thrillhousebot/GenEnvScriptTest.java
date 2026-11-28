@@ -28,6 +28,8 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 /**
  * Runs {@code scripts/GenEnv.java} as the setup guide does, on a made-up manifest conversion
@@ -60,7 +62,36 @@ class GenEnvScriptTest {
     assertTrue(env.contains("\nGITHUB_APP_ID=4242\n"), env);
   }
 
+  // The bot refuses to start on a GITHUB_URL that is not an https address, so the script does
+  // not write one into the .env.
+  @ParameterizedTest
+  @CsvSource({
+    "http://github.example.com, the scheme http",
+    "github.example.com, no scheme",
+    "ftp://github.example.com, a scheme other than https",
+    "https:///organizations, no valid host name",
+    "https://user:secret@github.example.com, a user name or password in the address",
+    "https://github example.com, text that is not a URL"
+  })
+  void refusesAGitHubAddressTheBotWouldNotStartOn(String address, String found) throws Exception {
+    var run = run("--host", "bot.example.com", "--github-url", address);
+
+    assertEquals(1, run.exitCode(), run.output());
+    assertTrue(run.output().contains("--github-url must be an https address"), run.output());
+    assertTrue(run.output().contains("found " + found), run.output());
+    assertFalse(run.output().contains("secret"), run.output());
+    assertFalse(Files.exists(workDir.resolve(".env")), "no .env is written");
+  }
+
   private String generate(String... args) throws IOException, InterruptedException {
+    var run = run(args);
+    assertEquals(0, run.exitCode(), run.output());
+    return Files.readString(workDir.resolve(".env"));
+  }
+
+  private record Run(int exitCode, String output) {}
+
+  private Run run(String... args) throws IOException, InterruptedException {
     var command = new ArrayList<String>();
     command.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
     command.add(Path.of("scripts", "GenEnv.java").toAbsolutePath().toString());
@@ -72,7 +103,6 @@ class GenEnvScriptTest {
     }
     var output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
     assertTrue(process.waitFor(60, TimeUnit.SECONDS), output);
-    assertEquals(0, process.exitValue(), output);
-    return Files.readString(workDir.resolve(".env"));
+    return new Run(process.exitValue(), output);
   }
 }

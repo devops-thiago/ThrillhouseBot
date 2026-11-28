@@ -132,7 +132,9 @@ cannot resolve its review threads.
   the pull request did not change. It is now dropped as a repeat of the answered finding.
 - **An added line that starts with `++` is read as added (#1396)**: a line such as `++i;` was
   mistaken for the diff's file header when the bot collected changed names and configuration keys,
-  so what it declared was missed.
+  so what it declared was missed. The file header a patch may carry was also scanned for environment
+  reads, so a path that spells one (such as `process.env.ts`) could spend a fetch for
+  configuration-key context; it is now skipped.
 - **A suggestion's new code loses a copied line number (#1364)**: when the quoted old code kept its
   diff markers and a new line dropped them, the copied line number stayed in the suggestion.
 - **An environment read named in a docstring is not a read (#1473)**: a read named inside a
