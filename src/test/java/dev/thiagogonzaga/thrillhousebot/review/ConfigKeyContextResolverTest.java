@@ -284,6 +284,18 @@ class ConfigKeyContextResolverTest {
     }
 
     @Test
+    void shouldReadAnAddedLineWhoseContentStartsWithTwoPlusSigns() {
+      // Inside a hunk "+++" is the added marker and content that starts with "++", such as
+      // a "+++" front-matter delimiter line, not the file header.
+      var patch = "@@ -1 +1,3 @@\n intro\n+++ `FRONT_MATTER_KEY` +++\n+`REAL_DOC_KEY` matters";
+      var doc = new FileDiff("README.md", "modified", 2, 0, 2, patch);
+
+      assertEquals(
+          List.of("FRONT_MATTER_KEY", "REAL_DOC_KEY"),
+          ConfigKeyContextResolver.extractTokens(List.of(doc)));
+    }
+
+    @Test
     void shouldIgnoreThePatchFileHeaderLine() {
       var withHeader =
           new FileDiff(
@@ -442,6 +454,42 @@ class ConfigKeyContextResolverTest {
     }
 
     /**
+     * The file header a patch may carry before its first hunk names a path, not a line of the file,
+     * so a path that spells a read is not one. Inside a hunk the same prefix is content.
+     */
+    @Test
+    void shouldNotReadTheFileHeaderBeforeTheFirstHunkAsContent() {
+      var pathOnly =
+          new FileDiff(
+              "src/process.env.ts",
+              "modified",
+              1,
+              0,
+              1,
+              """
+              --- a/src/process.env.ts
+              +++ b/src/process.env.ts
+              @@ -1 +1,2 @@
+               const x = 1;
+              +const y = 2;""");
+      var inHunk =
+          new FileDiff(
+              "counter.js",
+              "modified",
+              1,
+              0,
+              1,
+              """
+              @@ -1 +1,2 @@
+               let n = 0;
+              +++n; const cap = process.env.CAP;""");
+
+      assertEquals(
+          java.util.Set.of("counter.js"),
+          ConfigKeyContextResolver.environmentReaders(List.of(pathOnly, inHunk)));
+    }
+
+    /**
      * A read named only in a comment, a trailing comment or a string literal is named, not made.
      */
     @ParameterizedTest
@@ -478,6 +526,65 @@ class ConfigKeyContextResolverTest {
       var file = new FileDiff("a.go", "modified", 1, 0, 1, "@@ -1 +1 @@\n" + line);
 
       assertTrue(ConfigKeyContextResolver.environmentReaders(List.of(file)).isEmpty());
+    }
+
+    /**
+     * A read named on an inner line of a docstring or block comment the hunk opens and closes is
+     * named, not made.
+     */
+    @ParameterizedTest
+    @ValueSource(
+        strings = {
+          """
+          +def home():
+          +    \"""Returns the home directory.
+          +
+          +    Defaults to os.getenv("HOME") when unset.
+          +    \"""
+          +    return HOME""",
+          " doc = '''\n+reads os.environ at boot\n-old line\n '''",
+          """
+          +/* The limit used to come from
+          +   os.Getenv("X"), and still falls back to
+          +   os.Getenv("Y") */
+          +limit := 3""",
+          "+<!--\n+import.meta.env.VITE_X\n+-->",
+          "+x = 1 --[[ was\n+os.getenv(\"X\")\n+]]",
+          "+doc = \"\"\"a\n+{os.environ} and {getenv(1)}\n+\"\"\"",
+          "+/* a\n+*/ x = 1 /* b\n+getenv(1)\n+*/"
+        })
+    void shouldNotTakeAReadNamedInsideAMultiLineLiteralOrCommentForOne(String lines) {
+      var file = new FileDiff("a.py", "modified", 1, 0, 1, "@@ -1 +1,6 @@\n" + lines);
+
+      assertTrue(ConfigKeyContextResolver.environmentReaders(List.of(file)).isEmpty());
+    }
+
+    /**
+     * A read made beside a multi-line literal or comment still counts: after its closer, in an
+     * interpolation on an inner line, in another hunk, or where the hunk shows only one end of it,
+     * so its opener cannot be told from its closer.
+     */
+    @ParameterizedTest
+    @ValueSource(
+        strings = {
+          "+\"\"\"Summary.\n+\n+Details.\n+\"\"\" + os.getenv(\"X\")",
+          "+/* a\n+   b */ v := os.Getenv(\"X\")",
+          "+v = f\"\"\"\n+  {os.environ['X']}\n+\"\"\"",
+          "+v = \"\"\"\n+  ${process.env.X}\n+\"\"\"",
+          """
+               the end of a docstring that began above the hunk.
+               \"""
+          +    return os.getenv("X")""",
+          "+    return os.getenv(\"X\")\n+\n+def next():\n+    \"\"\"A docstring the hunk cuts.",
+          "+/* open\n@@ -9 +9 @@\n+v = os.getenv(\"X\")\n+# */",
+          "+rm -rf build/*\n+v = os.getenv(\"X\")",
+          "+v = os.getenv(\"X\")\n@@ -9 +9 @@\n+x = 1"
+        })
+    void shouldKeepAReadMadeBesideAMultiLineLiteralOrComment(String lines) {
+      var file = new FileDiff("a.py", "modified", 1, 0, 1, "@@ -1 +1,6 @@\n" + lines);
+
+      assertEquals(
+          java.util.Set.of("a.py"), ConfigKeyContextResolver.environmentReaders(List.of(file)));
     }
 
     /** Lines that open like a comment in one language but are code in another still count. */

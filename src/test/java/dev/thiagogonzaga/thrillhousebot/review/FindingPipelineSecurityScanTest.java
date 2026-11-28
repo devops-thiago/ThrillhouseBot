@@ -75,7 +75,7 @@ class FindingPipelineSecurityScanTest {
     var budgetPlanner = mock(DiffBudgetPlanner.class);
     when(quoteValidator.validate(any(), any())).thenAnswer(inv -> inv.getArgument(0));
     when(frameworkFilter.filter(any(), any())).thenAnswer(inv -> inv.getArgument(0));
-    when(followUpAnalyzer.dropRepliedDuplicates(any(), any(), any(), any(), any()))
+    when(followUpAnalyzer.dropRepliedDuplicates(any(), any(), any(), any(), any(), any()))
         .thenAnswer(inv -> inv.getArgument(0));
     lenient().when(budgetPlanner.perCallInputBudget()).thenReturn(Integer.MAX_VALUE);
     lenient()

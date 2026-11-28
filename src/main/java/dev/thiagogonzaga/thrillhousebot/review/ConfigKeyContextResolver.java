@@ -329,11 +329,16 @@ public class ConfigKeyContextResolver {
     return word.contains("://") || word.contains("www.");
   }
 
-  /** The patch's added content ({@code +} lines, excluding the {@code +++} file header). */
+  /**
+   * The patch's added content: its {@code +} lines, without the {@code +++} file header a patch may
+   * carry before its first hunk. Inside a hunk a line starting {@code +++} is added content.
+   */
   private static String addedLines(String patch) {
     var added = new StringBuilder();
+    var inHunk = false;
     for (var line : patch.split("\n", -1)) {
-      if (line.startsWith("+") && !line.startsWith("+++")) {
+      inHunk = inHunk || line.startsWith("@@");
+      if (ChangeSymbols.isAddedLine(line, inHunk)) {
         added.append(line, 1, line.length()).append('\n');
       }
     }
@@ -437,15 +442,30 @@ public class ConfigKeyContextResolver {
   }
 
   private static boolean readsEnvironment(String patch) {
+    // Added and context lines only: a hunk header's trailing section text is neither, and nor is
+    // the +++ file header a patch may carry before its first hunk, which names a path. They are
+    // read a hunk at a time, the consecutive lines of the new file, so a docstring or a block
+    // comment is followed across its lines: a read named only in a comment or a string literal is
+    // not made, so it would spend a fetch slot.
+    var hunk = new ArrayList<String>();
+    var inHunk = false;
     for (var line : patch.split("\n", -1)) {
-      // Added and context lines only: a hunk header's trailing section text is neither. A read
-      // named only in a comment or a string literal is not made, so it would spend a fetch slot.
-      if ((line.startsWith("+") || line.startsWith(" "))
-          && readsEnvironmentIn(SourceLineCode.of(line.substring(1)))) {
-        return true;
+      if (line.startsWith("@@")) {
+        if (readsEnvironment(hunk)) {
+          return true;
+        }
+        hunk.clear();
+        inHunk = true;
+      } else if (ChangeSymbols.isAddedLine(line, inHunk) || line.startsWith(" ")) {
+        hunk.add(line.substring(1));
       }
     }
-    return false;
+    return readsEnvironment(hunk);
+  }
+
+  private static boolean readsEnvironment(List<String> hunkLines) {
+    return SourceLineCode.ofLines(hunkLines).stream()
+        .anyMatch(ConfigKeyContextResolver::readsEnvironmentIn);
   }
 
   private static boolean readsEnvironmentIn(String code) {
