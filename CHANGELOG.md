@@ -166,6 +166,11 @@ cannot resolve its review threads.
 
 ### Security
 
+- **The bot's approval is found on a pull request with more than 1,000 reviews**: reviews were read
+  oldest first, up to 1,000, and every reply on a review thread counts as one. Past that point a
+  later approval by the bot was not seen, so it was not dismissed when a round ended without
+  approving, and anyone who can comment could take a pull request there. The newest 1,000 are now
+  read, and at that limit the bot also asks GitHub for its own approvals.
 - **A declined secret finding no longer covers a different secret**: a decline is matched on later
   rounds by the hidden marker at the end of the finding, and the comparison also accepted the
   unkeyed value that v0.7.0 wrote. Anyone can compute that value, so a pull request's author could
