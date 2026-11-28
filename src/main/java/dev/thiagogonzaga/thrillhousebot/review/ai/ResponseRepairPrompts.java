@@ -41,7 +41,9 @@ public final class ResponseRepairPrompts {
             - A field the answer does not have stays out. Never make up a value.
             - When the answer holds no content at all for the contract, return the contract's empty
               shape.
-            """;
+            """
+          + PrReviewPrompts.ENGLISH_PROSE_RULE
+          + "Translating such prose is the only rewording allowed.\n";
 
   /**
    * The user message. {@code contract} and {@code error} are this class's and the parser's own
