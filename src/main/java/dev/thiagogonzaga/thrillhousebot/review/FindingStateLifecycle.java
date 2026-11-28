@@ -37,7 +37,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
-import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 /**
  * Keeps the stored finding rows (#1319) in step with the pull requests and the installation.
@@ -85,7 +84,7 @@ public class FindingStateLifecycle {
   public FindingStateLifecycle(
       FindingStates states,
       GitHubAuthClient authClient,
-      @RestClient GitHubPullRequestClient prClient,
+      GitHubPullRequestClient prClient,
       Vertx vertx,
       ThrillhouseConfig config) {
     this(states, authClient, prClient, vertx, config.findings().retention(), Instant::now);

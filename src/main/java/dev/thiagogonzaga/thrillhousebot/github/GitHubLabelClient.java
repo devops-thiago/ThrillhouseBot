@@ -22,59 +22,13 @@ import java.util.List;
 import org.eclipse.microprofile.rest.client.annotation.RegisterProvider;
 import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 
-/** GitHub REST endpoints for reading a repository's labels and applying them to a PR. */
+/**
+ * GitHub REST endpoints for creating a repository's labels and applying them to a PR. The labels
+ * are read through {@link GitHubTokenReads}.
+ */
 @RegisterRestClient(configKey = "github-api")
 @RegisterProvider(GitHubErrorLogger.class)
 public interface GitHubLabelClient {
-
-  @GET
-  @Path("/repos/{owner}/{repo}/labels")
-  @Produces(MediaType.APPLICATION_JSON)
-  List<Label> listLabelsOnce(
-      @HeaderParam("Authorization") String auth,
-      @HeaderParam("Accept") String accept,
-      @PathParam("owner") String owner,
-      @PathParam("repo") String repo,
-      @QueryParam("per_page") int perPage,
-      @QueryParam("page") int page);
-
-  /** One page of a repo's labels, healing a rejected credential per page (#626). */
-  default List<Label> listLabels(
-      String auth, String accept, String owner, String repo, int perPage, int page) {
-    return GitHubTokenRefresh.SHARED.retrying(
-        "labels page " + page + " of " + owner + "/" + repo,
-        auth,
-        credential -> listLabelsOnce(credential, accept, owner, repo, perPage, page));
-  }
-
-  /** Lists the labels currently on a PR (PRs are issues for the labels API). */
-  @GET
-  @Path("/repos/{owner}/{repo}/issues/{issueNumber}/labels")
-  @Produces(MediaType.APPLICATION_JSON)
-  List<Label> listIssueLabelsOnce(
-      @HeaderParam("Authorization") String auth,
-      @HeaderParam("Accept") String accept,
-      @PathParam("owner") String owner,
-      @PathParam("repo") String repo,
-      @PathParam("issueNumber") int issueNumber,
-      @QueryParam("per_page") int perPage,
-      @QueryParam("page") int page);
-
-  /** One page of a PR's labels, healing a rejected credential per page (#626). */
-  default List<Label> listIssueLabels(
-      String auth,
-      String accept,
-      String owner,
-      String repo,
-      int issueNumber,
-      int perPage,
-      int page) {
-    return GitHubTokenRefresh.SHARED.retrying(
-        "issue labels page " + page + " of " + owner + "/" + repo + "#" + issueNumber,
-        auth,
-        credential ->
-            listIssueLabelsOnce(credential, accept, owner, repo, issueNumber, perPage, page));
-  }
 
   /**
    * Adds labels to a PR (PRs are issues for the labels API). Idempotent — labels already present

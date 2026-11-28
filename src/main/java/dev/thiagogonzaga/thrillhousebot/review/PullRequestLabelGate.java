@@ -16,16 +16,14 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubLabelClient;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubTokenReads;
 import dev.thiagogonzaga.thrillhousebot.webhook.ReviewTriggerFilter;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
-import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 /**
  * Applies the {@code webhook.triggers} label gates to the labels a pull request carries now, read
@@ -34,11 +32,9 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
  * label can also be added while a review runs or while its approval is held on CI. Every check here
  * is skipped, with no API call, when no label gate is configured.
  *
- * <p>A read either returns every label or nothing: unlike {@link PrLabeler}'s capping read, a
- * partial set is never used, because a page lost to a failure could be the one that carries the
- * excluded label. A failed or empty-bodied page makes the whole set unreadable, and each caller
- * decides what that means for it. The only bound is {@link PrLabeler#MAX_LABEL_PAGES} pages of 100,
- * far past the labels GitHub lets one issue carry.
+ * <p>A read either returns every label or nothing, because a partial set could miss the excluded
+ * label. GitHub returns all of them with the pull request's issue. A failed read makes the whole
+ * set unreadable, and each caller decides what that means for it.
  *
  * <p>A run or held approval the gates reject stands down the same way from either caller ({@link
  * #standDown}): the skip is counted under the gate's reason and the check run concluded as skipped,
@@ -47,9 +43,6 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
  */
 @ApplicationScoped
 public class PullRequestLabelGate {
-
-  private static final String ACCEPT = "application/vnd.github+json";
-  private static final int LABELS_PER_PAGE = 100;
 
   /** SKIPPED check-run title when a label gate stopped a post or a held approval. */
   static final String CHECK_TITLE = "Review skipped by a label gate";
@@ -70,7 +63,7 @@ public class PullRequestLabelGate {
 
   private final ReviewTriggerFilter triggerFilter;
   private final GitHubAuthClient authClient;
-  private final GitHubLabelClient labelClient;
+  private final GitHubTokenReads reads;
   private final CheckRunManager checkRunManager;
   private final ReviewSkipEmitter skipEmitter;
 
@@ -78,12 +71,12 @@ public class PullRequestLabelGate {
   public PullRequestLabelGate(
       ReviewTriggerFilter triggerFilter,
       GitHubAuthClient authClient,
-      @RestClient GitHubLabelClient labelClient,
+      GitHubTokenReads reads,
       CheckRunManager checkRunManager,
       ReviewSkipEmitter skipEmitter) {
     this.triggerFilter = triggerFilter;
     this.authClient = authClient;
-    this.labelClient = labelClient;
+    this.reads = reads;
     this.checkRunManager = checkRunManager;
     this.skipEmitter = skipEmitter;
   }
@@ -146,7 +139,7 @@ public class PullRequestLabelGate {
   /**
    * The names of every label on the pull request, authenticating as the installation.
    *
-   * @return empty when the token or any page of labels could not be read
+   * @return empty when the token or the labels could not be read
    */
   public Optional<List<String>> currentLabels(
       long installationId, String owner, String repo, int prNumber) {
@@ -161,29 +154,20 @@ public class PullRequestLabelGate {
   }
 
   /**
-   * The names of every label on the pull request, walking pages up to {@link
-   * PrLabeler#MAX_LABEL_PAGES}.
+   * The names of every label on the pull request.
    *
-   * @return empty when any page could not be read or came back without a body
+   * @return empty when they could not be read
    */
   public Optional<List<String>> currentLabels(
       String auth, String owner, String repo, int prNumber) {
-    var names = new ArrayList<String>();
     try {
-      List<GitHubLabelClient.Label> page = null;
-      for (int p = 1;
-          p <= PrLabeler.MAX_LABEL_PAGES && (page == null || page.size() == LABELS_PER_PAGE);
-          p++) {
-        page = labelClient.listIssueLabels(auth, ACCEPT, owner, repo, prNumber, LABELS_PER_PAGE, p);
-        if (page == null) {
-          return Optional.empty();
-        }
-        page.forEach(label -> names.add(label.name()));
-      }
+      return Optional.of(
+          reads.issueLabels(auth, owner, repo, prNumber).stream()
+              .map(label -> label.name())
+              .toList());
     } catch (RuntimeException e) {
       Log.warnf(e, "Could not read the labels on %s/%s #%d", owner, repo, prNumber);
       return Optional.empty();
     }
-    return Optional.of(names);
   }
 }
