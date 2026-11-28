@@ -56,6 +56,7 @@ public class ReviewPublisher {
   private static final Function<Finding, String> NO_BASIS = finding -> "";
 
   private static final String FOUND_PREFIX = "ThrillhouseBot found ";
+  private static final String REVIEW_CHANGES_REQUESTED = "CHANGES_REQUESTED";
   private static final String ACCEPT = "application/vnd.github+json";
   private static final String EVENT_REQUEST_CHANGES = "REQUEST_CHANGES";
   private static final String EVENT_APPROVE = "APPROVE";
@@ -63,6 +64,7 @@ public class ReviewPublisher {
   private static final String CI_PENDING = "pending";
   private static final String REVIEW_PENDING = "PENDING";
   private static final String REVIEW_APPROVED = "APPROVED";
+  private static final String REVIEW_DISMISSED = "DISMISSED";
 
   /**
    * Room the still-open list leaves under {@link CommentBodyLimit#MAX_LENGTH} for what the write
@@ -893,16 +895,17 @@ public class ReviewPublisher {
     }
 
     var bodyParts = new ArrayList<String>();
-    var skipped = skippedFindingsBodyParts(inline, post);
-    if (result.reviewState() == ReviewState.REQUEST_CHANGES) {
-      var sentence = "ThrillhouseBot requested changes — see inline comments on the diff.";
-      bodyParts.add(skipped.isEmpty() ? ReadBackMarkers.status(sentence) : sentence);
-    }
-    bodyParts.addAll(skipped);
+    bodyParts.add(verdictOpening(result, post, inline.threaded()));
+    bodyParts.addAll(skippedFindingsBodyParts(inline, result, post));
     appendPreviousOutcome(bodyParts, result, post);
     bodyParts.addAll(reopenedDeclineNotes(result));
     appendReviewNotice(bodyParts, result, post);
     appendOpenList(bodyParts, result, post, inline.threaded());
+    if (result.reviewState() != ReviewState.REQUEST_CHANGES
+        && pending.isEmpty()
+        && bodyParts.size() == 1) {
+      bodyParts.clear();
+    }
     if (pending.isPresent()) {
       // Inline threads landed ({@code inline.posted() > 0} — the branch above returned otherwise).
       // Ends publishReview; the orchestrator still runs check-run conclusion, thread resolution
@@ -911,7 +914,7 @@ public class ReviewPublisher {
           submitPendingReviewWithFallback(
               post,
               pending.get(),
-              new BatchedSubmit(batchedReviewSubmitBody(bodyParts, event), event, inline, result));
+              new BatchedSubmit(String.join("\n\n", bodyParts), event, inline, result));
       return submitted
           ? ManifestThreads.PostedThreads.of(inline.threaded())
           : ManifestThreads.PostedThreads.NONE;
@@ -940,10 +943,11 @@ public class ReviewPublisher {
       ReviewResult result,
       PostReviewRequest post) {
     var parts = new ArrayList<String>();
+    parts.add(verdictOpening(result, post, List.of()));
     if (!unpublished.isEmpty()) {
       parts.add(unpublishedFindingsBody(unpublished));
     }
-    parts.addAll(skippedFindingsBodyParts(inline, post));
+    parts.addAll(skippedFindingsBodyParts(inline, result, post));
     appendPreviousOutcome(parts, result, post);
     parts.addAll(reopenedDeclineNotes(result));
     appendReviewNotice(parts, result, post);
@@ -975,11 +979,7 @@ public class ReviewPublisher {
       ReviewResult result, PostReviewRequest post, List<Finding> postedNow, int used) {
     return OpenFindingNames.section(
         PromptLabelScrubber.scrubFindings(result.openPreviousFindings()),
-        new OpenFindingNames.Threads(
-            post.inlineComments(),
-            postedNow,
-            botIdentity,
-            GitHubUrls.pullRequest(post.owner(), post.repo(), post.prNumber())),
+        threads(post, postedNow),
         CommentBodyLimit.MAX_LENGTH - BODY_RESERVE - used);
   }
 
@@ -1063,21 +1063,82 @@ public class ReviewPublisher {
    * Review-body sections for findings not posted inline — un-anchored, cap-skipped, and/or
    * confidence-routed to the summary's "Things to double-check" section.
    */
-  private static List<String> skippedFindingsBodyParts(
-      InlineCommentResult inline, PostReviewRequest post) {
+  private List<String> skippedFindingsBodyParts(
+      InlineCommentResult inline, ReviewResult result, PostReviewRequest post) {
     var parts = new ArrayList<String>();
     if (!inline.unanchored().isEmpty()) {
-      parts.add(unanchoredFindingsBody(inline));
+      parts.add(skippedSection(unanchoredFindingsBody(inline), inline.unanchored(), result));
     }
     if (!inline.capSkipped().isEmpty()) {
-      parts.add(capSkippedFindingsBody(inline.capSkipped()));
+      parts.add(
+          skippedSection(capSkippedFindingsBody(inline.capSkipped()), inline.capSkipped(), result));
     }
     if (!inline.confidenceSkipped().isEmpty()) {
       parts.add(
-          confidenceSkippedFindingsBody(
-              inline.confidenceSkipped(), post.summaryListsDoubleCheck()));
+          skippedSection(
+              confidenceSkippedFindingsBody(
+                  inline.confidenceSkipped(), post.summaryListsDoubleCheck()),
+              inline.confidenceSkipped(),
+              result));
     }
     return parts;
+  }
+
+  /** A change request folds the listings that hold nothing blocking (#1542). */
+  private String skippedSection(String section, List<Finding> listed, ReviewResult result) {
+    return result.reviewState() == ReviewState.REQUEST_CHANGES
+        ? VerdictDigest.foldUnlessBlocking(section, listed, blockingStrictness())
+        : section;
+  }
+
+  /**
+   * The {@link VerdictDigest} a review body opens with: what blocks on a change request, and on any
+   * other verdict that nothing in the review does.
+   */
+  private String verdictOpening(
+      ReviewResult result, PostReviewRequest post, List<Finding> postedNow) {
+    if (result.reviewState() != ReviewState.REQUEST_CHANGES) {
+      return VerdictDigest.nothingBlocks(
+          result.reviewState() != ReviewState.APPROVE && changeRequestStands(post.priorReviews()));
+    }
+    var blocking =
+        VerdictDigest.blocking(
+            result.findings(),
+            PromptLabelScrubber.scrubFindings(result.openPreviousFindings()),
+            blockingStrictness());
+    return VerdictDigest.changesRequested(blocking, threads(post, postedNow));
+  }
+
+  private BlockingStrictness blockingStrictness() {
+    return BlockingStrictness.fromString(config.review().blockingStrictness())
+        .orElse(BlockingStrictness.BALANCED);
+  }
+
+  /**
+   * Whether the bot's last review that decided anything requested changes. A dismissed review
+   * counts as a decision that leaves nothing standing, so the sentence is printed only when the
+   * change request is certainly in force.
+   */
+  private boolean changeRequestStands(List<GitHubReviewClient.ReviewResponse> priorReviews) {
+    for (int i = priorReviews.size() - 1; i >= 0; i--) {
+      var review = priorReviews.get(i);
+      var decides =
+          REVIEW_APPROVED.equals(review.state())
+              || REVIEW_CHANGES_REQUESTED.equals(review.state())
+              || REVIEW_DISMISSED.equals(review.state());
+      if (decides && review.user() != null && botIdentity.matches(review.user().login())) {
+        return REVIEW_CHANGES_REQUESTED.equals(review.state());
+      }
+    }
+    return false;
+  }
+
+  private OpenFindingNames.Threads threads(PostReviewRequest post, List<Finding> postedNow) {
+    return new OpenFindingNames.Threads(
+        post.inlineComments(),
+        postedNow,
+        botIdentity,
+        GitHubUrls.pullRequest(post.owner(), post.repo(), post.prNumber()));
   }
 
   /**
@@ -1325,13 +1386,20 @@ public class ReviewPublisher {
     appendSection(rest, ciHoldSection(result, unresolved > 0));
     appendSection(rest, previousOutcomeSection(result, post));
     appendSection(rest, reviewNotice(result, post));
+    var opening =
+        result.reviewState() == ReviewState.REQUEST_CHANGES
+            ? verdictOpening(result, post, List.of())
+            : "";
     var sb = new StringBuilder();
     if (unresolved > 0) {
-      sb.append(ReviewResult.unresolvedPreviousMessage(unresolved));
-      appendSection(sb, openList(result, post, List.of(), sb.length() + rest.length()));
+      appendSection(sb, ReviewResult.unresolvedPreviousMessage(unresolved));
+      var used = opening.length() + sb.length() + rest.length();
+      appendSection(sb, openList(result, post, List.of(), used));
     }
     appendSection(sb, rest.toString());
-    return ReadBackMarkers.status(sb.toString());
+    var body = new StringBuilder(opening);
+    appendSection(body, ReadBackMarkers.status(sb.toString()));
+    return body.toString();
   }
 
   /**
@@ -2132,24 +2200,6 @@ public class ReviewPublisher {
       return Optional.empty();
     }
     return Optional.of(new PendingReview(pending.id(), pending.nodeId()));
-  }
-
-  static final String BATCHED_INLINE_BODY_SUFFIX = " — see inline comments on the diff.";
-
-  /**
-   * Body for submitting a pending review. GitHub expects a non-empty body for {@code COMMENT} and
-   * {@code REQUEST_CHANGES}; on a clean approval-with-findings round the prose sections can all be
-   * empty even when inline threads landed (#1434).
-   */
-  static String batchedReviewSubmitBody(List<String> bodyParts, String event) {
-    if (!bodyParts.isEmpty()) {
-      return String.join("\n\n", bodyParts);
-    }
-    return ReadBackMarkers.status(
-        (EVENT_REQUEST_CHANGES.equals(event)
-                ? "ThrillhouseBot requested changes"
-                : "ThrillhouseBot review")
-            + BATCHED_INLINE_BODY_SUFFIX);
   }
 
   private void discardPendingReview(

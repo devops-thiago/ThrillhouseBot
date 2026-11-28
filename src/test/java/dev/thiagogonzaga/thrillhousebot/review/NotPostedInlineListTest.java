@@ -122,7 +122,10 @@ class NotPostedInlineListTest {
         false);
   }
 
-  /** The body of the review posted for {@code findings}, none of which gets a thread. */
+  /**
+   * The body of the review posted for {@code findings}, none of which gets a thread, without its
+   * verdict opening.
+   */
   private String postedBody(boolean summaryLists, String delta, Finding... findings) {
     publisher.postReview(
         new ReviewPublisher.PostReviewRequest(
@@ -143,7 +146,7 @@ class NotPostedInlineListTest {
     verify(reviewClient)
         .createReview(
             anyString(), anyString(), anyString(), anyString(), anyInt(), review.capture());
-    return review.getValue().body();
+    return VerdictDigest.without(review.getValue().body());
   }
 
   private static String bullet(String risk, String note) {

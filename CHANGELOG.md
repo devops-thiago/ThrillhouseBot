@@ -95,6 +95,12 @@ cannot resolve its review threads.
   line, which names earlier findings and which lists description gaps. A later round reads those,
   so a heading or lead-in can be worded differently without losing what the earlier round said.
   Comments posted before this change are still read, and nothing you see on GitHub changes.
+- **A review says whether anything in it blocks the merge** (#1542): a change request opens with
+  how many findings block, which ones (this round's and the earlier ones still open) with their
+  threads, and how to clear them, in place of the fixed "requested changes, see inline comments"
+  line. Listings under it that hold nothing blocking are folded. A comment review that has findings
+  opens by saying that nothing in it blocks, and says when an earlier change request of the bot's
+  still stands. Which findings block is unchanged.
 
 ### Fixed
 
