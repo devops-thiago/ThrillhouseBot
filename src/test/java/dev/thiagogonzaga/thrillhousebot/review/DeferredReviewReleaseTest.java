@@ -45,6 +45,8 @@ import org.junit.jupiter.api.Test;
 
 class DeferredReviewReleaseTest {
 
+  private static final String DATABASE_DOWN = "database unavailable";
+
   private final AtomicLong now = new AtomicLong(0);
   private final DeferredReviews deferred = new DeferredReviews(10, now::get);
   private final ReviewDispatcher dispatcher = mock(ReviewDispatcher.class);
@@ -177,7 +179,7 @@ class DeferredReviewReleaseTest {
   @Test
   void aReviewThatCouldNotBeHandedBackWaitsAgainAndTheOthersStillGo() {
     when(pauses.isPaused(any(), any(), any(), eq(1)))
-        .thenThrow(new IllegalStateException("database unavailable"));
+        .thenThrow(new IllegalStateException(DATABASE_DOWN));
     when(dispatcher.dispatchDeferred(any())).thenReturn(true);
     deferred.defer(request(1, "sha-a"), 0);
     deferred.defer(request(2, "sha-b"), 0);
@@ -194,9 +196,55 @@ class DeferredReviewReleaseTest {
   }
 
   @Test
+  void aReviewThatCouldNotBeHandedBackDoesNotDisplaceANewerHeadDeferredMeanwhile() {
+    // A push arrives after the review was handed out and before the hand-back fails.
+    when(pauses.isPaused(any(), any(), any(), eq(1)))
+        .thenAnswer(
+            invocation -> {
+              deferred.defer(request(1, "sha-b"), 1_000);
+              throw new IllegalStateException(DATABASE_DOWN);
+            });
+    deferred.defer(request(1, "sha-a"), 0);
+
+    release.release();
+
+    verify(skipEmitter, never()).recordSkip(any(), anyLong(), any(), any(), anyInt(), any());
+    now.set(DeferredReviewRelease.RETRY.toMillis());
+    assertEquals(List.of(request(1, "sha-b")), deferred.takeDue());
+  }
+
+  @Test
+  void aSkipThatCannotBeRecordedDoesNotStrandTheOtherDueReviews() {
+    when(pauses.isPaused(any(), any(), any(), anyInt()))
+        .thenThrow(new IllegalStateException(DATABASE_DOWN));
+    for (int pr = 1; pr <= 3; pr++) {
+      deferred.defer(request(pr, "sha-" + pr), 0);
+    }
+    release.release();
+    // An hour on every review is given up, and counting the skip fails too.
+    doThrow(new IllegalStateException("metrics unavailable"))
+        .when(skipEmitter)
+        .recordSkip(any(), anyLong(), any(), any(), anyInt(), any());
+    now.set(DeferredReviews.GIVE_UP_AFTER.toMillis() + DeferredReviewRelease.RETRY.toMillis());
+
+    release.release();
+
+    // Each one was still taken in turn; the first failure did not end the pass.
+    verify(skipEmitter, times(3))
+        .recordSkip(
+            eq(ReviewSkipReason.DISPATCH_REJECTED),
+            eq(TestScopes.INSTALLATION_ID),
+            eq("owner"),
+            eq("repo"),
+            anyInt(),
+            anyString());
+    assertTrue(deferred.isEmpty());
+  }
+
+  @Test
   void aReviewThatCouldNotBeHandedBackForAnHourIsCountedAsSkipped() {
     when(pauses.isPaused(any(), any(), any(), eq(1)))
-        .thenThrow(new IllegalStateException("database unavailable"));
+        .thenThrow(new IllegalStateException(DATABASE_DOWN));
     deferred.defer(request(1, "sha-a"), 0);
 
     // First handed out at 0: it waits again after every failure until the hour is up.
