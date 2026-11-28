@@ -1355,7 +1355,7 @@ class ReviewDiffFormatterTest {
                   "x/@victim|y", "renamed", 0, 0, 0, null, "a|b.txt"));
 
       assertEquals(
-          "1 pure rename omitted from AI review (a\\|b.txt → x/@&#8203;victim\\|y)\n",
+          "1 pure rename omitted from AI review (a\\|b\\.txt → x\\/\\@&#8203;victim\\|y)\n",
           ReviewDiffFormatter.formatPureRenameRollup(renames));
     }
 

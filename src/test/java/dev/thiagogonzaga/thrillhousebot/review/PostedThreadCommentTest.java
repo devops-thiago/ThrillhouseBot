@@ -190,7 +190,7 @@ class PostedThreadCommentTest {
         fileLevelBody("x/@victim|<img src=x>.txt")
             .startsWith(
                 "_Filed on the file: ThrillhouseBot could not open a thread on"
-                    + " x/@&#8203;victim\\|&lt;img src=x>.txt:1, so this finding"));
+                    + " x\\/\\@&#8203;victim\\|&lt;img src\\=x\\>\\.txt\\:1, so this finding"));
   }
 
   /** The body of the thread posted on {@code file} as a whole once its line is refused. */

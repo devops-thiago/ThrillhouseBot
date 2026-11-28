@@ -94,7 +94,8 @@ public final class MarkdownSafe {
    * <p>Code is left as written, in spans that close on their own line and in fenced blocks, but for
    * its line endings: a carriage return ends a line as a line feed does and is posted as one. A
    * span holding a {@code |} is the exception: GitHub reads it as text in a table row, so it is
-   * posted as text. See {@link MarkdownProse} for why the text is rewritten rather than only
+   * posted as text, and the backticks after it on its line pair anew from its closing run on, as
+   * GitHub pairs them. See {@link MarkdownProse} for why the text is rewritten rather than only
    * screened.
    */
   public static String prose(String value) {
@@ -139,21 +140,36 @@ public final class MarkdownSafe {
   }
 
   /**
-   * A name the bot did not write (a changed file's path, say) as a code span of its own: {@link
-   * #inlineCode} between backticks, so nothing in it is read as a mention, a tag or a link.
+   * A name the bot did not write (a changed file's path, say), written so that nothing in it is
+   * read as a mention, a tag, a link or any other markdown: as a code span of its own, {@link
+   * #inlineCode} between backticks.
    *
    * <p>A name holding a {@code |} gets no span. In a table row GitHub ends the cell at the pipe
    * before it reads the span, which would leave the rest of the name as prose, and a pipe escaped
    * inside a span shows its backslash anywhere else. Such a name is written as text that reads the
-   * same in a paragraph and in a cell: its mentions guarded, its {@code <} escaped, and its pipes
-   * and backslashes escaped as {@link #tableCell} escapes them.
+   * same in a paragraph and in a cell: a backslash before each punctuation character, the pipe
+   * included, {@code &lt;} for a {@code <}, and each {@code @} guarded.
    */
   public static String codeSpan(String value) {
     var code = inlineCode(value);
-    if (code.indexOf('|') < 0) {
-      return "`" + code + "`";
+    return code.indexOf('|') < 0 ? "`" + code + "`" : escapedText(code);
+  }
+
+  /** The ASCII punctuation a backslash escapes, less the backtick and the {@code <}. */
+  private static final String ESCAPABLE = "\\|!\"#$%&'()*+,-./:;=>?@[]^_{}~";
+
+  /** {@code code}, which holds no backtick, as text with no markdown reading at all. */
+  private static String escapedText(String code) {
+    var sb = new StringBuilder(code.length() * 2);
+    for (int i = 0; i < code.length(); i++) {
+      char c = code.charAt(i);
+      if (c == '<') {
+        sb.append("&lt;");
+      } else {
+        sb.append(ESCAPABLE.indexOf(c) >= 0 ? "\\" : "").append(c);
+      }
     }
-    return tableCell(MarkdownProse.mentions(code).replace("<", "&lt;"));
+    return MarkdownProse.mentions(sb.toString());
   }
 
   /**
