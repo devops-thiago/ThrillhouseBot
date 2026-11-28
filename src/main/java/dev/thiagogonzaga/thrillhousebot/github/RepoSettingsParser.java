@@ -32,6 +32,9 @@ import org.yaml.snakeyaml.LoaderOptions;
 import org.yaml.snakeyaml.Yaml;
 import org.yaml.snakeyaml.constructor.DuplicateKeyException;
 import org.yaml.snakeyaml.constructor.SafeConstructor;
+import org.yaml.snakeyaml.error.YAMLException;
+import org.yaml.snakeyaml.nodes.MappingNode;
+import org.yaml.snakeyaml.nodes.ScalarNode;
 
 /**
  * Parses the YAML in a repository's {@code .github/thrillhousebot.yml} into {@link RepoSettings}.
@@ -250,8 +253,52 @@ final class RepoSettingsParser {
    * unreadable.
    */
   private static Object firstDocument(String yaml, LoaderOptions options) {
-    var documents = new Yaml(new SafeConstructor(options)).loadAll(yaml).iterator();
+    var documents = new Yaml(new ScalarKeyConstructor(options)).loadAll(yaml).iterator();
     return documents.hasNext() ? documents.next() : null;
+  }
+
+  /**
+   * A {@link SafeConstructor} that refuses a mapping or set whose key is not a scalar. The loader
+   * hashes every key as it builds the map, and a key that is a collection holding an alias to its
+   * own container ({@code ? {k: &a {self: *a}}}) hashes without end: a {@code StackOverflowError}
+   * inside the load, before {@link #expandedSize} can see the cycle. No setting is keyed by a
+   * collection, so such a document is refused like any other that cannot be read.
+   */
+  private static final class ScalarKeyConstructor extends SafeConstructor {
+
+    ScalarKeyConstructor(LoaderOptions options) {
+      super(options);
+    }
+
+    @Override
+    protected void constructMapping2ndStep(MappingNode node, Map<Object, Object> mapping) {
+      requireScalarKeys(node);
+      super.constructMapping2ndStep(node, mapping);
+    }
+
+    @Override
+    protected void constructSet2ndStep(MappingNode node, Set<Object> set) {
+      requireScalarKeys(node);
+      super.constructSet2ndStep(node, set);
+    }
+
+    /**
+     * Checked before and after the merge keys are folded in: folding hashes the keys the mapping
+     * wrote itself to find duplicates, and brings in the keys of the merged mappings.
+     */
+    private void requireScalarKeys(MappingNode node) {
+      requireScalarKeysNow(node);
+      flattenMapping(node);
+      requireScalarKeysNow(node);
+    }
+
+    private static void requireScalarKeysNow(MappingNode node) {
+      for (var tuple : node.getValue()) {
+        if (!(tuple.getKeyNode() instanceof ScalarNode)) {
+          throw new YAMLException("a key that is not a scalar" + tuple.getKeyNode().getStartMark());
+        }
+      }
+    }
   }
 
   /**

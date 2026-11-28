@@ -1035,6 +1035,18 @@ live `fence(...)` (#604).
   the listener's `onResponse` runs before the stream's completion handler.
 - Test behavior, not implementation. Prefer package-private seams to reflection on private
   members (see CONTRIBUTING.md).
+- **Fuzz targets** are Jazzer `@FuzzTest` methods under `src/fuzz/java`, a second test source root
+  (`build-helper-maven-plugin` in `pom.xml`). They are kept out of `src/test/` because OpenSSF
+  Scorecard's Fuzzing check skips every path under it, and each takes a `FuzzedDataProvider`,
+  whose import is the line that check looks for. `./mvnw verify` runs them as plain tests over
+  the empty input and the seed files in
+  `src/test/resources/<package>/<Class>Inputs/<method>/`. `.github/workflows/fuzz.yml` runs each
+  one in fuzzing mode on a schedule; locally:
+  `JAZZER_FUZZ=1 ./mvnw test -Djacoco.skip=true -Dtest='<Class>#<method>' -Djazzer.max_duration=2m`
+  (one target per run, and JaCoCo off because both agents instrument the classes). A finding is
+  written to the target's inputs directory as `crash-<hash>`; commit it with the fix and it is a
+  regression test from then on. A target asserts what the parser promises (no exception, bounds
+  on the result), not only that the call returns.
 
 ## Persistence
 
