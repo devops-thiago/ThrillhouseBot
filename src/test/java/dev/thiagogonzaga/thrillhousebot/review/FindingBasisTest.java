@@ -58,7 +58,7 @@ class FindingBasisTest {
 
   @Test
   void namesTheRuleTheCheckTheVerdictAndTheLearning() {
-    basis.record(raised(), "kept by the second pass");
+    basis.recordOutcome(raised(), "kept by the second pass");
     basis.shapedByLearning(raised(), 7);
 
     assertEquals(
@@ -92,8 +92,11 @@ class FindingBasisTest {
             CiFailureCitations.parse(section));
 
     assertEquals(
-        "**Basis**\n- CI: cites failing test `returns exactly slots applications when enough are"
-            + " eligible` of check `test`\n",
+        """
+        **Basis**
+        - CI: cites failing test `returns exactly slots applications when enough are eligible` \
+        of check `test`
+        """,
         rendered);
   }
 
@@ -221,7 +224,7 @@ class FindingBasisTest {
 
   @Test
   void aFindingWithoutADescriptionStillCarriesItsVerdict() {
-    basis.record(raised(), "kept by the second pass");
+    basis.recordOutcome(raised(), "kept by the second pass");
 
     assertEquals(
         "**Basis**\n- Verified: kept by the second pass\n",
@@ -250,9 +253,9 @@ class FindingBasisTest {
   void theDiscardingBasisKeepsNothingAndAFindingWithNoFileIsSkipped() {
     var nowhere = new ReviewResponse.Finding("low", "high", null, 1, "Title", "d", null, null);
 
-    FindingBasis.DISCARD.record(raised(), "kept by the second pass");
+    FindingBasis.DISCARD.recordOutcome(raised(), "kept by the second pass");
     FindingBasis.DISCARD.shapedByLearning(raised(), 1);
-    basis.record(nowhere, "kept by the second pass");
+    basis.recordOutcome(nowhere, "kept by the second pass");
     basis.shapedByLearning(nowhere, 1);
 
     for (var from : List.of(basis, FindingBasis.DISCARD)) {

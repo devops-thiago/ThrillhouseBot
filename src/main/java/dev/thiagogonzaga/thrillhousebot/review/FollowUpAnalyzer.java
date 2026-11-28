@@ -223,7 +223,7 @@ public class FollowUpAnalyzer {
     if (!structured.isEmpty() || previousResponsePersisted) {
       return structured + stillOpen + answered;
     }
-    var fallback = buildPreviousFindingsContext(priorReviews, botIdentity, writers);
+    var fallback = buildPreviousFindingsContext(priorReviews, botIdentity);
     return fallback + stillOpen + answered;
   }
 
@@ -4954,9 +4954,7 @@ public class FollowUpAnalyzer {
    * offered to the model as a prior finding ({@link #isSelfAuthoredStatusBody}).
    */
   public String buildPreviousFindingsContext(
-      List<GitHubReviewClient.ReviewResponse> priorReviews,
-      BotIdentity botIdentity,
-      VerifiedWriters writers) {
+      List<GitHubReviewClient.ReviewResponse> priorReviews, BotIdentity botIdentity) {
     if (priorReviews == null || priorReviews.isEmpty()) return "";
 
     var lastBotReview =

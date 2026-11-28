@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -69,7 +70,7 @@ class VerifiedWritersTest {
     assertEquals(writers, VerifiedWriters.of(List.of("OWNER", "keeper")));
     assertEquals(writers.hashCode(), VerifiedWriters.of(List.of("owner", "keeper")).hashCode());
     assertNotEquals(writers, VerifiedWriters.none());
-    assertNotEquals(writers, "keeper");
+    assertThat(writers).isNotEqualTo("keeper");
     assertEquals("VerifiedWriters[keeper]", VerifiedWriters.of(List.of("keeper")).toString());
   }
 }

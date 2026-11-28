@@ -293,7 +293,9 @@ class ReviewPublisherTest {
             List.of(),
             0);
 
-    publisher.publishSummary("auth", "o", "r", 1, firstReview, false, null, head);
+    publisher.publishSummary(
+        new ReviewPublisher.SummaryRequest(
+            "auth", "o", "r", 1, firstReview, false, null, null, head));
 
     var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
     verify(commentClient)
@@ -388,7 +390,9 @@ class ReviewPublisherTest {
             List.of(),
             0);
 
-    publisher.publishSummary("auth", "o", "r", 1, followUp, false, null, newHead);
+    publisher.publishSummary(
+        new ReviewPublisher.SummaryRequest(
+            "auth", "o", "r", 1, followUp, false, null, null, newHead));
 
     var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
     verify(commentClient)
@@ -431,7 +435,9 @@ class ReviewPublisherTest {
             List.of(),
             0);
 
-    publisher.publishSummary("auth", "o", "r", 1, followUp, true, null, newHead);
+    publisher.publishSummary(
+        new ReviewPublisher.SummaryRequest(
+            "auth", "o", "r", 1, followUp, true, null, null, newHead));
 
     var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
     verify(commentClient)

@@ -1955,7 +1955,7 @@ public class FindingVerificationService {
     Outcomes NONE = (finding, outcome) -> {};
 
     /** What the verifier did with {@code finding}, which it kept, as a fixed phrase. */
-    void record(ReviewResponse.Finding finding, String outcome);
+    void recordOutcome(ReviewResponse.Finding finding, String outcome);
   }
 
   /**
@@ -2011,13 +2011,13 @@ public class FindingVerificationService {
           var revision = FindingRevisions.revised(finding, verdict);
           revised += revision == finding ? 0 : 1;
           var lowered = downgrade(revision, verdict);
-          outcomes.record(finding, outcomeOf(finding, lowered));
+          outcomes.recordOutcome(finding, outcomeOf(finding, lowered));
           kept.add(lowered);
         }
         case "confirmed" -> {
           var revision = FindingRevisions.revised(finding, verdict);
           revised += revision == finding ? 0 : 1;
-          outcomes.record(finding, outcomeOf(finding, revision));
+          outcomes.recordOutcome(finding, outcomeOf(finding, revision));
           kept.add(revision);
         }
         // Unknown decision, or no verdict at all — fail open and keep the finding, but not as a
@@ -2040,10 +2040,6 @@ public class FindingVerificationService {
         kept, response.previousFindingsStatus(), recount(response.summary(), kept));
   }
 
-  /**
-   * Logs each verdict {@link #byCandidateId} read under another candidate's number, or left out
-   * because its echoed key names no candidate (#1322, #1402), so neither happens unseen.
-   */
   /** What changed between a finding as raised and as the verifier kept it. */
   private static String outcomeOf(ReviewResponse.Finding raised, ReviewResponse.Finding kept) {
     var outcome = new StringBuilder("kept by the second pass");
@@ -2061,6 +2057,10 @@ public class FindingVerificationService {
     return outcome.toString();
   }
 
+  /**
+   * Logs each verdict {@link #byCandidateId} read under another candidate's number, or left out
+   * because its echoed key names no candidate (#1322, #1402), so neither happens unseen.
+   */
   private static void logUnmatched(List<VerificationResponse.Verdict> verdicts, int[] named) {
     for (var i = 0; i < verdicts.size(); i++) {
       var verdict = verdicts.get(i);
