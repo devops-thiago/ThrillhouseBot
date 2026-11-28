@@ -161,6 +161,10 @@ cannot resolve its review threads.
 
 ### Security
 
+- **A CI check's name is escaped in the review body**: the list of failing or pending checks under a
+  held approval printed each check's name as GitHub returned it. A workflow job's name is chosen by
+  the pull request's author, so a name could `@`-mention users and teams, or open an HTML comment
+  that hid the rest of the review. The name now gets the same escaping there as in the summary.
 - **Text a model wrote can no longer notify people, post raw HTML or offer its own suggestion**:
   a finding's title and description, a status note, a file summary, a description gap, a reply and
   the `/describe` and `/changelog` drafts were posted as the model wrote them, so text steered by a
