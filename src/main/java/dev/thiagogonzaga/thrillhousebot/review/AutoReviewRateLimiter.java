@@ -30,7 +30,7 @@ import java.util.function.LongSupplier;
  * pull_request} events for it do not start a review — even when the head SHA changed — so noisy
  * repositories that push frequently do not burn AI spend and GitHub API budget on every commit. An
  * event for the head that review covered is skipped. One for another head is reviewed when the
- * window closes ({@link #reviewDueAt}, {@link DeferredReviews}), so a push inside the window is
+ * window closes ({@link #hold}, {@link DeferredReviews}), so a push inside the window is
  * late, never unreviewed.
  *
  * <p>Only the automatic path consults this limiter; a manual {@code /review} (or {@code
@@ -105,15 +105,42 @@ public class AutoReviewRateLimiter {
   }
 
   /**
-   * @return {@code true} if an automatic review of this PR completed within the configured
-   *     interval, so the caller should skip dispatching a new automatic review. Always {@code
-   *     false} when the interval is zero or negative (throttling disabled).
+   * What the window says about one event.
+   *
+   * @param throttled whether an automatic review of the PR completed within the configured
+   *     interval, so no automatic review starts now
+   * @param reviewDueAt the epoch millis the window closes at, when the event is throttled and its
+   *     head is not the one that review covered, so it is reviewed then; empty when the event is
+   *     not throttled, when its head is unknown, and when that review already covered the head, in
+   *     which case the event needs no review at all
    */
-  public boolean isThrottled(String owner, String repo, int prNumber) {
+  public record Hold(boolean throttled, OptionalLong reviewDueAt) {
+
+    /** The window does not hold the event back. */
+    static final Hold NONE = new Hold(false, OptionalLong.empty());
+
+    /** The window holds the event back and its head needs no review. */
+    static final Hold SKIP = new Hold(true, OptionalLong.empty());
+  }
+
+  /**
+   * Whether the window holds an event for {@code headSha} back, and until when. The clock and the
+   * window are each read once, so an event that arrives as the window closes is either held with a
+   * time to review it at or not held at all. Never throttled when the interval is zero or negative
+   * (throttling disabled).
+   */
+  public Hold hold(String owner, String repo, int prNumber, String headSha) {
     if (intervalMillis <= 0) {
-      return false;
+      return Hold.NONE;
     }
-    return windowOpen(key(owner, repo, prNumber), clock.getAsLong());
+    var window = deadlines.get(key(owner, repo, prNumber));
+    if (window == null || window.deadline() <= clock.getAsLong()) {
+      return Hold.NONE;
+    }
+    if (headSha == null || headSha.isBlank() || headSha.equalsIgnoreCase(window.sha())) {
+      return Hold.SKIP;
+    }
+    return new Hold(true, OptionalLong.of(window.deadline()));
   }
 
   private boolean windowOpen(String key, long now) {
@@ -122,33 +149,13 @@ public class AutoReviewRateLimiter {
   }
 
   /**
-   * When an event the window holds back should be reviewed after all: the epoch millis the window
-   * closes at, when the PR is throttled and {@code headSha} is not the head its last automatic
-   * review covered. Empty when the PR is not throttled, when the head is unknown, and when that
-   * review already covered the head, in which case the event needs no review at all.
-   */
-  public OptionalLong reviewDueAt(String owner, String repo, int prNumber, String headSha) {
-    if (intervalMillis <= 0 || headSha == null || headSha.isBlank()) {
-      return OptionalLong.empty();
-    }
-    var window = deadlines.get(key(owner, repo, prNumber));
-    if (window == null
-        || window.deadline() <= clock.getAsLong()
-        || headSha.equalsIgnoreCase(window.sha())) {
-      return OptionalLong.empty();
-    }
-    return OptionalLong.of(window.deadline());
-  }
-
-  /**
    * Lifts the throttle window for a draft marked ready ({@code ready_for_review}), once per head:
    * that transition should start a review even when a recent {@code synchronize} fell inside the
    * interval, but only the first time for a given head.
    *
    * @return {@code true} when the window was lifted, so the caller dispatches without asking {@link
-   *     #isThrottled}; {@code false} when this head already had its window lifted, the head is
-   *     unknown, or throttling is disabled, in which case the caller asks {@link #isThrottled} as
-   *     for any other event
+   *     #hold}; {@code false} when this head already had its window lifted, the head is unknown, or
+   *     throttling is disabled, in which case the caller asks {@link #hold} as for any other event
    */
   public boolean clearForReadyHead(String owner, String repo, int prNumber, String headSha) {
     if (intervalMillis <= 0 || headSha == null || headSha.isBlank()) {
