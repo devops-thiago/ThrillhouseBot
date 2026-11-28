@@ -177,9 +177,9 @@ final class RedactedAnchor {
     return any;
   }
 
+  /** Whether {@code at}, where a text of one character or more ends, splits a pair. */
   private static boolean insidePair(String line, int at) {
-    return at > 0
-        && at < line.length()
+    return at < line.length()
         && Character.isHighSurrogate(line.charAt(at - 1))
         && Character.isLowSurrogate(line.charAt(at));
   }

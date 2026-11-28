@@ -177,6 +177,29 @@ class RedactedAnchorTest {
   }
 
   @Test
+  void keyMaterialIsLettersDigitsAndTheThreeBase64SignsOnly() {
+    var matcher = RedactedAnchor.lineMatcher("k: " + KEY + ";");
+    var run = "AZaz09+/=".repeat(5);
+
+    assertTrue(matcher.test("k: " + run + ";"));
+    // One character from each side of every range, and the signs next to the three that count.
+    for (var other : "@[`{/:.,-*<>_~ \u00E9".replace("/", "").toCharArray()) {
+      var broken = run.substring(0, 20) + other + run.substring(21);
+      assertFalse(matcher.test("k: " + broken + ";"), "key material holding " + other);
+    }
+  }
+
+  @Test
+  void textEndingOnHalfAPairIsNotTheFirstHalfOfAPairInTheLine() {
+    var matcher = RedactedAnchor.lineMatcher("\uD83D[redacted: \u2026, 1 chars]");
+
+    assertTrue(matcher.test("\uD83Dx"), "half a pair, then one character");
+    assertTrue(matcher.test("\uD83D\uD83D"), "half a pair twice is two characters");
+    assertFalse(matcher.test("\uD83D\uDE00"), "a whole pair is one character, not text and one");
+    assertFalse(matcher.test("\uD83D"), "the text alone leaves the value nothing");
+  }
+
+  @Test
   void keyMaterialMayBeFollowedByTextOrAValueOfItsOwnCharacters() {
     var beforeText = RedactedAnchor.lineMatcher(KEY + "AB" + KEY + "AB");
     assertTrue(beforeText.test("A".repeat(40) + "AB" + "A".repeat(40) + "AB"));

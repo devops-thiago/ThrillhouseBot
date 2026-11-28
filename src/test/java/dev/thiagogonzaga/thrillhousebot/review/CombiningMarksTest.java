@@ -100,5 +100,12 @@ class CombiningMarksTest {
     assertEquals("Fixes #7 e" + LONGEST + "\nmore", request.prDescription());
     assertEquals("title", plain.prTitle());
     assertNull(plain.prDescription());
+
+    // A request built before the pull request is read has no title yet.
+    var untitled =
+        new ReviewOrchestrator.ReviewRequest(
+            "o", "r", 1, "sha", null, "e" + marks, "base", "main", 77L, 7L, false);
+    assertNull(untitled.prTitle());
+    assertEquals("e" + LONGEST, untitled.prDescription());
   }
 }
