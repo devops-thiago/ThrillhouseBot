@@ -44,8 +44,8 @@ public enum ReviewSkipReason {
    */
   RATE_LIMITED,
   /**
-   * The review executor rejected the task (saturated or shutting down), or a review a limit held
-   * back kept failing to be handed back until {@link DeferredReviews} gave it up.
+   * The review executor rejected the task (it is shutting down), or a review a limit held back kept
+   * failing to be handed back until {@link DeferredReviews} gave it up.
    */
   DISPATCH_REJECTED,
   /**

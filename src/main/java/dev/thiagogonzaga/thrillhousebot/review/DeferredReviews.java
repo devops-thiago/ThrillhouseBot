@@ -26,6 +26,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.LongSupplier;
+import java.util.function.Predicate;
 
 /**
  * The automatic reviews a limit held back and that still have to run: one per pull request, for the
@@ -40,14 +41,20 @@ import java.util.function.LongSupplier;
  * one: it leaves another head an event put here since in place, and is dropped in its favour. At
  * most {@link #MAX_PENDING} pull requests have an entry; past that a request for a pull request
  * that has none is refused and the caller records the skip, as it did before. An entry leaves when
- * the pull request is closed or merged, when a newer event for the pull request is dispatched or
- * filtered out, when {@link DeferredReviewRelease} finds the pull request paused or has its
- * hand-back refused by the executor, and at shutdown. Handing an entry out does not remove it, and
- * neither does its review running: unless one of those removes it or a request for another head
- * replaces it, it stays, counted towards the limit, until {@link #GIVE_UP_AFTER} has passed since
- * it was first handed out. A request for the same head that comes back after that long (a
- * repository queue that stays full) is refused and its entry removed, instead of retried without
- * end.
+ * the pull request is closed or merged, when a newer event for the pull request is dispatched,
+ * filtered out or skipped because its head is already reviewed, when {@link DeferredReviewRelease}
+ * finds the pull request paused or has its hand-back refused by the executor, and at shutdown.
+ * Handing an entry out does not remove it, and neither does its review running: unless one of those
+ * removes it or a request for another head replaces it, it stays, counted towards the limit, until
+ * {@link #GIVE_UP_AFTER} has passed since it was first handed out. A request for the same head that
+ * comes back after that long (a repository queue that stays full) is refused and its entry removed,
+ * instead of retried without end.
+ *
+ * <p>A request handed out is still the pull request's only while its entry is the one {@link
+ * #takeDue} left. An event that arrives before the request is handed back replaces or removes that
+ * entry, so {@link DeferredReviewRelease} goes through {@link #handBack}, {@link #dropHandedOut}
+ * and {@link #waitAgain}, which act on that entry alone and report {@link HandedOut#SUPERSEDED}
+ * otherwise: the request then gives way and nothing is put back, removed or counted for it.
  *
  * <p>State is in memory, like the limits it serves: a restart forgets the reviews still waiting.
  */
@@ -80,6 +87,21 @@ public class DeferredReviews {
       boolean released,
       long firstReleasedAt,
       boolean fromEvent) {}
+
+  /** What became of a request {@link #takeDue} handed out, when it came back to its entry. */
+  public enum HandedOut {
+    /** The dispatcher took it. Its entry stays, marked as handed out. */
+    HANDED_BACK,
+    /** It waits to be handed out again. */
+    WAITS_AGAIN,
+    /** Its entry was removed and no review waits for the pull request: the caller counts a skip. */
+    DROPPED,
+    /**
+     * The entry is no longer this request's: an event replaced it with a newer request, or removed
+     * it. Nothing was changed, and the request is not to be reviewed or counted.
+     */
+    SUPERSEDED
+  }
 
   /** What became of a request offered to the store. */
   private enum Outcome {
@@ -124,9 +146,10 @@ public class DeferredReviews {
 
   /**
    * Keeps {@code request} to run from {@code dueAt} when it comes back from the dispatcher: a limit
-   * turned it away on its worker, or it could not be handed back. Such a request can be older than
-   * the entry: a push that arrived while it waited for its turn put a newer head here. That head
-   * stays, and this request is dropped in its favour.
+   * turned it away on its worker. Such a request can be older than the entry: a push that arrived
+   * while it waited for its turn put a newer head here. That head stays, and this request is
+   * dropped in its favour. Only for the pull request's worker; a request {@link #takeDue} handed
+   * out and that could not be handed back goes through {@link #waitAgain}.
    *
    * @return {@code false} when the pull request is left with no review waiting, so the caller
    *     records the skip, as for {@link #defer}; {@code true} when this request was kept or a newer
@@ -242,9 +265,105 @@ public class DeferredReviews {
         entry.fromEvent());
   }
 
+  /**
+   * Hands {@code request} to {@code dispatch} if its entry is still the one {@link #takeDue} left,
+   * and removes the entry when {@code dispatch} refuses it. The check and the hand-back are one
+   * step for the pull request: an event dispatched before it has removed the entry, so the request
+   * is not handed back over the event's newer one, and an event dispatched after it queues behind
+   * the request and replaces it.
+   *
+   * @param dispatch queues the request, and answers {@code false} when it could not; it must not
+   *     come back to this store
+   * @return {@link HandedOut#HANDED_BACK}, {@link HandedOut#DROPPED} when {@code dispatch} refused
+   *     the request, or {@link HandedOut#SUPERSEDED}
+   */
+  public HandedOut handBack(
+      ReviewOrchestrator.ReviewRequest request,
+      Predicate<ReviewOrchestrator.ReviewRequest> dispatch) {
+    var fate = new HandedOut[] {HandedOut.SUPERSEDED};
+    pending.computeIfPresent(
+        key(request),
+        (_, entry) -> {
+          if (!handedOut(entry, request)) {
+            return entry;
+          }
+          boolean taken = dispatch.test(request);
+          fate[0] = taken ? HandedOut.HANDED_BACK : HandedOut.DROPPED;
+          return taken ? entry : null;
+        });
+    return fate[0];
+  }
+
+  /**
+   * Removes the entry of {@code request} if it is still the one {@link #takeDue} left.
+   *
+   * @return {@link HandedOut#DROPPED} or {@link HandedOut#SUPERSEDED}
+   */
+  public HandedOut dropHandedOut(ReviewOrchestrator.ReviewRequest request) {
+    var fate = new HandedOut[] {HandedOut.SUPERSEDED};
+    pending.computeIfPresent(
+        key(request),
+        (_, entry) -> {
+          if (!handedOut(entry, request)) {
+            return entry;
+          }
+          fate[0] = HandedOut.DROPPED;
+          return null;
+        });
+    return fate[0];
+  }
+
+  /**
+   * Makes {@code request} wait {@code delay} to be handed out again, if its entry is still the one
+   * {@link #takeDue} left, and removes the entry instead once {@link #GIVE_UP_AFTER} has passed
+   * since its first hand-out.
+   *
+   * @return {@link HandedOut#WAITS_AGAIN}, {@link HandedOut#DROPPED} when it was given up, or
+   *     {@link HandedOut#SUPERSEDED}
+   */
+  public HandedOut waitAgain(ReviewOrchestrator.ReviewRequest request, Duration delay) {
+    long now = clock.getAsLong();
+    var fate = new HandedOut[] {HandedOut.SUPERSEDED};
+    pending.computeIfPresent(
+        key(request),
+        (_, entry) -> {
+          if (!handedOut(entry, request)) {
+            return entry;
+          }
+          if (now - entry.firstReleasedAt() >= GIVE_UP_AFTER.toMillis()) {
+            fate[0] = HandedOut.DROPPED;
+            return null;
+          }
+          fate[0] = HandedOut.WAITS_AGAIN;
+          return new Pending(
+              request, now + delay.toMillis(), false, entry.firstReleasedAt(), entry.fromEvent());
+        });
+    return fate[0];
+  }
+
+  /**
+   * Whether {@code entry} is the one {@link #takeDue} left when it handed {@code request} out. A
+   * request kept since, for the same head or another, is not handed out yet.
+   */
+  private static boolean handedOut(Pending entry, ReviewOrchestrator.ReviewRequest request) {
+    return entry.released() && entry.request().equals(request);
+  }
+
   /** Drops whatever is kept for the pull request: a newer event decides about it now. */
   public void forget(RepoScope scope, int prNumber) {
     pending.remove(new Key(scope.installationId(), scope.repositoryId(), prNumber));
+  }
+
+  /**
+   * Drops whatever is kept for the pull request, like {@link #forget(RepoScope, int)}.
+   *
+   * @return whether a review that still waited to be handed out was dropped, so the caller counts
+   *     the skip; {@code false} when nothing was kept, and for an entry already handed out, whose
+   *     review this does not stop
+   */
+  public boolean forgetWaiting(RepoScope scope, int prNumber) {
+    var removed = pending.remove(new Key(scope.installationId(), scope.repositoryId(), prNumber));
+    return removed != null && !removed.released();
   }
 
   /** Drops whatever is kept for the request's pull request. */
