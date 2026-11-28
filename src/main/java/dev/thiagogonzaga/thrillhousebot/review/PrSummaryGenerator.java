@@ -440,6 +440,9 @@ public class PrSummaryGenerator {
     }
 
     appendPreviousFindings(sb, result);
+    if (ClosedThisRound.any(round, sources.previousFindings())) {
+      sb.append(ClosedThisRound.ANCHOR);
+    }
     appendFindingsOrCelebration(sb, result, carried);
     appendDoubleCheckFindings(sb, result, carried);
     // After the findings sections so the note can refer back to them, and so a reader meets the

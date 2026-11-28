@@ -11,6 +11,10 @@ cannot resolve its review threads.
 
 ### Added
 
+- **The summary names the findings a round closed** (#1449): a folded **Closed this round** list
+  with each title struck through, its file and line, whether it was resolved or superseded, the
+  reviewed commit and, when the bot determined it itself, the reason. On by default;
+  `REVIEW_SUMMARY_CLOSED_LIST_ENABLED=false` leaves it out. No extra model call.
 - **`GITHUB_URL` alone points the bot at another GitHub** (#1489): an unset or blank
   `GITHUB_API_URL` and `GITHUB_GRAPHQL_URL` are now derived from it, as
   `https://api.github.com` for `github.com`, `https://api.<subdomain>.ghe.com` for a `ghe.com`

@@ -731,7 +731,8 @@ public class ReviewOrchestrator {
   private boolean publishSummaryBestEffort(
       String auth, ReviewRequest req, ReviewResult result, ReviewContextLoader.ReviewContext ctx) {
     try {
-      return reviewPublisher.publishSummary(auth, req, result, ctx.lineResolver());
+      return reviewPublisher.publishSummary(
+          auth, req, result, ctx.lineResolver(), ctx.previousFindingsList());
     } catch (RuntimeException e) {
       Log.warnf(
           e,

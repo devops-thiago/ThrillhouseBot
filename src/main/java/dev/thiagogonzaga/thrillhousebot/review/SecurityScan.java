@@ -197,7 +197,7 @@ public class SecurityScan {
   private static final String STILL_DETECTED_NOTE =
       "Still detected by the deterministic security scan on an added line.";
 
-  private static final String NO_LONGER_DETECTED_NOTE =
+  static final String NO_LONGER_DETECTED_NOTE =
       "No longer detected by the deterministic security scan: the line was removed or changed, or"
           + " carries the allow marker.";
 

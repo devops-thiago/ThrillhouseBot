@@ -707,6 +707,10 @@ public interface ThrillhouseConfig {
     @WithName("summary-collapse")
     SummaryCollapseConfig summaryCollapse();
 
+    /** The summary's folded list of the findings the round closed (#1449). */
+    @WithName("summary-closed-list")
+    SummaryClosedListConfig summaryClosedList();
+
     @WithName("large-pr-nudge")
     LargePrNudgeConfig largePrNudge();
 
@@ -1098,6 +1102,13 @@ public interface ThrillhouseConfig {
   interface AgentNextStepsConfig {
     /** Add the Agent next steps subsection under the summary heading. */
     @WithDefault("false")
+    boolean enabled();
+  }
+
+  /** The summary's list of the findings the round closed (#1449). No model call. */
+  interface SummaryClosedListConfig {
+    /** List them, folded, under the previous findings status. */
+    @WithDefault("true")
     boolean enabled();
   }
 
