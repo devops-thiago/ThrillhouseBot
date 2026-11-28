@@ -2249,8 +2249,9 @@ class VerdictBuilderTest {
                     + "\n\n> **AI review scope:** 1 ignore glob declared in this repository's"
                     + " ThrillhouseBot config matched no file in this pull request (`payments/`)"
                     + "\n>\n> 2 findings from the review of superseded head `23e2771`, abandoned"
-                    + " when the pull request head moved, were carried into this review as"
-                    + " previous findings and re-checked against the current head\n\n"),
+                    + " when the pull request head moved, were carried into this review and"
+                    + " checked against the current head. What still holds is posted with this"
+                    + " review's findings\n\n"),
         result.summaryMarkdown());
   }
 
@@ -2385,8 +2386,9 @@ class VerdictBuilderTest {
                     + "\n>\n> the configured coverage artifact was not read: it could not be read"
                     + " as a zip archive"
                     + "\n>\n> 1 finding from the review of superseded head `23e2771`, abandoned"
-                    + " when the pull request head moved, was carried into this review as"
-                    + " previous findings and re-checked against the current head"
+                    + " when the pull request head moved, was carried into this review and"
+                    + " checked against the current head. What still holds is posted with this"
+                    + " review's findings"
                     + "\n>\n> this review ran at a lower reasoning effort after the model spent its"
                     + " whole output allowance reasoning and produced no answer on its first"
                     + " attempt\n\n"),

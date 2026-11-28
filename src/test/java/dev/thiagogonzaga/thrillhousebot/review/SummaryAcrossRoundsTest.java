@@ -638,37 +638,6 @@ class SummaryAcrossRoundsTest {
   }
 
   /**
-   * A run that stood down because the head moved (#806) hands its findings to the replacement,
-   * which folds them into its previous round. They are listed in the summary the replacement posts
-   * exactly when that run confirms them still open, like any earlier round's finding.
-   */
-  @Test
-  void findingsCarriedFromASupersededRunAreListedOnceTheReplacementConfirmsThem() {
-    var carried =
-        new SupersededFindingsCarryover(mapper)
-            .merge(List.of(), List.of(), List.of(CRITICAL, DOUBLE_CHECK))
-            .parsed();
-    var round =
-        new ReviewResponse(
-            List.of(),
-            List.of(
-                new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there"),
-                new ReviewResponse.PreviousFindingStatus(2, "resolved", "guarded now")),
-            null);
-
-    var result = builder.build(context(carried, List.of(), true, true), round, CI_CLEAR, plan);
-    assertTrue(publisher.publishSummary("auth", "o", "r", 1, result, false));
-    var captor = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
-    verify(commentClient)
-        .createComment(anyString(), anyString(), eq("o"), eq("r"), eq(1), captor.capture());
-    var body = captor.getValue().body();
-
-    assertRisk(body, 1, 0, 0, 0);
-    assertTrue(section(body, "### Key Findings").contains(CRITICAL.title()), body);
-    assertFalse(body.contains(DOUBLE_CHECK.title()), body);
-  }
-
-  /**
    * #933: a follow-up round that opened nothing new while earlier findings stay open. Seen on a
    * CI-held `/review` of an unchanged head: the summary carried the "Large PR — no inline findings"
    * note and the review body opened "found no issues in this PR" under CHANGES_REQUESTED. No

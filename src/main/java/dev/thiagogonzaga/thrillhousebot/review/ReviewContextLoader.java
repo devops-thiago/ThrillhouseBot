@@ -683,26 +683,16 @@ public class ReviewContextLoader {
     List<ReviewResponse> priorAiResponses =
         followUpAnalyzer.parsePreviousResponses(priorAiResponseJsons);
     // A run of this pull request that stood down for this head (#806) left its verified findings
-    // behind; they join the round this review reports on, so the model confirms or resolves them
-    // against the new head like any posted finding. The superseded session itself is FAILED and
-    // never enters the persisted history (#624), so this is the only way back in.
+    // behind; the pipeline adds them to this round's own (#1411). The superseded session itself is
+    // FAILED and never enters the persisted history (#624), so this is the only way back in.
     var carried = carryover.take(req.owner(), req.repo(), req.prNumber(), req.commitSha());
-    if (!carried.isEmpty()) {
-      var rounds = carryover.merge(priorAiResponseJsons, priorAiResponses, carried.findings());
-      priorAiResponseJsons = rounds.jsons();
-      priorAiResponses = rounds.parsed();
-    }
     // #1319: which files changed since the head each earlier round reviewed: from the stored
     // finding rows' blob SHAs first, else compared on first use.
-    var rounds =
-        new RoundFileChanges.Rounds(
-            priorCommitShas, priorAiResponseJsons.size(), !carried.isEmpty());
+    var rounds = new RoundFileChanges.Rounds(priorCommitShas, priorAiResponseJsons.size());
     var roundChanges =
         findingStates.roundChanges(
             req,
-            rounds.carried() || rounds.heads().size() != rounds.count()
-                ? List.of()
-                : priorCommitShas,
+            rounds.heads().size() != rounds.count() ? List.of() : priorCommitShas,
             files,
             RoundFileChanges.of(prClient, auth, req.owner(), req.repo(), req.commitSha(), rounds));
     Supplier<DiffLineResolver> lineResolverSupplier =
@@ -838,7 +828,7 @@ public class ReviewContextLoader {
             patchCoverage.artifactRefusal(),
             headUnchanged(
                 previousRoundHeadSha(
-                    priorCommitShas, priorAiResponseJsons.size(), previousRoundIndex, carried),
+                    priorCommitShas, priorAiResponseJsons.size(), previousRoundIndex),
                 req.commitSha()),
             verifiedWriters,
             priorRoundStarts));
@@ -865,18 +855,11 @@ public class ReviewContextLoader {
    * established. {@code commitShas} comes from the same completed-session history, in the same
    * newest-first order, as the prior responses, so the effective previous round's index names its
    * session; a history of a different length (a round completed between the two reads) cannot be
-   * aligned and yields {@code null}. So do findings carried from a run that stood down (#806): they
-   * were raised on the head that run reviewed, not the one this history records, so the round they
-   * join has no single head.
+   * aligned and yields {@code null}.
    */
   static String previousRoundHeadSha(
-      List<String> commitShas,
-      int roundCount,
-      int previousRoundIndex,
-      SupersededFindingsCarryover.Carried carried) {
-    if (!carried.isEmpty()
-        || commitShas.size() != roundCount
-        || previousRoundIndex >= commitShas.size()) {
+      List<String> commitShas, int roundCount, int previousRoundIndex) {
+    if (commitShas.size() != roundCount || previousRoundIndex >= commitShas.size()) {
       return null;
     }
     return commitShas.get(previousRoundIndex);

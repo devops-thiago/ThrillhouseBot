@@ -93,8 +93,7 @@ class ReviewContextLoaderTest {
     return states;
   }
 
-  private final SupersededFindingsCarryover carryover =
-      new SupersededFindingsCarryover(new ObjectMapper());
+  private final SupersededFindingsCarryover carryover = new SupersededFindingsCarryover();
 
   @BeforeEach
   void setUp() {
@@ -985,22 +984,18 @@ class ReviewContextLoaderTest {
     }
 
     @Test
-    void carriedFindingsBecomeTheOnlyPreviousRoundOfAFirstReview() {
+    void carriedFindingsAreNeverPreviousFindingsOfAFirstReview() {
       stubLoad(List.of());
       carryover.stash("owner", "repo", 1, "oldsha1", "headsha1", List.of(CARRIED));
 
       var ctx = load();
 
-      assertTrue(ctx.hasContext());
+      assertFalse(ctx.hasContext());
       assertEquals(List.of(CARRIED), ctx.carried().findings());
       assertEquals("oldsha1", ctx.carried().supersededSha());
-      assertEquals(List.of(CARRIED), ctx.previousFindingsList());
-      assertEquals(1, ctx.priorAiResponseJsons().size());
-      assertTrue(ctx.previousAiResponseJson().contains("Carried finding"));
-      assertTrue(
-          ctx.previousFindings()
-              .contains(listed(1, "HIGH", "src/Main.java", 10, "Carried finding")),
-          ctx.previousFindings());
+      assertTrue(ctx.previousFindingsList().isEmpty());
+      assertTrue(ctx.priorAiResponseJsons().isEmpty());
+      assertEquals("", ctx.previousFindings());
       // Consumed: the next load of this pull request starts without it.
       assertTrue(carryover.take("owner", "repo", 1, "headsha1").isEmpty());
     }
@@ -1031,33 +1026,17 @@ class ReviewContextLoaderTest {
     }
 
     @Test
-    void carriedFindingsJoinedToUnreadableRoundsMakeARoundThatCanBeRead() {
-      // The carried findings are known and are held like any posted round's, so the round is
-      // judged on them; what the unreadable rounds raised stays unknown.
-      stubLoad(List.of("{not json"));
-      carryover.stash("owner", "repo", 1, "oldsha1", "headsha1", List.of(CARRIED));
-
-      var ctx = load();
-
-      assertFalse(ctx.priorRoundsUnreadable());
-      assertEquals(List.of(CARRIED), ctx.previousFindingsList());
-    }
-
-    @Test
-    void carriedFindingsTakeTheIdsAfterThePostedRoundsOwn() {
+    void carriedFindingsLeaveThePostedRoundAsItWas() {
       stubLoad(List.of(POSTED_ROUND_JSON));
       carryover.stash("owner", "repo", 1, "oldsha1", "headsha1", List.of(CARRIED));
 
       var ctx = load();
 
-      assertEquals(2, ctx.previousFindingsList().size());
+      assertEquals(1, ctx.previousFindingsList().size());
       assertEquals("Posted finding", ctx.previousFindingsList().get(0).title());
-      assertEquals(CARRIED, ctx.previousFindingsList().get(1));
       assertTrue(ctx.previousFindings().contains(listed(1, "LOW", "a.java", 1, "Posted finding")));
-      assertTrue(
-          ctx.previousFindings()
-              .contains(listed(2, "HIGH", "src/Main.java", 10, "Carried finding")));
-      assertTrue(ctx.previousAiResponseJson().contains("Carried finding"));
+      assertFalse(ctx.previousFindings().contains("Carried finding"), ctx.previousFindings());
+      assertFalse(ctx.previousAiResponseJson().contains("Carried finding"));
     }
 
     @Test
@@ -1104,27 +1083,10 @@ class ReviewContextLoaderTest {
     }
 
     @Test
-    void findingsCarriedFromAnotherHeadAreNeverMarkedUnchanged() {
-      stubLoad(List.of(POSTED_ROUND_JSON));
-      when(sessionPersistence.findAllPriorCommitShas(any(), eq(1), anyLong()))
-          .thenReturn(List.of("headsha1"));
-      carryover.stash("owner", "repo", 1, "oldsha1", "headsha1", List.of(CARRIED));
-
-      assertFalse(load().previousRoundHeadUnchanged());
-    }
-
-    @Test
     void aHistoryThatCannotBeAlignedGivesNoPreviousHead() {
-      var none = SupersededFindingsCarryover.Carried.NONE;
-      assertEquals("b", ReviewContextLoader.previousRoundHeadSha(List.of("a", "b"), 2, 1, none));
-      assertNull(ReviewContextLoader.previousRoundHeadSha(List.of("a"), 2, 0, none));
-      assertNull(ReviewContextLoader.previousRoundHeadSha(List.of(), 0, 0, none));
-      assertNull(
-          ReviewContextLoader.previousRoundHeadSha(
-              List.of("a"),
-              1,
-              0,
-              new SupersededFindingsCarryover.Carried("x", "a", List.of(CARRIED))));
+      assertEquals("b", ReviewContextLoader.previousRoundHeadSha(List.of("a", "b"), 2, 1));
+      assertNull(ReviewContextLoader.previousRoundHeadSha(List.of("a"), 2, 0));
+      assertNull(ReviewContextLoader.previousRoundHeadSha(List.of(), 0, 0));
     }
 
     @Test

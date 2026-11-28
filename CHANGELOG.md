@@ -207,6 +207,10 @@ cannot resolve its review threads.
   bullet. The list of lower-confidence items sends the reader to **Things to double-check** only
   when this round's summary comment was written with them, and otherwise says the review itself
   lists them.
+- **Findings from a superseded review are now posted** (#1411): the review that replaces it posts
+  the ones whose code its diff still holds, as its own findings. Before, they were never posted but
+  were counted as "open since an earlier review", and some stayed open without appearing anywhere on
+  the pull request.
 
 ### Security
 

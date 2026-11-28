@@ -15,13 +15,9 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
-import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Optional;
-import java.util.stream.Collectors;
 
 /**
  * Stands down a run whose pull request head moved while it reviewed (#704): a push landing during
@@ -64,7 +60,7 @@ public class HeadMovedGuard implements PrePublishGuard {
         req.prNumber(),
         req.commitSha(),
         freshHead,
-        findingsToCarry(review.ctx(), review.aiResponse(), review.result()));
+        review.aiResponse().findings());
     return Optional.of(
         new StandDown(
             ReviewSkipReason.HEAD_MOVED,
@@ -114,40 +110,5 @@ public class HeadMovedGuard implements PrePublishGuard {
     return req.commitSha() != null
         && !req.commitSha().isBlank()
         && !freshHead.equalsIgnoreCase(req.commitSha());
-  }
-
-  /**
-   * What a run that stands down hands to its replacement (#806): the findings it verified this
-   * round, plus any it was itself carrying that are still open on its verdict — a run superseded
-   * while replacing another must not lose the first run's findings a second time. A carried finding
-   * the run resolved, justified or superseded is settled and stays behind. The carried ones occupy
-   * the ids after the persisted round's own in {@link
-   * ReviewContextLoader.ReviewContext#previousFindingsList}, which is how they are told apart from
-   * findings a posted round already tracks.
-   *
-   * <p>A status the approval backstop gave an earlier round's finding is identified by the finding
-   * it carries, not by its id, which is relative to the round that raised it and can equal a
-   * carried finding's position (#959). Such a finding was raised by a posted round, never by a
-   * superseded run, so it is not carried: the replacement replays the posted rounds and holds it
-   * again itself.
-   */
-  static List<ReviewResponse.Finding> findingsToCarry(
-      ReviewContextLoader.ReviewContext ctx, ReviewResponse aiResponse, ReviewResult result) {
-    var previous = ctx.previousFindingsList();
-    var firstCarriedId = previous.size() - ctx.carried().findings().size() + 1;
-    var carry =
-        result.previousStatuses().stream()
-            .filter(
-                status ->
-                    !status.fromEarlierRound()
-                        && status.id() >= firstCarriedId
-                        && status.id() <= previous.size()
-                        && "unresolved".equalsIgnoreCase(status.status()))
-            .map(ReviewResult.PreviousFindingStatus::id)
-            .distinct()
-            .map(id -> previous.get(id - 1))
-            .collect(Collectors.toCollection(ArrayList::new));
-    carry.addAll(aiResponse.findings());
-    return carry;
   }
 }
