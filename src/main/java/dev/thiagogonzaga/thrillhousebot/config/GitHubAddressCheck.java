@@ -26,8 +26,9 @@ import java.util.Set;
 import java.util.function.Function;
 
 /**
- * Refuses a configured GitHub address that is not {@code https}: the App JWT, installation tokens,
- * the OAuth client secret and user tokens are all sent to these addresses.
+ * Refuses a configured GitHub address that is not {@code https} or that carries a user name or
+ * password: the App JWT, installation tokens, the OAuth client secret and user tokens are all sent
+ * to these addresses.
  *
  * <p>It reads the properties of the extension and of the {@code github-api} and {@code
  * github-graphql} REST client keys, so an address set there directly is checked like one set
@@ -126,6 +127,11 @@ final class GitHubAddressCheck {
     }
     var loopback =
         loopbackHttpAllowed && LOOPBACK_HOSTS.contains(uri.getHost().toLowerCase(Locale.ROOT));
-    return secure || loopback ? Optional.empty() : Optional.of("the scheme http");
+    if (!secure && !loopback) {
+      return Optional.of("the scheme http");
+    }
+    return uri.getRawUserInfo() == null
+        ? Optional.empty()
+        : Optional.of("a user name or password in the address");
   }
 }

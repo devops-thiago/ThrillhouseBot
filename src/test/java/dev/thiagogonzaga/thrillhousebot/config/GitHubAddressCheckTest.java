@@ -84,7 +84,10 @@ class GitHubAddressCheckTest {
     "ftp://ghes.example.com, a scheme other than http or https",
     "https:///api/v3, no valid host name",
     "https://ghes_internal/api/v3, no valid host name",
-    "https://git hub.example.com, text that is not a URL"
+    "https://git hub.example.com, text that is not a URL",
+    "https://user:secret@ghes.example.com, a user name or password in the address",
+    "https://user@ghes.example.com/api/v3, a user name or password in the address",
+    "http://user:secret@ghes.example.com, the scheme http"
   })
   void anythingElseIsRefusedWithTheReason(String value, String found) {
     assertEquals(List.of(REST + REFUSAL + ": found " + found), problems(value, false));
