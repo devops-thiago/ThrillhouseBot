@@ -441,8 +441,8 @@ The summary is one comment per pull request, marked with `<!-- thrillhousebot:su
 first round posts it. Every later round finds the newest bot comment carrying the marker (or, for
 summaries posted before 0.7.0, the summary heading) and replaces its body. An unchanged body is
 not rewritten. A new comment is posted when the old one was deleted or the edit failed, and when
-`/summary` asks for one. Under the marker, a hidden `<!-- thrillhousebot:findings v=1 [...] -->`
-line lists the open findings the summary renders (key, file, line, risk, confidence, thread,
+`/summary` asks for one. Under the marker, a hidden `<!-- thrillhousebot:findings v=1 head=<sha> [...] -->`
+line names the reviewed commit and lists the open findings the summary renders (key, file, line, risk, confidence, thread,
 suggestion, carried) for other tools to read; the bot never reads it back (`FindingsManifest`).
 On its own opt-in, the outcome webhook sends the same entries (`OpenFindings`).
 

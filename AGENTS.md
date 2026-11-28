@@ -590,7 +590,7 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   loses nothing. An unchanged body is not rewritten; a failed edit posts a new comment.
 - **The summary carries a machine-readable manifest of the open findings** (#1433).
   `ReviewPublisher.publishSummary` writes one hidden line under the summary marker, after the
-  `pr-text` fingerprint: `<!-- thrillhousebot:findings v=1 [...] -->`
+  `pr-text` fingerprint: `<!-- thrillhousebot:findings v=1 head=<sha> [...] -->`
   (`FindingsManifest.render`, over `PrSummaryGenerator.currentState(PromptLabelScrubber.scrub(result))`,
   so it lists exactly the set the summary renders and its `key` equals the inline marker's, which is
   computed over the scrubbed title). It is a view, never a source of truth: nothing reads it back.

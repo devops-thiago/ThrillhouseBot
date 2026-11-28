@@ -196,8 +196,8 @@ public class ReviewPublisher {
   }
 
   /**
-   * One summary to publish. {@code commitSha} is the reviewed head for the opt-in Agent next steps
-   * subsection (#1442).
+   * One summary to publish. {@code commitSha} is the reviewed head, named in the findings manifest
+   * and in the opt-in Agent next steps subsection (#1442).
    */
   record SummaryRequest(
       String auth,
@@ -226,7 +226,8 @@ public class ReviewPublisher {
     var scrubbed = PromptLabelScrubber.scrub(result);
     var state = PrSummaryGenerator.currentState(scrubbed);
     var manifestLine =
-        FindingsManifest.render(state, announcedThreads(scrubbed, summary.lineResolver()));
+        FindingsManifest.render(
+            state, announcedThreads(scrubbed, summary.lineResolver()), commitSha);
     var agentEnabled = agentNextStepsEnabled();
     var prTextLine = prText == null ? "" : DescriptionGapCarryover.prTextMarker(prText) + "\n";
     var headLine = agentEnabled ? AgentNextSteps.headMarker(commitSha) : "";
@@ -322,8 +323,11 @@ public class ReviewPublisher {
   private void correctManifest(
       PostReviewRequest post, ReviewResult result, ManifestThreads.PostedThreads posted) {
     var state = PrSummaryGenerator.currentState(result);
-    var announced = FindingsManifest.render(state, announcedThreads(result, post.lineResolver()));
-    var opened = FindingsManifest.render(state, ManifestThreads.posted(result, posted));
+    var announced =
+        FindingsManifest.render(
+            state, announcedThreads(result, post.lineResolver()), post.commitSha());
+    var opened =
+        FindingsManifest.render(state, ManifestThreads.posted(result, posted), post.commitSha());
     if (announced.equals(opened)) {
       return;
     }

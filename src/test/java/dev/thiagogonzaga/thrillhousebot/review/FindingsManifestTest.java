@@ -73,6 +73,24 @@ class FindingsManifestTest {
   }
 
   @Test
+  void theHeaderNamesTheReviewedCommitEvenWithNothingOpen() {
+    var state = PrSummaryGenerator.currentState(result(List.of(), List.of()));
+
+    assertEquals(
+        "<!-- thrillhousebot:findings v=1 head=0a1b2c3d [] -->",
+        FindingsManifest.render(state, Finding::postsInline, "0A1B2C3D"));
+  }
+
+  @Test
+  void onlyAHexCommitEntersTheHeader() {
+    var state = PrSummaryGenerator.currentState(result(List.of(), List.of()));
+    var bare = "<!-- thrillhousebot:findings v=1 [] -->";
+
+    assertEquals(bare, FindingsManifest.render(state, Finding::postsInline, ""));
+    assertEquals(bare, FindingsManifest.render(state, Finding::postsInline, "abc --> x"));
+  }
+
+  @Test
   void anEmptySetRendersAnEmptyArrayNotNoBlock() {
     assertEquals(
         "<!-- thrillhousebot:findings v=1 [] -->",

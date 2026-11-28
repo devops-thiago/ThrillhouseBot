@@ -11,6 +11,11 @@ cannot resolve its review threads.
 
 ### Added
 
+- **The open-findings line names the reviewed commit** (#1548): the hidden
+  `<!-- thrillhousebot:findings v=1 ... -->` line in the summary comment now carries
+  `head=<sha>`, so an agent or script can tell whether the list covers the latest push. The
+  entries and `v=1` are unchanged; a consumer that expects `[` right after `v=1` has to allow
+  the new header attribute.
 - **`GITHUB_URL` alone points the bot at another GitHub** (#1489): an unset or blank
   `GITHUB_API_URL` and `GITHUB_GRAPHQL_URL` are now derived from it, as
   `https://api.github.com` for `github.com`, `https://api.<subdomain>.ghe.com` for a `ghe.com`
