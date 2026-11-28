@@ -54,6 +54,14 @@ class MarkdownSafeTest {
     assertEquals("`a b`", MarkdownSafe.codeSpan("a` `b"));
   }
 
+  // GitHub ends a line at a bare carriage return, which would leave the span open on its line.
+  @Test
+  void aCodeSpanTakesOutACarriageReturnLikeAnyOtherLineBreak() {
+    assertEquals("`x <img src=x>`", MarkdownSafe.codeSpan("x\r<img src=x>"));
+    assertEquals("`x <img src=x>`", MarkdownSafe.codeSpan("x\r\n<img src=x>"));
+    assertEquals("x \\| y", MarkdownSafe.codeSpan("x\r| y"));
+  }
+
   // In a table row GitHub ends the cell at a pipe before it reads the span, and a pipe escaped
   // inside a span shows its backslash in a paragraph, so such a name is text that reads one way.
   @Test
