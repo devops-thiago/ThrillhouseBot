@@ -60,6 +60,26 @@ The app asks for an organization permission, so an organization owner has to
 install it. The same applies later: when the app's permissions change, an owner
 has to accept the new ones on each installation.
 
+## Generate the `.env` on another GitHub address
+
+After the installer creates the app, GitHub redirects to your host with a
+one-time `?code=`. If you turn it into a `.env` with `scripts/GenEnv.java`, the
+request has to go to the GitHub the app was registered on, not to `github.com`,
+where the code is unknown. Sign `gh` in to that host
+(`gh auth login --hostname <github-host>`), then:
+
+```bash
+gh api --hostname <github-host> --method POST /app-manifests/<code>/conversions \
+  | java scripts/GenEnv.java --host <your-host> --github-url https://<github-host>
+```
+
+`--github-url` writes `GITHUB_URL` into the generated `.env`. Without it the
+bot would call `github.com` with the new app's credentials. The value must be
+an `https` address with no user name or password, the rule the bot applies to
+`GITHUB_URL` when it starts; the script refuses anything else and writes no
+`.env`. It does the same for an option it does not know and for one given
+without a value, so a mistyped `--github-url` is not dropped silently.
+
 ## What each credential is for
 
 | Setting | Used for | Needed |

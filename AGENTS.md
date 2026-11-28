@@ -129,7 +129,7 @@ same diff.
 | CI hold and revisit | `review/CiHoldRegistry`, `review/CiHoldRevisit` |
 | Opt-in review learnings: capture after the post, from the round's final statuses | `review/ReviewLearnings.captureSurvivingDeclines` → `review/FollowUpAnalyzer.survivingDeclines` → `review/ReviewLearningService.save` |
 | `/learnings`, `/remember`, `/forget` | `webhook/LearningCommands` (routed by `CommentCommandService`) |
-| Maintainer replies and mentions. A clear directive replied on a finding's thread is applied, never answered by the model: the thread is resolved and a fixed acknowledgement posted (`clearFromThread`, #1066). GitHub refuses `resolveReviewThread` without the App's `Contents: Read & write`, in the `errors` of an HTTP 200: `ReviewThreadService.resolve` raises them as `GitHubGraphQLException`, and a missing permission is named to the maintainer here and on `/resolve` (#1471). That permission serves nothing else; the bot writes no repository content. The reply and the review accept the same lines for it (`FollowUpAnalyzer.threadLines`): the thread's line and original line, and, on a thread posted on removed lines, the finding's head-side line its marker carries (`line=`, `SuggestionFormatter.withMarkedLine`, #1360) | `review/MaintainerReplyService`, `review/MaintainerReplyDispatcher` |
+| Maintainer replies and mentions. A clear directive replied on a finding's thread is applied, never answered by the model: the thread is resolved and a fixed acknowledgement posted (`clearFromThread`, #1066). GitHub refuses `resolveReviewThread` without the App's `Contents: Read & write`, in the `errors` of an HTTP 200: `ReviewThreadService.resolve` raises them as `GitHubGraphQLException`, and a missing permission is named to the maintainer here and on `/resolve` (#1471). `threadsByRootComment` raises the same exception for `errors` with no thread list, so a failed read is never taken for a pull request without threads: `/resolve` then says the threads could not be read, and it counts the threads it tried and GitHub left open instead of answering that there was nothing to resolve. That permission serves nothing else; the bot writes no repository content. The reply and the review accept the same lines for it (`FollowUpAnalyzer.threadLines`): the thread's line and original line, and, on a thread posted on removed lines, the finding's head-side line its marker carries (`line=`, `SuggestionFormatter.withMarkedLine`, #1360) | `review/MaintainerReplyService`, `review/MaintainerReplyDispatcher` |
 | On-request commands (`/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`) | `review/AbstractPrSuggestionGenerator` and its subclasses |
 
 ## Model-call invariants
@@ -571,13 +571,25 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   computed over the scrubbed title). It is a view, never a source of truth: nothing reads it back.
   Entries hold identifiers and enums only (`key`, `file`, `line`, `risk`, `confidence`, `status`
   always `open`, `thread`, `hasSuggestion`, `carried`), most severe first; no title, description
-  or suggestion enters it. `thread` comes from `ReviewPublisher.threadRule`, which applies the
+  or suggestion enters it. `thread` comes from `ManifestThreads.announced`, which applies the
   rules `postInlineComments` posts by: a round finding that posts inline, on a path
   `DiffLineResolver.isChangedFile` accepts, within `maxReviewComments` in posting order, matched by
   key; a carried finding keeps `Finding.postsInline`. The summary is written before the review, so
-  `thread` means a thread is expected, not that GitHub took it: a refused post reads `true`, and
-  since `postInlineComments` counts the cap in landed threads, a refusal frees a slot that a finding
-  `threadRule` put past the cap can take while it reads `false`. The path is the only free text and is escaped so it
+  `announced` can only say which threads the round expects: it cannot know a post GitHub refuses,
+  nor that `postInlineComments`, which counts the cap in landed threads, then gives the freed slot
+  to a finding past the cap. `postReview` therefore returns the threads that landed
+  (`ManifestThreads.PostedThreads`; none when a batched review was never submitted), and when they
+  differ from the announced ones `ReviewPublisher.correctManifest` rewrites the line in a second
+  summary edit. The edit goes only to the comment this round's `publishSummary` wrote (or found
+  already current), by the id the publisher keeps from then until the review has posted, and
+  replaces only the exact line it wrote there. Another run's summary is never touched, even one
+  carrying the same line: a round whose summary was not written (a blank one, a failed post) holds
+  no id and edits nothing, and so does one whose comment is no longer the newest summary. The id
+  is only for this edit; the summary itself is still found by its marker. A round that posted as
+  announced reads and writes nothing, and a failed edit is logged and never re-posts the summary.
+  The webhook's `review.open_findings` is built from the same `PostedThreads`
+  (`ManifestThreads.openFindings`). A review
+  post that throws leaves the announced line. The path is the only free text and is escaped so it
   can never write `-->`; the line stays one line. An empty set renders `[]` (so "nothing open" differs
   from a comment older than the manifest), and a set over `MAX_ENTRIES` entries or
   `MAX_ARRAY_CHARS` rendered characters (the path has no length bound) is cut with `omitted=N` in

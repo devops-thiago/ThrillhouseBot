@@ -278,6 +278,16 @@ Create the GitHub App before starting the bot; its credentials go in `.env`.
      | java scripts/GenEnv.java --host <your-host>
    ```
 
+   For an app registered on another GitHub address, ask that GitHub for the
+   conversion and pass its web address, so the `.env` gets `GITHUB_URL`
+   (`gh` must be signed in there: `gh auth login --hostname <github-host>`).
+   The address must be `https`, or the script writes no `.env`:
+
+   ```bash
+   gh api --hostname <github-host> --method POST /app-manifests/<code>/conversions \
+     | java scripts/GenEnv.java --host <your-host> --github-url https://<github-host>
+   ```
+
 > Once the bot is running, `install.html` on its own URL
 > (`https://<your-host>/install.html`, or `http://localhost:8080/install.html`)
 > detects the URL and builds the manifest for you. It has the same two optional
@@ -379,8 +389,9 @@ would push past GitHub's size limit is posted without it.
 
 `REVIEW_SHOW_EVIDENCE=true` adds a **Basis** block under each finding's
 description on its inline or file-level comment: the path-scoped rules covering
-the file, the failing check the finding cites, what the second pass did with it,
-and the review learning that demoted it. A line is left out when the review has
+the file, the failing check the finding cites with up to three places where that
+check annotated the finding's file, what the second pass did with it, and the
+review learning that demoted it. A line is left out when the review has
 nothing for it. It says what the review had, not what the model was thinking, and
 makes no model call.
 
@@ -777,14 +788,17 @@ findings: `<!-- thrillhousebot:findings v=1 [...] -->`. Each entry gives the
 finding's `key` (the one in its thread marker), `file`, `line`, `risk`,
 `confidence`, `status` (`open`), `thread`, `hasSuggestion` and `carried` (open
 since an earlier review), most severe first. `thread` is `true` when the review
-is set to open an inline thread for the finding: it posts inline, its file is
-part of the pull request and it is within the per-run comment cap. It is
-`false` for a finding listed under "Things to double-check", on a file outside
-the pull request, or past the cap. The summary is written before the review
-posts, so a thread GitHub then refuses still reads `true`; the review body lists
-that finding. The cap counts threads that landed, so after a refusal a finding
-past the cap can still get a thread while it reads `false`. An empty list is `[]`. The list stops at 100 entries or 16,000
-characters, and `omitted=N` after `v=1` counts the entries left out. It contains no model-written text.
+opens an inline thread for the finding: it posts inline, its file is part of the
+pull request and it is within the per-run comment cap. It is `false` for a
+finding listed under "Things to double-check", on a file outside the pull
+request, past the cap, or whose thread GitHub refused; the review body lists a
+refused finding. The summary is written before the review posts, so the line
+first holds the threads the review expects, and the bot edits it once the review
+has posted if GitHub refused a thread or a refusal let a finding past the cap
+take the freed slot. For a finding carried from an earlier review it says only
+that the finding is one that posts inline. An empty list is `[]`. The list stops
+at 100 entries or 16,000 characters, and `omitted=N` after `v=1` counts the
+entries left out. It contains no model-written text.
 
 The risk counts, Key Findings and "Things to double-check" cover the round's
 new findings and every earlier finding still open, each listed once and marked
@@ -1464,12 +1478,12 @@ PR title is sent. `NOTIFICATIONS_WEBHOOK_INCLUDE_CONTENT=true` adds
 first, each with `severity`, `file`, `line` and `title`); descriptions and code
 are never sent. `session_url` is built from `DASHBOARD_URL`.
 
-`NOTIFICATIONS_WEBHOOK_INCLUDE_OPEN_FINDINGS=true` adds `review.openFindings`
+`NOTIFICATIONS_WEBHOOK_INCLUDE_OPEN_FINDINGS=true` adds `review.open_findings`
 to the `json` format, with or without content: every finding still open on the pull request, including ones carried from earlier
 rounds, as the summary comment's findings manifest lists them.
 
 ```json
-"openFindings": {
+"open_findings": {
   "v": 1,
   "entries": [
     { "key": "1a2b3c4d", "file": "src/A.java", "line": 12, "risk": "high",

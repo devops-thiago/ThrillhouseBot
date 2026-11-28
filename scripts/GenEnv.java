@@ -5,14 +5,49 @@
 ///
 /// Requires Java 25 (compact source file, JEP 512). Without --host, a
 /// `<your-host>` placeholder is written for you to fill in.
+///
+/// For an app registered on GitHub Enterprise Server or GHE.com, ask that GitHub
+/// for the conversion and pass its web address, so the bot calls the same one:
+///
+///   gh api --hostname github.example.com --method POST /app-manifests/{code}/conversions \
+///     | java scripts/GenEnv.java --host thrillhousebot.example.com \
+///         --github-url https://github.example.com
+///
+/// --github-url must be an https address with no user name or password, the same
+/// rule the bot applies to GITHUB_URL when it starts. Anything else is refused
+/// and no .env is written.
+///
+/// Both options take their value as the next argument or after an equals sign
+/// (--github-url=https://github.example.com). An option the script does not
+/// know, or one given without a value, is refused too, and no .env is written.
+
+static final String HOST = "--host";
+static final String GITHUB_URL = "--github-url";
+static final java.util.Map<String, String> EXAMPLES =
+    java.util.Map.of(
+        HOST, "thrillhousebot.example.com", GITHUB_URL, "https://github.example.com");
 
 void main(String[] args) throws Exception {
-  String host = null;
-  for (int i = 0; i < args.length - 1; i++) {
-    if ("--host".equals(args[i])) {
-      host = args[i + 1];
-    }
+  java.util.Map<String, String> options;
+  try {
+    options = options(args);
+  } catch (IllegalArgumentException e) {
+    System.err.println("❌ " + e.getMessage() + ". No .env was written.");
+    System.exit(1);
+    return;
   }
+  String host = options.get(HOST);
+  String givenGithubUrl = options.get(GITHUB_URL);
+  String githubUrl = givenGithubUrl == null ? null : givenGithubUrl.replaceAll("/+$", "");
+  var refused = githubUrlProblem(givenGithubUrl);
+  if (refused != null) {
+    System.err.println(
+        "❌ --github-url must be an https address, like https://github.example.com: found "
+            + refused
+            + ". No .env was written.");
+    System.exit(1);
+  }
+  var githubUrlLine = githubUrl == null ? "" : "GITHUB_URL=" + githubUrl + "\n";
   var dashboardUrl = "https://" + (host != null ? host : "<your-host>");
 
   var json = new String(System.in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
@@ -44,7 +79,7 @@ void main(String[] args) throws Exception {
       GITHUB_APP_ID=%s
       GITHUB_PRIVATE_KEY="%s"
       GITHUB_WEBHOOK_SECRET=%s
-
+      %s
       # --- AI / DeepSeek ---
       AI_API_KEY=
       AI_BASE_URL=https://api.deepseek.com/v1
@@ -70,7 +105,7 @@ void main(String[] args) throws Exception {
       # WEBSOCKET_KEEPALIVE_MS=25000
       """
           .formatted(
-              appId, pemOneLine, nullToEmpty(webhookSecret),
+              appId, pemOneLine, nullToEmpty(webhookSecret), githubUrlLine,
               nullToEmpty(clientId), nullToEmpty(clientSecret), dashboardUrl);
 
   java.nio.file.Files.writeString(java.nio.file.Path.of(".env"), env);
@@ -85,8 +120,70 @@ void main(String[] args) throws Exception {
   if (host == null) {
     IO.println("   Host        : ⚠️ no --host given — replace <your-host> in DASHBOARD_URL");
   }
+  if (!githubUrlLine.isEmpty()) {
+    IO.println("   GitHub      : " + githubUrl);
+  }
   IO.println("");
   IO.println("👉 Still needed: AI_API_KEY, DB_PASSWORD");
+}
+
+/// The options given, by name, each with its value stripped of surrounding spaces.
+/// An argument that is not one of the options, or an option with no value after it,
+/// is refused: left out of the .env, a mistyped --github-url would have the bot call
+/// github.com with the credentials of an app registered somewhere else.
+/// Only an option's name is ever repeated, since a value can hold a password.
+java.util.Map<String, String> options(String[] args) {
+  var options = new java.util.HashMap<String, String>();
+  var rest = new java.util.ArrayDeque<>(java.util.List.of(args));
+  while (!rest.isEmpty()) {
+    var arg = rest.poll();
+    var equals = arg.indexOf('=');
+    var name = equals < 0 ? arg : arg.substring(0, equals);
+    if (!EXAMPLES.containsKey(name)) {
+      throw new IllegalArgumentException(
+          (name.matches("--[a-z-]+") ? "Unknown option " + name : "Unexpected argument")
+              + ": the options are "
+              + HOST
+              + " and "
+              + GITHUB_URL);
+    }
+    var value = equals < 0 ? rest.poll() : arg.substring(equals + 1);
+    if (value == null || value.isBlank() || (equals < 0 && value.startsWith("--"))) {
+      throw new IllegalArgumentException(
+          name + " needs a value, like " + name + " " + EXAMPLES.get(name));
+    }
+    options.put(name, value.strip());
+  }
+  return options;
+}
+
+/// What keeps the bot from starting on this GITHUB_URL, or null when it would accept it
+/// or none was given.
+/// The value is never repeated, since it can hold a password.
+String githubUrlProblem(String value) {
+  if (value == null || value.isEmpty()) {
+    return null;
+  }
+  java.net.URI uri;
+  try {
+    uri = new java.net.URI(value);
+  } catch (java.net.URISyntaxException e) {
+    return "text that is not a URL";
+  }
+  if (uri.getScheme() == null) {
+    return "no scheme";
+  }
+  var scheme = uri.getScheme().toLowerCase(java.util.Locale.ROOT);
+  if (scheme.equals("http")) {
+    return "the scheme http";
+  }
+  if (!scheme.equals("https")) {
+    return "a scheme other than https";
+  }
+  if (uri.getHost() == null) {
+    return "no valid host name";
+  }
+  return uri.getRawUserInfo() == null ? null : "a user name or password in the address";
 }
 
 /// First numeric value for the key (the conversion response has the app id first).

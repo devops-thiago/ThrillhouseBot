@@ -49,6 +49,16 @@ gh api --method POST /app-manifests/<code>/conversions \
   | java scripts/GenEnv.java --host <your-host>
 ```
 
+For an app registered on another GitHub address, ask that GitHub for the
+conversion and pass its web address, so the `.env` gets `GITHUB_URL` (`gh` must
+be signed in there: `gh auth login --hostname <github-host>`). The address must
+be `https`, or the script writes no `.env`:
+
+```bash
+gh api --hostname <github-host> --method POST /app-manifests/<code>/conversions \
+  | java scripts/GenEnv.java --host <your-host> --github-url https://<github-host>
+```
+
 :::note[Smee setups]
 The hosted installer registers Smee webhooks at the channel root and the
 OAuth callback at `http://localhost:8080/api/auth/callback`. The redirect that

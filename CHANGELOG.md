@@ -67,7 +67,7 @@ cannot resolve its review threads.
   (#1487).
 - **Open findings in the review webhook** (#1443): with `NOTIFICATIONS_WEBHOOK_INCLUDE_OPEN_FINDINGS`
   (new, default off), a `review.completed` payload in the `json` format carries
-  `review.openFindings`, the entries of the summary comment's findings manifest: file paths and
+  `review.open_findings`, the entries of the summary comment's findings manifest: file paths and
   lines, no titles. Off, nothing new leaves the process.
 - **The App asks for `Contents: Read & write`** (#1471): GitHub refuses to resolve a review
   thread without it, so an app registered from the manifest or installer never could. The bot
@@ -220,6 +220,18 @@ cannot resolve its review threads.
 - **An environment read named in a docstring is not a read (#1473)**: a read named inside a
   multi-line docstring or block comment counted as one when the bot chose which changed files to
   fetch for configuration-key context.
+- **The findings manifest's `thread` value follows the threads that were opened (#1465)**: when
+  GitHub refused a thread, or a refusal let a finding past the comment cap take the freed slot, the
+  summary's manifest still carried the value announced before the review posted. The bot now
+  corrects the manifest line after the review posts.
+- **`/resolve` says when it could not read or resolve the threads (#1471)**: it answered that there
+  were no open finding threads when GitHub failed to return the pull request's review threads, and
+  reported nothing when every resolve attempt failed. It now says the threads could not be read, or
+  how many it tried and GitHub left open.
+- **`scripts/GenEnv.java` refuses arguments it cannot read**: an unknown option, a stray argument or
+  an option given without a value was dropped without a word, so `--host` given last wrote the
+  `<your-host>` placeholder. The script now stops with a message and writes no `.env`. `--host=...`
+  is accepted too.
 
 ### Security
 

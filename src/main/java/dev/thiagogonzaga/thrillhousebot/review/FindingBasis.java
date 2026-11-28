@@ -26,9 +26,9 @@ import java.util.stream.Collectors;
 /**
  * Why each finding of one review was raised and how it was checked (#1435), from what the pipeline
  * itself established: the maintainers' scoped rules covering the file, the failing check the
- * finding cites, the second pass's verdict and the review learning that demoted it. Every value is
- * a name, a path, an id or a fixed phrase; none is model or diff prose. Batches record into it
- * concurrently.
+ * finding cites and where that check annotated the file, the second pass's verdict and the review
+ * learning that demoted it. Every value is a name, a path, an id or a fixed phrase; none is model
+ * or diff prose. Batches record into it concurrently.
  */
 final class FindingBasis implements FindingVerificationService.Outcomes {
 
@@ -70,7 +70,11 @@ final class FindingBasis implements FindingVerificationService.Outcomes {
     ruleLine(finding.file(), rules, lines);
     var cited = ci.citedNames(finding.title(), finding.description());
     if (!cited.isEmpty()) {
-      lines.add("CI: cites " + String.join(", ", cited));
+      var annotated = ci.annotatedLocations(finding.file(), finding.title(), finding.description());
+      lines.add(
+          "CI: cites "
+              + String.join(", ", cited)
+              + (annotated.isEmpty() ? "" : "; annotated at " + String.join(", ", annotated)));
     }
     var description = finding.description();
     if (description != null && description.contains(FindingVerificationService.UNVERIFIED_NOTE)) {

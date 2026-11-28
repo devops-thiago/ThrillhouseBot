@@ -115,7 +115,7 @@ class NotificationPayloadsTest {
 
   @Test
   void openFindingsCarryTheManifestEntriesWithoutNeedingTheContentOptIn() throws Exception {
-    var open = jsonWithOpenFindings(OPEN).at("/review/openFindings");
+    var open = jsonWithOpenFindings(OPEN).at("/review/open_findings");
 
     assertThat(open.get("v").asInt()).isEqualTo(1);
     assertThat(open.has("omitted")).isFalse();
@@ -126,7 +126,7 @@ class NotificationPayloadsTest {
 
   @Test
   void openFindingsSayHowManyTheManifestLeftOut() throws Exception {
-    var open = jsonWithOpenFindings(new OpenFindings("[]", 4)).at("/review/openFindings");
+    var open = jsonWithOpenFindings(new OpenFindings("[]", 4)).at("/review/open_findings");
 
     assertThat(open.get("omitted").asInt()).isEqualTo(4);
     assertThat(open.get("entries").isEmpty()).isTrue();

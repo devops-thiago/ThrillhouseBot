@@ -560,9 +560,9 @@ it held. A maintainer-reply thread write waits, for at most two minutes, until t
 submitted or deleted. With `REVIEW_AGENT_PROMPT_ENABLED`, each inline finding comment ends with a collapsed
 "Agent prompt" block built from the finding already posted, with no model call. With
 `REVIEW_SHOW_EVIDENCE`, `FindingBasis` prints under the description the covering path-scoped rules,
-the cited failing check, the verifier's outcome (recorded per finding through
-`FindingEvidence.outcomes`) and the demoting review learning; names, paths, ids and fixed phrases
-only.
+the cited failing check and where it annotated the finding's file, the verifier's outcome
+(recorded per finding through `FindingEvidence.outcomes`) and the demoting review learning; names,
+paths, ids and fixed phrases only.
 
 ## Context sections
 
