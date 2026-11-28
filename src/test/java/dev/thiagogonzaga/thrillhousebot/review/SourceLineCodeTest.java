@@ -85,11 +85,71 @@ class SourceLineCodeTest {
   }
 
   @Test
-  void linesThatStartInOneLiteralAndEndInAnotherAreBalancedAndMisread() {
-    // A known limit: nothing tells these two quotes from an opener and its closer.
+  void aQuoteThatCannotCloseShowsTheLinesStartInsideALiteral() {
+    // Text follows the second quote, so it opens a docstring and the first one closes another.
     assertEquals(
-        List.of("", "", " Next docstring."),
+        List.of(" ", "return getenv(  )", ""),
         SourceLineCode.ofLines(
             List.of("    \"\"\"", "    return getenv(\"X\")", "    \"\"\"Next docstring.")));
+  }
+
+  @Test
+  void aQuoteThatCannotOpenShowsTheLinesStartInsideALiteral() {
+    assertEquals(
+        List.of("", " ", "return getenv(  )"),
+        SourceLineCode.ofLines(
+            List.of(
+                "    Defaults to getenv(\"Y\") when",
+                "    unset.\"\"\"",
+                "    return getenv(\"X\")")));
+  }
+
+  @Test
+  void aQuoteThatCannotCloseShowsTheLinesEndInsideALiteral() {
+    assertEquals(
+        List.of("return getenv(  )", "def next():", "", ""),
+        SourceLineCode.ofLines(
+            List.of(
+                "return getenv(\"X\")",
+                "def next():",
+                "    \"\"\"A docstring the lines cut.",
+                "    Defaults to getenv(\"Y\").")));
+  }
+
+  @Test
+  void aCommentLeftOpenStopsTheFollowingOnlyFromItsLineOn() {
+    // The opener may be a shell glob, so the lines after it are read on their own. The docstring
+    // above it is still text.
+    var lines =
+        List.of(
+            "\"\"\"Summary.",
+            "Defaults to getenv(\"Y\").",
+            "\"\"\"",
+            "rm -rf build/*",
+            "v = getenv(\"X\")");
+
+    assertEquals(
+        List.of("", "", " ", SourceLineCode.of("rm -rf build/*"), "v = getenv(  )"),
+        SourceLineCode.ofLines(lines));
+    // The same with bare quotes, which rule no reading out.
+    assertEquals(
+        List.of("", "", " ", SourceLineCode.of("rm -rf build/*"), "v = getenv(  )"),
+        SourceLineCode.ofLines(
+            List.of("\"\"\"", "getenv(\"Y\")", "\"\"\"", "rm -rf build/*", "v = getenv(\"X\")")));
+  }
+
+  @Test
+  void quotesThatFitNeitherReadingLeaveEveryLineReadOnItsOwn() {
+    var lines = List.of("text.\"\"\"", "a = getenv(\"X\")", "\"\"\"", "b = 1", "\"\"\"Word");
+
+    assertEquals(lines.stream().map(SourceLineCode::of).toList(), SourceLineCode.ofLines(lines));
+  }
+
+  @Test
+  void bareQuotesThatStartInOneLiteralAndEndInAnotherAreBalancedAndMisread() {
+    // A known limit: nothing tells these two quotes from an opener and its closer.
+    assertEquals(
+        List.of("", "", " "),
+        SourceLineCode.ofLines(List.of("    \"\"\"", "    return getenv(\"X\")", "    \"\"\"")));
   }
 }

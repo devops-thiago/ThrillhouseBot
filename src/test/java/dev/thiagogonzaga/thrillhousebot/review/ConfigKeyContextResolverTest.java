@@ -529,8 +529,8 @@ class ConfigKeyContextResolverTest {
     }
 
     /**
-     * A read named on an inner line of a docstring or block comment the hunk opens and closes is
-     * named, not made.
+     * A read named on an inner line of a docstring or block comment is named, not made: one the
+     * hunk opens and closes, or a docstring the hunk cuts whose quote shows which end it is.
      */
     @ParameterizedTest
     @ValueSource(
@@ -551,6 +551,9 @@ class ConfigKeyContextResolverTest {
           "+<!--\n+import.meta.env.VITE_X\n+-->",
           "+x = 1 --[[ was\n+os.getenv(\"X\")\n+]]",
           "+doc = \"\"\"a\n+{os.environ} and {getenv(1)}\n+\"\"\"",
+          "+def next():\n+    \"\"\"A docstring the hunk cuts.\n+    Defaults to os.getenv(\"X\").",
+          "     Defaults to os.getenv(\"X\") when\n     unset.\"\"\"\n+    return HOME",
+          "+\"\"\"Summary.\n+os.getenv(\"X\")\n+\"\"\"\n+rm -rf build/*\n+x = 1",
           "+/* a\n+*/ x = 1 /* b\n+getenv(1)\n+*/"
         })
     void shouldNotTakeAReadNamedInsideAMultiLineLiteralOrCommentForOne(String lines) {
@@ -576,6 +579,14 @@ class ConfigKeyContextResolverTest {
                \"""
           +    return os.getenv("X")""",
           "+    return os.getenv(\"X\")\n+\n+def next():\n+    \"\"\"A docstring the hunk cuts.",
+          """
+               the end of a docstring that began above the hunk.
+               \"""
+          +    return os.getenv("X")
+          +
+          +def next():
+          +    \"""A docstring the hunk cuts.""",
+          "+\"\"\"Summary.\n+\"\"\"\n+rm -rf build/*\n+v = os.getenv(\"X\")",
           "+/* open\n@@ -9 +9 @@\n+v = os.getenv(\"X\")\n+# */",
           "+rm -rf build/*\n+v = os.getenv(\"X\")",
           "+v = os.getenv(\"X\")\n@@ -9 +9 @@\n+x = 1"
