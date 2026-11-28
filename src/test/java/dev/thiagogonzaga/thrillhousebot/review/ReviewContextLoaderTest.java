@@ -110,6 +110,10 @@ class ReviewContextLoaderTest {
         new ReviewContextLoader(
             prClient,
             reviewClient,
+            new ReviewListing(
+                reviewClient,
+                mock(dev.thiagogonzaga.thrillhousebot.github.GitHubGraphQLClient.class),
+                BotIdentity.from(List.of(BOT_LOGIN))),
             commentClient,
             instructionsResolver,
             repoSettingsResolver,
@@ -916,6 +920,10 @@ class ReviewContextLoaderTest {
       return new ReviewContextLoader(
           prClient,
           reviewClient,
+          new ReviewListing(
+              reviewClient,
+              mock(dev.thiagogonzaga.thrillhousebot.github.GitHubGraphQLClient.class),
+              BotIdentity.from(List.of(BOT_LOGIN))),
           commentClient,
           instructionsResolver,
           repoSettingsResolver,
@@ -1278,42 +1286,6 @@ class ReviewContextLoaderTest {
 
       try (var log = CapturedLog.of(ReviewContextLoader.class)) {
         assertTrue(loader.fetchPriorReviews("auth", "owner", "repo", 42).isEmpty());
-
-        assertTrue(log.at(Level.WARNING).isEmpty(), log.at(Level.WARNING).toString());
-      }
-    }
-
-    @Test
-    void aListingThatFilledEveryPageIsLoggedBecauseTheNewestReviewsWereNotRead() {
-      var review =
-          new GitHubReviewClient.ReviewResponse(
-              1L, "", "COMMENTED", "abc123", new GitHubReviewClient.ReviewResponse.User("u"));
-      var full = Collections.nCopies(ReviewContextLoader.MAX_LISTED_REVIEWS, review);
-      when(reviewClient.listReviews(any(), any(), eq("owner"), eq("repo"), eq(42)))
-          .thenReturn(full);
-
-      try (var log = CapturedLog.of(ReviewContextLoader.class)) {
-        assertEquals(full.size(), loader.fetchPriorReviews("auth", "owner", "repo", 42).size());
-
-        var warnings = log.at(Level.WARNING);
-        assertEquals(1, warnings.size(), warnings.toString());
-        var warning = warnings.getFirst();
-        assertTrue(warning.contains("owner/repo #42"), warning);
-        assertTrue(warning.contains("1000-review read ceiling"), warning);
-        assertTrue(warning.contains("neither seen nor dismissed"), warning);
-      }
-    }
-
-    @Test
-    void aListingOneShortOfTheCeilingIsNotLogged() {
-      var review =
-          new GitHubReviewClient.ReviewResponse(
-              1L, "", "COMMENTED", "abc123", new GitHubReviewClient.ReviewResponse.User("u"));
-      when(reviewClient.listReviews(any(), any(), eq("owner"), eq("repo"), eq(42)))
-          .thenReturn(Collections.nCopies(ReviewContextLoader.MAX_LISTED_REVIEWS - 1, review));
-
-      try (var log = CapturedLog.of(ReviewContextLoader.class)) {
-        loader.fetchPriorReviews("auth", "owner", "repo", 42);
 
         assertTrue(log.at(Level.WARNING).isEmpty(), log.at(Level.WARNING).toString());
       }
@@ -1964,6 +1936,10 @@ class ReviewContextLoaderTest {
       return new ReviewContextLoader(
           prClient,
           reviewClient,
+          new ReviewListing(
+              reviewClient,
+              mock(dev.thiagogonzaga.thrillhousebot.github.GitHubGraphQLClient.class),
+              BotIdentity.from(List.of(BOT_LOGIN))),
           commentClient,
           instructionsResolver,
           repoSettingsResolver,

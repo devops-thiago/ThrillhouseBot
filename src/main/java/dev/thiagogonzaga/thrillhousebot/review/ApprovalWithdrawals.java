@@ -33,6 +33,7 @@ final class ApprovalWithdrawals {
 
   private static final String ACCEPT = "application/vnd.github+json";
   private static final String REVIEW_APPROVED = "APPROVED";
+  private static final String REVIEW_DISMISSED = "DISMISSED";
 
   private static final String DISMISSAL_REFUSED_HINT =
       "GitHub refused the call, so the bot's older approvals were not tried. Check that the App has"
@@ -63,10 +64,10 @@ final class ApprovalWithdrawals {
    * Every such approval is dismissed, newest first, not only the latest, so an older one cannot
    * count again once the newest is gone.
    *
-   * <p>The approvals come from the run's one listing of the pull request's reviews, which {@link
-   * GitHubReviewClient#listReviews} pages through (up to 1,000 reviews). A listing that failed
-   * reaches here empty, so that round dismisses nothing; the next one reads the reviews again.
-   * {@link ReviewContextLoader#fetchPriorReviews} logs both that failure and a full walk at warn.
+   * <p>The approvals come from the run's one listing of the pull request's reviews ({@link
+   * ReviewListing}: the newest 1,000, and the bot's own approvals from before those). A listing
+   * that failed reaches here empty, so that round dismisses nothing; the next one reads the reviews
+   * again. {@link ReviewContextLoader#fetchPriorReviews} logs that failure at warn.
    *
    * <p>Best-effort: a dismissal GitHub refuses (on a protected branch its API reference asks for a
    * repository administrator or a place on the rule's list of who may dismiss reviews) or that
@@ -135,10 +136,17 @@ final class ApprovalWithdrawals {
 
   /** A submitted approval by this bot that GitHub has not already dismissed. */
   boolean isStandingBotApproval(GitHubReviewClient.ReviewResponse review) {
+    return REVIEW_APPROVED.equals(review.state()) && isByBot(review);
+  }
+
+  /** A review by this bot that was dismissed, by the bot, by GitHub on a push or by a person. */
+  boolean isDismissedBotReview(GitHubReviewClient.ReviewResponse review) {
+    return REVIEW_DISMISSED.equals(review.state()) && isByBot(review);
+  }
+
+  private boolean isByBot(GitHubReviewClient.ReviewResponse review) {
     // A review from a since-deleted account serializes as user:null.
-    return REVIEW_APPROVED.equals(review.state())
-        && review.user() != null
-        && botIdentity.matches(review.user().login());
+    return review.user() != null && botIdentity.matches(review.user().login());
   }
 
   /** The walk: every standing approval, newest first, until GitHub refuses one. */

@@ -19,9 +19,11 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Supplier;
+import java.util.regex.Pattern;
 import org.eclipse.microprofile.rest.client.annotation.RegisterProvider;
 import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 
@@ -110,12 +112,102 @@ public interface GitHubReviewClient {
             listReviewsPageOnce(credential, accept, owner, repo, pullNumber, perPage, page));
   }
 
+  /** One HTTP attempt at the headers of a PR's review listing. */
+  @HEAD
+  @Path("/repos/{owner}/{repo}/pulls/{pullNumber}/reviews")
+  Response lastReviewPageOnce(
+      @HeaderParam("Authorization") String auth,
+      @HeaderParam("Accept") String accept,
+      @PathParam("owner") String owner,
+      @PathParam("repo") String repo,
+      @PathParam("pullNumber") int pullNumber,
+      @QueryParam("per_page") int perPage);
+
+  /** One link of a {@code Link} header: its address, then its parameters up to the next link. */
+  Pattern LINK = Pattern.compile("<([^<>]*)>([^<]*)");
+
+  /** The relations a link's parameters give it, quoted (possibly several) or bare. */
+  Pattern LINK_REL = Pattern.compile("(?i)(?:^|[;\\s])rel\\s?=\\s?(?:\"([^\"]*)\"|([^\\s;,\"]+))");
+
+  /** The {@code page} parameter of a link's address, wherever it stands in the query. */
+  Pattern PAGE_PARAMETER = Pattern.compile("[?&]page=(\\d{1,7})(?:[&#]|$)");
+
+  /** What {@link #lastReviewPage} answers when the header does not say which page is last. */
+  int LAST_PAGE_UNKNOWN = 0;
+
   /**
-   * Lists a PR's reviews, walking pages of {@value #REVIEWS_PER_PAGE} up to {@value
-   * #MAX_REVIEW_PAGES} pages so a long-lived PR's reviews are not silently truncated. A single-page
-   * fetch caps at GitHub's 30-per-page default, which would hide a prior bot review (skewing
-   * first-review detection and the backstop) and leave a pending bot review past page one
-   * undismissed. Stops at the first short/empty page.
+   * How many pages past the first {@value #MAX_REVIEW_PAGES} {@link #listReviews} walks forward
+   * when the last page is not known.
+   */
+  int MAX_UNGUIDED_REVIEW_PAGES = 50;
+
+  /**
+   * The page number of the link whose relations include {@code last} in a {@code Link} header, or
+   * {@link #LAST_PAGE_UNKNOWN} when the header is absent, has no such link or gives it no readable
+   * {@code page}. The links may come in any order, the relation list may hold more than one
+   * relation, and {@code page} may stand anywhere in the query.
+   */
+  static int lastPage(String linkHeader) {
+    var links = LINK.matcher(linkHeader != null ? linkHeader : "");
+    while (links.find()) {
+      var rel = LINK_REL.matcher(links.group(2));
+      if (rel.find() && namesLast(rel.group(1) != null ? rel.group(1) : rel.group(2))) {
+        var page = PAGE_PARAMETER.matcher(links.group(1));
+        return page.find() ? Integer.parseInt(page.group(1)) : LAST_PAGE_UNKNOWN;
+      }
+    }
+    return LAST_PAGE_UNKNOWN;
+  }
+
+  private static boolean namesLast(String relations) {
+    for (var relation : relations.trim().split("\\s+")) {
+      if ("last".equalsIgnoreCase(relation)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * The number of the last page of a PR's reviews at {@value #REVIEWS_PER_PAGE} a page, from the
+   * {@code Link} header GitHub answers the listing with ({@link #lastPage}); {@link
+   * #LAST_PAGE_UNKNOWN} when the header does not say. Only the page number is taken from the
+   * header, never an address.
+   */
+  default int lastReviewPage(
+      String auth, String accept, String owner, String repo, int pullNumber) {
+    return GitHubTokenRefresh.SHARED.retrying(
+        "last reviews page of " + owner + "/" + repo + "#" + pullNumber,
+        auth,
+        credential -> {
+          try (var response =
+              lastReviewPageOnce(credential, accept, owner, repo, pullNumber, REVIEWS_PER_PAGE)) {
+            if (response.getStatus() != 200) {
+              throw new WebApplicationException(response.getStatus());
+            }
+            return lastPage(response.getHeaderString("Link"));
+          }
+        });
+  }
+
+  /**
+   * Lists a PR's reviews, oldest first, walking pages of {@value #REVIEWS_PER_PAGE} so a long-lived
+   * PR's reviews are not silently truncated. A single-page fetch caps at GitHub's 30-per-page
+   * default, which would hide a prior bot review (skewing first-review detection and the backstop)
+   * and leave a pending bot review past page one undismissed. Stops at the first short/empty page.
+   *
+   * <p>At most {@value #MAX_REVIEW_PAGES} pages' worth is returned. GitHub lists oldest first and
+   * every inline reply adds a review, so anyone can push a PR past that many. When the first pages
+   * are all full, the number of the last page is read ({@link #lastReviewPage}) and the pages at
+   * the end are walked too, so what is returned is the newest reviews, not the oldest: the bot's
+   * latest verdict and a pending review of its own are among those. A result of exactly that size
+   * means older reviews may have been left out.
+   *
+   * <p>When the header does not say which page is last, the walk does not stop at the oldest
+   * reviews: it goes on page by page to the first short one, for at most {@value
+   * #MAX_UNGUIDED_REVIEW_PAGES} pages more, and the newest reviews it reached are returned. The
+   * result is then of the full size too, so a caller that reads the bot's own reviews apart at that
+   * size ({@code ReviewListing}) still does.
    */
   default List<ReviewResponse> listReviews(
       String auth, String accept, String owner, String repo, int pullNumber) {
@@ -129,7 +221,36 @@ public interface GitHubReviewClient {
       }
       page++;
     } while (batch != null && batch.size() == REVIEWS_PER_PAGE && page <= MAX_REVIEW_PAGES);
-    return all;
+    if (batch == null || batch.size() < REVIEWS_PER_PAGE) {
+      return all;
+    }
+    int last = lastReviewPage(auth, accept, owner, repo, pullNumber);
+    int kept = MAX_REVIEW_PAGES * REVIEWS_PER_PAGE;
+    if (last == LAST_PAGE_UNKNOWN) {
+      int end = MAX_REVIEW_PAGES + MAX_UNGUIDED_REVIEW_PAGES;
+      for (page = MAX_REVIEW_PAGES + 1;
+          batch != null && batch.size() == REVIEWS_PER_PAGE && page <= end;
+          page++) {
+        batch = listReviewsPage(auth, accept, owner, repo, pullNumber, REVIEWS_PER_PAGE, page);
+        if (batch != null) {
+          all.addAll(batch);
+        }
+      }
+      return new ArrayList<>(all.subList(all.size() - kept, all.size()));
+    }
+    // One page more than is kept, because the last page is rarely full.
+    int from = Math.max(MAX_REVIEW_PAGES + 1, last - MAX_REVIEW_PAGES);
+    if (from > MAX_REVIEW_PAGES + 1) {
+      // The pages read so far stop short of the ones at the end, and none of them is kept.
+      all.clear();
+    }
+    for (page = from; page <= last; page++) {
+      batch = listReviewsPage(auth, accept, owner, repo, pullNumber, REVIEWS_PER_PAGE, page);
+      if (batch != null) {
+        all.addAll(batch);
+      }
+    }
+    return new ArrayList<>(all.subList(Math.max(0, all.size() - kept), all.size()));
   }
 
   // GitHub serves 30 inline comments per page by default; request the 100 max and bound the walk.

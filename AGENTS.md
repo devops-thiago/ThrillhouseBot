@@ -371,7 +371,11 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   which is exactly when an approval of the old one would otherwise stay. It never runs on the
   webhook thread. The pull request's worker runs it after a review in flight (so an approval that
   review posts is seen) and before the review the push queued, takes no repository slot and makes
-  no model call. It lists the reviews once; nothing records the bot's last verdict per pull
+  no model call. It does not wait for a slot either: when the worker is waiting for one with an
+  earlier review (`AutoReviewSlots.acquire` has no time limit), `dispatchApprovalWithdrawal`
+  wakes it (`recheckWaiters`, outside the state's monitor), `ReviewDispatcher.acquireSlot` runs
+  the withdrawal and asks for a slot again, and the withdrawal stays pending so it runs once
+  more after that review, which is of a head from before the push and may still approve it. It lists the reviews once; nothing records the bot's last verdict per pull
   request reliably (`reviewsession` has no verdict, the limiter and the CI hold are in memory), so
   do not skip the listing on such a signal. While a standing bot approval is for the head, nothing
   is dismissed (a force-push back to the approved commit keeps it). Otherwise the head is read
@@ -384,7 +388,14 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   before it runs loses it. When at least one approval was dismissed, `ApprovalOnPush` calls
   `AutoReviewRateLimiter.forgetCoveredHead`: the window stays, but the head its review covered is
   forgotten, so a force-push back to that commit inside the window is deferred to the window's
-  end (`AutoReviewRateLimiter.hold`) and reviewed, not skipped as covered with no approval left. The
+  end (`AutoReviewRateLimiter.hold`) and reviewed, not skipped as covered with no approval left. It
+  does the same when the listing shows the covered head's approval already `DISMISSED` with none
+  standing for it (`forgetCoveredHeadDismissedElsewhere`, through the overload that takes a test
+  of the covered head): with GitHub's "Dismiss stale pull request approvals" on, GitHub dismisses
+  the approval at the push and the bot finds nothing to dismiss. A covered head whose approval
+  still stands (a dismissal that failed) or that has no dismissed review of the bot's stays
+  covered. A covered head with both an old dismissed approval and a later comment-only review
+  is forgotten too, since one more review is the cheaper mistake. The
   ready-for-review lift memory is separate; leave it alone there.
 - **A round that does not approve withdraws the bot's standing approvals.** GitHub keeps counting
   an `APPROVED` review after its author posts a `COMMENT` one, so `ReviewPublisher.publishReview`
@@ -399,9 +410,22 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   429 or rate-limit 403 that `GitHubWriteRetry` gave up on. So one such failure does not leave the
   older ones counting; do not widen the stop back to every 4xx. The listing is
   `ReviewContextLoader.fetchPriorReviews`: a listing that fails is logged at warn (the round then
-  dismisses nothing, because the earlier approvals could not be checked) and so is one that fills
-  the 1,000-review walk, where the unread reviews are the newest. A pull request with no reviews
-  lists as empty without failing, so keep the failure at warn. Do not narrow the walk to the
+  dismisses nothing, because the earlier approvals could not be checked). A pull request with no
+  reviews lists as empty without failing, so keep the failure at warn. Both this listing and the
+  push's go through `ReviewListing`. `GitHubReviewClient.listReviews` returns at most 1,000
+  reviews, and past that the newest ones (it reads the last page number from the `Link` header
+  and walks the pages at the end; `lastPage` finds the link whose `rel` holds `last` and reads
+  `page` wherever it stands, and when the header does not say, the walk goes forward page by page,
+  bounded, and never settles for the oldest): every inline reply adds a review, so anyone can fill a window
+  from either end, and no window over everybody's reviews is enough. For a listing at the limit
+  `ReviewListing` therefore asks GraphQL for the bot's own `APPROVED` reviews, and its `DISMISSED`
+  ones under an alias of their own so they cannot crowd an approval out
+  (`reviews(author:, states:)`, filtered by GitHub, one call per `BotIdentity` login) and puts the
+  ones the listing lacks in front, so the list stays oldest first; when that call fails it warns
+  and returns the listing alone. The dismissed ones are there for
+  `ApprovalOnPush.forgetCoveredHeadDismissedElsewhere`; every other reader takes only `APPROVED`
+  or `PENDING` reviews, or the bot's latest. Do not read the reviews for a dismissal past `ReviewListing`,
+  and do not replace the author filter with a longer page walk. Do not narrow the walk to the
   bot's latest review, and never dismiss a review the bot did not write. An approval the push
   already dismissed lists as `DISMISSED` and is skipped.
 - **No "no issues" wording while anything is open** (#933). Every surface reads
