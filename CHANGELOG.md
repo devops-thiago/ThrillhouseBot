@@ -50,6 +50,11 @@ cannot resolve its review threads.
   with each title struck through, its file and line, whether it was resolved or superseded, the
   reviewed commit and, when it is one of the bot's fixed sentences, the reason. On by default;
   `REVIEW_SUMMARY_CLOSED_LIST_ENABLED=false` leaves it out. No extra model call.
+- **The open-findings line names the reviewed commit** (#1548): the hidden
+  `<!-- thrillhousebot:findings v=1 ... -->` line in the summary comment now carries
+  `head=<sha>`, so an agent or script can tell whether the list covers the latest push. The
+  entries and `v=1` are unchanged; a consumer that expects `[` right after `v=1` has to allow
+  the new header attribute.
 
 ### Changed
 

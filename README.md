@@ -859,7 +859,9 @@ earlier ones are open then lists the open ones under those counts. The review ke
 a definite review refusal preserves the same outcome as a regular comment.
 
 The comment also carries one hidden, machine-readable line listing the open
-findings: `<!-- thrillhousebot:findings v=1 [...] -->`. Each entry gives the
+findings: `<!-- thrillhousebot:findings v=1 head=<sha> [...] -->`. `head` is the
+commit that review covered: when it differs from the pull request's head, the
+list is behind the latest push. Each entry gives the
 finding's `key` (the one in its thread marker), `file`, `line`, `risk`,
 `confidence`, `status` (`open`), `thread`, `hasSuggestion` and `carried` (open
 since an earlier review), most severe first. `thread` is `true` when the review

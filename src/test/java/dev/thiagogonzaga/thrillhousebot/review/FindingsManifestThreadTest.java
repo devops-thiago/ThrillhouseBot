@@ -271,6 +271,28 @@ class FindingsManifestThreadTest {
     return edit.getValue().body();
   }
 
+  @Test
+  void aCorrectedManifestStillNamesTheReviewedCommit() {
+    var resolver = new DiffLineResolver(Map.of("src/A.java", LONG_PATCH));
+    var result = threeOnTheChangedFile();
+    publisher.publishSummary(
+        new ReviewPublisher.SummaryRequest(
+            "auth", "o", "r", 1, result, false, null, resolver, "abc123"));
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .createComment(anyString(), anyString(), eq("o"), eq("r"), eq(1), body.capture());
+    summaryOnThePullRequest(body.getValue().body());
+    refuseTheFindingOn(2);
+
+    publisher.postReview(
+        new ReviewPublisher.PostReviewRequest(
+            "auth", "o", "r", 1, "abc123", result, resolver, true, List.of()));
+
+    var edited = editedSummary();
+    assertNotEquals(body.getValue().body(), edited);
+    assertTrue(edited.contains("<!-- thrillhousebot:findings v=1 head=abc123 ["), edited);
+  }
+
   // #1465 review: a refused post frees a cap slot, so the threads opened differ from the ones the
   // summary announced; the manifest is corrected once the review has posted.
   @Test
