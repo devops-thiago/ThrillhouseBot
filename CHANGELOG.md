@@ -190,8 +190,9 @@ cannot resolve its review threads.
 - **A push inside the automatic review window is reviewed when the window closes**: a push that
   arrived inside `AUTO_REVIEW_MIN_INTERVAL` was skipped and never reviewed, so an approval of the
   previous commit could stay on code the bot had not read. The bot now keeps the latest pushed head
-  and reviews it when the window closes. Only a reopen or a repeated ready-for-review of the commit
-  just reviewed is skipped. The waiting review is held in memory, so a restart loses it.
+  and reviews it when the window closes. A reopen or a repeated ready-for-review of the commit
+  just reviewed is still skipped. The waiting review is held in memory: a restart loses it, and a
+  push is still skipped when 10,000 pull requests already have a review waiting.
 - **A failed read of a pull request's reviews is logged as a warning**: it was a debug line that
   read as a normal first review. Reaching the limit of 1,000 reviews read per pull request is logged
   too.
@@ -200,9 +201,6 @@ cannot resolve its review threads.
   to check them against and approved if it found nothing new. It now ends as `COMMENT`, and the
   summary, the review body and the check run say that the earlier reviews could not be read. A
   first review, and a pull request with at least one readable earlier review, are unchanged.
-  and reviews it when the window closes. A reopen or a repeated ready-for-review of the commit
-  just reviewed is still skipped. The waiting review is held in memory: a restart loses it, and a
-  push is still skipped when 10,000 pull requests already have a review waiting.
 
 ### Security
 
