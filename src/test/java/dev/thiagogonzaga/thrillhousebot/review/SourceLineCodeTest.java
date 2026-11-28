@@ -146,6 +146,16 @@ class SourceLineCodeTest {
   }
 
   @Test
+  void aQuoteThatReopensAfterAFullStopOnTheClosingLineCannotOpen() {
+    // Read as starting outside, the second line closes the literal and opens another right after
+    // a full stop. So the lines start inside one, and the read on the last line is code.
+    assertEquals(
+        List.of(" ", "  ", "return getenv(  )"),
+        SourceLineCode.ofLines(
+            List.of("    \"\"\"", "    \"\"\" + name.\"\"\"", "    return getenv(\"X\")")));
+  }
+
+  @Test
   void bareQuotesThatStartInOneLiteralAndEndInAnotherAreBalancedAndMisread() {
     // A known limit: nothing tells these two quotes from an opener and its closer.
     assertEquals(
