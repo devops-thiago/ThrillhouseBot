@@ -200,6 +200,9 @@ cannot resolve its review threads.
   to check them against and approved if it found nothing new. It now ends as `COMMENT`, and the
   summary, the review body and the check run say that the earlier reviews could not be read. A
   first review, and a pull request with at least one readable earlier review, are unchanged.
+  and reviews it when the window closes. A reopen or a repeated ready-for-review of the commit
+  just reviewed is still skipped. The waiting review is held in memory: a restart loses it, and a
+  push is still skipped when 10,000 pull requests already have a review waiting.
 
 ### Security
 
