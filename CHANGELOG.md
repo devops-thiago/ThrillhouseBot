@@ -153,6 +153,10 @@ cannot resolve its review threads.
   were no open finding threads when GitHub failed to return the pull request's review threads, and
   reported nothing when every resolve attempt failed. It now says the threads could not be read, or
   how many it tried and GitHub left open.
+- **`scripts/GenEnv.java` refuses arguments it cannot read**: an unknown option, a stray argument or
+  an option given without a value was dropped without a word, so `--host` given last wrote the
+  `<your-host>` placeholder. The script now stops with a message and writes no `.env`. `--host=...`
+  is accepted too.
 
 ### Security
 
