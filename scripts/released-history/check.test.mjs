@@ -111,6 +111,173 @@ test('a repeated section keeps the text of every copy', () => {
     ['CHANGELOG.md: the released section [Unreleased] was changed']);
 });
 
+const RELEASED = new Set(['1.0.0', '1.1.0']);
+/** The changelog with {@code lines} added at the end of its unreleased section. */
+const unreleasedWith = (...lines) => CHANGELOG.replace('## [Unreleased]\n', `## [Unreleased]\n\n- Fixed c.\n\n${lines.join('\n')}\n`);
+
+test('a second released section is found in every form Markdown reads as a level-two heading', () => {
+  const repeated = ['CHANGELOG.md: the released section [1.0.0] appears more than once'];
+  const headings = [
+    [' ## [1.0.0] - 2026-01-01'],
+    ['   ## [1.0.0] - 2026-01-01'],
+    ['##  [1.0.0] - 2026-01-01'],
+    ['##\t[1.0.0] - 2026-01-01'],
+    ['## [1.0.0] - 2026-01-01 ##'],
+    // Inside a block quote or a list item, as the policy test reads a `###` heading.
+    ['> ## [1.0.0] - 2026-01-01'],
+    ['- ## [1.0.0] - 2026-01-01'],
+    // A paragraph underlined with dashes.
+    ['[1.0.0] - 2026-01-01', '---'],
+    ['  [1.0.0] - 2026-01-01', '  -'],
+    ['[1.0.0]', 'of 2026-01-01', '----  '],
+    // An indented code block ends at the paragraph that follows it.
+    ['    code', '[1.0.0] - 2026-01-01', '---'],
+    // Up to four columns after a list marker belong to the marker, and a tab is at most four.
+    ['-    ## [1.0.0] - 2026-01-01'],
+    ['-\t## [1.0.0] - 2026-01-01'],
+    ['1.\t## [1.0.0] - 2026-01-01'],
+    ['> -  ## [1.0.0] - 2026-01-01'],
+    // A quote marker takes one column, so a tab after it leaves at most three before the heading.
+    ['>\t## [1.0.0] - 2026-01-01'],
+    ['> \t## [1.0.0] - 2026-01-01'],
+    ['>  \t## [1.0.0] - 2026-01-01'],
+    ['>> \t## [1.0.0] - 2026-01-01'],
+    ['> \t- ## [1.0.0] - 2026-01-01'],
+    // A list item that holds only a code block has no paragraph for the next line to continue.
+    ['-     code', '[1.0.0] - 2026-01-01', '---'],
+    // A line of equals signs makes the paragraph above it a title and ends it.
+    ['Title', '===', '[1.0.0] - 2026-01-01', '---'],
+  ];
+  for (const heading of headings) {
+    assert.deepEqual(changelogViolations(CHANGELOG, unreleasedWith(...heading, '', '- Rewritten.'), RELEASED), repeated, heading.join('\\n'));
+  }
+  // A line ending may be a carriage return alone.
+  assert.deepEqual(changelogViolations(CHANGELOG, unreleasedWith('text\r## [1.0.0] - 2026-01-01\r\r- Rewritten.'), RELEASED), repeated);
+});
+
+test('a released section written in another heading form is still held to its text', () => {
+  for (const heading of ['  ## [1.0.0] - 2026-01-01', '##\t[1.0.0] - 2026-01-01', '[1.0.0] - 2026-01-01\n---']) {
+    const base = CHANGELOG.replace('## [1.0.0] - 2026-01-01', heading);
+    assert.deepEqual([...changelogSections(base).keys()], ['Unreleased', '1.1.0', '1.0.0'], heading);
+    assert.ok(changelogSections(base).get('1.0.0').startsWith(heading), heading);
+    assert.ok(!changelogSections(base).get('1.1.0').includes('[1.0.0]'), heading);
+    assert.deepEqual(changelogViolations(base, base.replace('- Added a.', '- Edited.'), RELEASED),
+      ['CHANGELOG.md: the released section [1.0.0] was changed'], heading);
+    assert.deepEqual(changelogViolations(base, base.replace('## [Unreleased]\n', '## [Unreleased]\n\n- Fixed c.\n'), RELEASED), [], heading);
+  }
+});
+
+test('a line Markdown does not read as a level-two heading is no section', () => {
+  const texts = [
+    // Four spaces or a tab make an indented code block.
+    ['    ## [1.0.0] - 2026-01-01'],
+    ['\t## [1.0.0] - 2026-01-01'],
+    ['    [1.0.0] - 2026-01-01', '    ---'],
+    // Five or more columns after a list marker make the rest an indented code block in the item.
+    ['-     ## [1.0.0] - 2026-01-01'],
+    ['1.     ## [1.0.0] - 2026-01-01'],
+    ['- \t\t## [1.0.0] - 2026-01-01'],
+    ['> -     ## [1.0.0] - 2026-01-01'],
+    // Two tabs after a quote marker, or five spaces, leave four columns or more: a code block.
+    ['>\t\t## [1.0.0] - 2026-01-01'],
+    ['> \t\t## [1.0.0] - 2026-01-01'],
+    ['>   \t## [1.0.0] - 2026-01-01'],
+    ['> > \t## [1.0.0] - 2026-01-01'],
+    ['>      ## [1.0.0] - 2026-01-01'],
+    ['- -      ## [1.0.0] - 2026-01-01'],
+    ['##[1.0.0] - 2026-01-01'],
+    ['# [1.0.0] - 2026-01-01'],
+    ['### [1.0.0] - 2026-01-01'],
+    ['See ## [1.0.0] for the first release.'],
+    // A level-one heading, a link definition above a rule, and a rule after a blank line.
+    ['[1.0.0] - 2026-01-01', '==='],
+    ['[1.0.0] - 2026-01-01', '===', '---'],
+    ['[1.0.0]: https://example.com/1.0.0', '---'],
+    ['[1.0.0] - 2026-01-01', '', '---'],
+    // The heading is the whole paragraph, which starts with other text.
+    ['As of', '[1.0.0] - 2026-01-01', '---'],
+    // A list item takes the line as its own text, and the dashes are then a rule.
+    ['- item', '[1.0.0] - 2026-01-01', '---'],
+    // Another block ends the paragraph before the dashes.
+    ['[1.0.0] - 2026-01-01', '- item', '---'],
+    ['[1.0.0] - 2026-01-01', '> quote', '---'],
+    ['[1.0.0] - 2026-01-01', '### Fixed', '---'],
+    ['[1.0.0] - 2026-01-01', '***', '---'],
+    ['[1.0.0] - 2026-01-01', '```', '---', '```'],
+    ['  #1318): wrapped text of an entry that names [1.0.0]'],
+  ];
+  for (const text of texts) {
+    const head = unreleasedWith(...text, '', '- More.');
+    assert.deepEqual([...changelogSections(head).keys()], ['Unreleased', '1.1.0', '1.0.0'], text.join('\\n'));
+    assert.deepEqual(changelogViolations(CHANGELOG, head, RELEASED), [], text.join('\\n'));
+  }
+  // A paragraph that runs to the end of the file has no line under it.
+  assert.deepEqual([...changelogSections('## [Unreleased]\n\n[1.0.0] - 2026-01-01\nand more').keys()], ['Unreleased']);
+});
+
+test('a fenced example in the unreleased section adds no section', () => {
+  const examples = [
+    ['```md', '## [1.0.0] - 2026-01-01', '```'],
+    ['  ```', '  ## [1.0.0] - 2026-01-01', '   [1.0.0] - 2026-01-01', '   ---', '  ```  '],
+    ['````', '```', '## [1.0.0] - 2026-01-01', '````\t'],
+    // A tilde fence may have a backtick in its info string.
+    ['~~~ a`b', '## [1.0.0] - 2026-01-01', '~~~~'],
+    // A fence in a list item or a block quote, closed inside it.
+    ['- ~~~md', '  ## [1.0.0] - 2026-01-01', '', '  - ~~~', '  ~~~'],
+    ['1. ~~~', '\t## [1.0.0] - 2026-01-01', '   ~~~'],
+    ['> ~~~', '> ## [1.0.0] - 2026-01-01', '> ~~~'],
+    // An empty quoted line is inside the quote, and a blank line is inside a list item.
+    ['> ~~~', '>', '> ## [1.0.0] - 2026-01-01', '> ~~~'],
+    ['- ~~~', '', '  ## [1.0.0] - 2026-01-01', '  ~~~'],
+    // A marked line inside a fence that is in no list item is text of the block.
+    ['~~~', '- ~~~', '## [1.0.0] - 2026-01-01', '~~~'],
+  ];
+  for (const example of examples) {
+    const head = unreleasedWith(...example, '', '- More.');
+    assert.deepEqual([...changelogSections(head).keys()], ['Unreleased', '1.1.0', '1.0.0'], example.join('\\n'));
+    assert.deepEqual(changelogViolations(CHANGELOG, head, RELEASED), [], example.join('\\n'));
+  }
+});
+
+test('a line that only looks like a code fence hides no section', () => {
+  const repeated = ['CHANGELOG.md: the released section [1.0.0] appears more than once'];
+  const second = ['## [1.0.0] - 2026-01-01', '', '- Rewritten.', ''];
+  // A backtick fence has no backtick in its info string, so the first line is a paragraph. The
+  // fence after the heading is real, and holds the second look-alike as its text.
+  assert.deepEqual(changelogViolations(CHANGELOG, unreleasedWith('``` a`b', '', ...second, '```', '``` a`b', '```'), RELEASED), repeated);
+  assert.deepEqual(changelogViolations(CHANGELOG, unreleasedWith('```` `', '', ...second, '````', '```` `', '````'), RELEASED), repeated);
+  // Only spaces and tabs may follow a closing fence, so the second line here is text of the block
+  // and the third closes it.
+  assert.deepEqual(changelogViolations(CHANGELOG, unreleasedWith('```', '```\u00a0', '```', '', ...second), RELEASED), repeated);
+  assert.deepEqual([...changelogSections('## [Unreleased]\n\n```\n```\u00a0\n## [1.0.0]\n```\n').keys()], ['Unreleased']);
+  assert.deepEqual([...changelogSections('## [Unreleased]\n\n```\n``` md\n## [1.0.0]\n```\n').keys()], ['Unreleased']);
+  // A fence that opens a list item or a block quote ends where the item or the quote does, with
+  // or without a closing line, so the heading after it is a heading.
+  const outside = [
+    ['- ~~~', ...second, '~~~', '~~~', '- ~~~'],
+    ['- ~~~', '- ## [1.0.0] - 2026-01-01', '', '  - Rewritten.'],
+    ['  - ~~~', ' ## [1.0.0] - 2026-01-01', '', '- Rewritten.'],
+    ['> ~~~', ...second],
+    ['> ~~~', '- ## [1.0.0] - 2026-01-01', '', '- Rewritten.'],
+    // A blank line ends a block quote and the fence in it, so the quote after it is a new one,
+    // even when that one ends with a line that would have closed the fence.
+    ['> ~~~', '', '> ## [1.0.0] - 2026-01-01', '>', '> - Rewritten.', '> ~~~', '> ~~~'],
+    ['> ~~~', '  ', '> ## [1.0.0] - 2026-01-01', '', '- Rewritten.'],
+    // A tab after the quote marker: the line is not read as a fence.
+    ['> \t~~~', '> ## [1.0.0] - 2026-01-01', '', '- Rewritten.', '> ~~~'],
+    // A marked line does not close a fence that is in no list item.
+    ['~~~', '- ~~~', '~~~', '', ...second, '- ~~~'],
+    // Behind both kinds of marker, or five spaces after one, the line is not read as a fence.
+    ['> - ~~~', '> - ## [1.0.0] - 2026-01-01', '', '- Rewritten.'],
+    ['-      ~~~', ...second],
+  ];
+  for (const lines of outside) {
+    assert.deepEqual(changelogViolations(CHANGELOG, unreleasedWith(...lines), RELEASED), repeated, lines.join('\\n'));
+  }
+  // A closing fence is of the opening character and at least as long.
+  assert.deepEqual([...changelogSections('## [Unreleased]\n\n````\n```\n~~~~\n## [1.0.0]\n`````\n').keys()], ['Unreleased']);
+});
+
 test('archive paths map to their version', () => {
   assert.equal(archivedVersion('website/src/content/docs/0.9.2/architecture.md'), '0.9.2');
   assert.equal(archivedVersion('website/src/assets/0.9.2/pr-approval.png'), '0.9.2');
