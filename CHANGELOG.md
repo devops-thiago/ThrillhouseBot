@@ -158,9 +158,6 @@ cannot resolve its review threads.
   an option given without a value was dropped without a word, so `--host` given last wrote the
   `<your-host>` placeholder. The script now stops with a message and writes no `.env`. `--host=...`
   is accepted too.
-  and reviews it when the window closes. A reopen or a repeated ready-for-review of the commit
-  just reviewed is still skipped. The waiting review is held in memory: a restart loses it, and a
-  push is still skipped when 10,000 pull requests already have a review waiting.
 
 ### Security
 
