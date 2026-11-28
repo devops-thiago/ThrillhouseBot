@@ -263,6 +263,12 @@ Prices used for cost tracking, keyed by model name (the `AI_MODEL` value) like t
 | `REVIEW_STATIC_ANALYSIS_ENABLED`<br>`thrillhousebot.review.static-analysis.enabled` | Include the annotations that completed checks attached to the changed files. See [Static-analysis context](https://github.com/devops-thiago/ThrillhouseBot#static-analysis-context). | boolean | `false` |
 | `REVIEW_STATIC_ANALYSIS_MAX_CHARS`<br>`thrillhousebot.review.static-analysis.max-chars` | Character cap on the static-analysis section (500–20000). | integer | `3000` |
 
+## `thrillhousebot.review.summary-collapse`
+
+| Variable | Description | Type | Default |
+|---|---|---|---|
+| `REVIEW_SUMMARY_COLLAPSE_ENABLED`<br>`thrillhousebot.review.summary-collapse.enabled` | Fold the change totals, the changed-files table and the previous-findings counts, and the risk table when there is no critical or high finding. | boolean | `true` |
+
 ## `thrillhousebot.review.ticket-context`
 
 | Variable | Description | Type | Default |
