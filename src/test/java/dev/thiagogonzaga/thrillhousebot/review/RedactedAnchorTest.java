@@ -18,12 +18,22 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 /**
  * #932: a finding whose anchor the security scan redacted is still located — its redacted form is
@@ -154,5 +164,292 @@ class RedactedAnchorTest {
     assertFalse(
         new DiffLineResolver(Map.of(fixed.filename(), fixed.patch()))
             .isFindingPresent("src/client.c", anchor));
+  }
+
+  private static final String KEY = SecurityScan.PEM_MATERIAL_REDACTION;
+
+  @Test
+  void keyMaterialMarkersSideBySideStandForOneRunOfBothLengths() {
+    var matcher = RedactedAnchor.lineMatcher("k: " + KEY + KEY + ";");
+
+    assertTrue(matcher.test("k: " + "A".repeat(80) + ";"));
+    assertTrue(matcher.test("k: " + "A".repeat(200) + ";"));
+    assertFalse(matcher.test("k: " + "A".repeat(79) + ";"), "each marker is 40 characters or more");
+  }
+
+  @Test
+  void keyMaterialIsLettersDigitsAndTheThreeBase64SignsOnly() {
+    var matcher = RedactedAnchor.lineMatcher("k: " + KEY + ";");
+    var run = "AZaz09+/=".repeat(5);
+
+    assertTrue(matcher.test("k: " + run + ";"));
+    // One character from each side of every range, and the signs next to the three that count.
+    for (var other : "@[`{/:.,-*<>_~ \u00E9".replace("/", "").toCharArray()) {
+      var broken = run.substring(0, 20) + other + run.substring(21);
+      assertFalse(matcher.test("k: " + broken + ";"), "key material holding " + other);
+    }
+  }
+
+  @Test
+  void textEndingOnHalfAPairIsNotTheFirstHalfOfAPairInTheLine() {
+    var matcher = RedactedAnchor.lineMatcher("\uD83D[redacted: \u2026, 1 chars]");
+
+    assertTrue(matcher.test("\uD83Dx"), "half a pair, then one character");
+    assertTrue(matcher.test("\uD83D\uD83D"), "half a pair twice is two characters");
+    assertFalse(matcher.test("\uD83D\uDE00"), "a whole pair is one character, not text and one");
+    assertFalse(matcher.test("\uD83D"), "the text alone leaves the value nothing");
+  }
+
+  @Test
+  void keyMaterialMayBeFollowedByTextOrAValueOfItsOwnCharacters() {
+    var beforeText = RedactedAnchor.lineMatcher(KEY + "AB" + KEY + "AB");
+    assertTrue(beforeText.test("A".repeat(40) + "AB" + "A".repeat(40) + "AB"));
+    assertTrue(beforeText.test("A".repeat(60) + "B" + "A".repeat(50) + "AB"));
+    assertFalse(beforeText.test("A".repeat(41) + "B" + "A".repeat(39) + "AB"));
+
+    var beforeValue = RedactedAnchor.lineMatcher(KEY + "[redacted: AB…, 5 chars]-" + KEY);
+    assertTrue(beforeValue.test("A".repeat(40) + "ABxyz-" + "A".repeat(40)));
+    assertTrue(beforeValue.test("A".repeat(50) + "ABA-z-" + "A".repeat(40)));
+    assertFalse(beforeValue.test("A".repeat(40) + "ABxy-" + "A".repeat(40)));
+  }
+
+  @Test
+  void aValueIsCountedInCodePointsAndHoldsNoAsciiWhitespaceOrQuote() {
+    var matcher = RedactedAnchor.lineMatcher("[redacted: …, 3 chars]");
+
+    assertTrue(matcher.test("a😀b"), "a pair is one character");
+    assertTrue(matcher.test("a b"), "a no-break space is not the scrub's whitespace");
+    assertFalse(matcher.test("a\tb"));
+    assertFalse(matcher.test("a`b"));
+    assertFalse(matcher.test("ab"));
+    assertFalse(RedactedAnchor.lineMatcher("x[redacted: …, 999999999 chars]").test("xabc"));
+  }
+
+  /**
+   * Lines of one base64 character against anchors of many key material markers. The pattern these
+   * were once compiled to tried every way the markers could share the run.
+   */
+  @ParameterizedTest
+  @MethodSource("anchorsOfManyMarkers")
+  void aLongLineIsReadOncePerMarker(String unit, String closing) {
+    var matcher = RedactedAnchor.lineMatcher(unit.repeat(12) + closing);
+    var run = "A".repeat(20_000);
+
+    assertFalse(assertTimeoutPreemptively(Duration.ofSeconds(10), () -> matcher.test(run + "?")));
+    assertEquals(
+        closing.isEmpty() || closing.equals("A"),
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> matcher.test(run)));
+  }
+
+  /**
+   * Long stretches of text between markers, against a line that is one run of the text's own
+   * character: after a marker the text can start almost anywhere in the line, and it was once
+   * compared whole at each of those places.
+   */
+  @Test
+  void aLongTextBetweenMarkersIsLookedForInOnePassOfTheLine() {
+    var text = "A".repeat(100_000);
+    var matcher = RedactedAnchor.lineMatcher((KEY + text).repeat(6));
+    var run = "A".repeat(1_000_000);
+
+    assertTrue(assertTimeoutPreemptively(Duration.ofSeconds(10), () -> matcher.test(run)));
+    assertFalse(assertTimeoutPreemptively(Duration.ofSeconds(10), () -> matcher.test(run + "?")));
+    assertFalse(
+        assertTimeoutPreemptively(
+            Duration.ofSeconds(10), () -> matcher.test("A".repeat(6 * 100_040 - 1))));
+    // Text that overlaps itself is found at every place it starts, not only after the last find.
+    var overlapping = RedactedAnchor.lineMatcher(KEY + "ABAB" + KEY);
+    assertTrue(overlapping.test("A".repeat(40) + "BABAB" + "A".repeat(40)));
+    assertTrue(overlapping.test("A".repeat(38) + "ABABAB" + "A".repeat(40)));
+    assertFalse(overlapping.test("A".repeat(40) + "BABA" + "A".repeat(40)));
+  }
+
+  @Test
+  void anAnchorOfMorePiecesThanAnyScrubWritesMatchesOnlyItself() {
+    var unit = "x[redacted: \u2026, 1 chars]";
+    var most = RedactedAnchor.MAX_PIECES / 2;
+
+    assertTrue(RedactedAnchor.lineMatcher(unit.repeat(most)).test("xa".repeat(most)));
+    var over = unit.repeat(most + 1);
+    assertFalse(RedactedAnchor.lineMatcher(over).test("xa".repeat(most + 1)));
+    assertTrue(RedactedAnchor.lineMatcher(over).test(over));
+  }
+
+  private static Stream<Arguments> anchorsOfManyMarkers() {
+    return Stream.of(
+        Arguments.of(KEY, ""),
+        Arguments.of(KEY, "!"),
+        Arguments.of(KEY + "A", ""),
+        Arguments.of(KEY + "[redacted: A…, 3 chars]", "A"),
+        Arguments.of(KEY + "[redacted: …, 0 chars]", "!"));
+  }
+
+  /** The pattern an anchor line was compiled to before it was matched piece by piece. */
+  private static Pattern formerPattern(String anchorLine) {
+    var marker =
+        Pattern.compile(
+                "\\[redacted: (.{0,"
+                    + SecretScanner.REDACTED_PREFIX
+                    + "}?)…, (\\d{1,9}) chars]|"
+                    + Pattern.quote(KEY))
+            .matcher(anchorLine);
+    var regex = new StringBuilder();
+    int last = 0;
+    while (marker.find()) {
+      String shape = "[A-Za-z0-9+/=]{40,}";
+      if (marker.group(2) != null) {
+        int rest = Integer.parseInt(marker.group(2)) - marker.group(1).length();
+        shape = rest < 0 ? null : Pattern.quote(marker.group(1)) + "[^\\s\"'`]{" + rest + "}";
+      }
+      if (shape != null) {
+        regex.append(Pattern.quote(anchorLine.substring(last, marker.start()))).append(shape);
+        last = marker.end();
+      }
+    }
+    return Pattern.compile(regex.append(Pattern.quote(anchorLine.substring(last))).toString());
+  }
+
+  private static final String[] ANCHOR_PIECES = {
+    KEY,
+    KEY,
+    "[redacted: …, 2 chars]",
+    "[redacted: A…, 3 chars]",
+    "[redacted: -😀…, 4 chars]",
+    "[redacted: AB…, 1 chars]",
+    "[redacted: …, 0 chars]",
+    "[redacted: \uDE00…, 2 chars]",
+    "A",
+    "AA",
+    "-",
+    "\"",
+    " ",
+    " ",
+    "😀",
+    "\uD83D",
+    "\uDE00"
+  };
+
+  private static final String[] LINE_PIECES = {
+    "A", "A", "AA", "-", "\"", " ", " ", "😀", "\uD83D", "\uDE00", "B", "\t"
+  };
+
+  /** A line the anchor could have been scrubbed from, or one close to it. */
+  private static String lineFor(String anchor, Random random) {
+    var line = new StringBuilder();
+    var marker = Pattern.compile("\\[redacted: (.*?)…, (\\d) chars]|" + Pattern.quote(KEY));
+    var found = marker.matcher(anchor);
+    int last = 0;
+    while (found.find()) {
+      line.append(anchor, last, found.start());
+      if (found.group(2) == null) {
+        line.append("A".repeat(38 + random.nextInt(6)));
+      } else {
+        line.append(found.group(1));
+        int rest = Integer.parseInt(found.group(2)) - found.group(1).length();
+        for (int i = 0; i < rest + random.nextInt(3) - 1; i++) {
+          line.append(LINE_PIECES[random.nextInt(LINE_PIECES.length)]);
+        }
+      }
+      last = found.end();
+    }
+    line.append(anchor, last, anchor.length());
+    if (random.nextInt(4) == 0 && !line.isEmpty()) {
+      line.setCharAt(random.nextInt(line.length()), 'A');
+    }
+    return line.toString();
+  }
+
+  /**
+   * Every anchor of up to three pieces that are half a pair, a whole pair, a letter or a value
+   * marker, against every line of up to four halves, letters and blanks: each reads as the former
+   * pattern read it. That pattern compared code points, so half a pair in the anchor was never the
+   * first half of a whole pair in the line, and a value's count was a count of code points.
+   */
+  @Test
+  void halfPairsAndPairsAreReadAsTheFormerPatternReadThem() {
+    var high = "\uD83D";
+    var whole = "\uD83D\uDE00";
+    var anchorWithHalfBeforeAValue = high + "[redacted: \u2026, 1 chars]";
+    assertFalse(formerPattern(anchorWithHalfBeforeAValue).matcher(whole).matches());
+    assertTrue(formerPattern(anchorWithHalfBeforeAValue).matcher(high + whole).matches());
+    assertTrue(formerPattern("[redacted: \u2026, 2 chars]").matcher("a" + whole).matches());
+    assertFalse(formerPattern("[redacted: \u2026, 3 chars]").matcher("a" + whole).matches());
+
+    String[] pieces = {
+      high,
+      "\uDE00",
+      whole,
+      "x",
+      "[redacted: \u2026, 1 chars]",
+      "[redacted: \u2026, 2 chars]",
+      "[redacted: " + high + "\u2026, 2 chars]",
+      "[redacted: x" + high + "\u2026, 3 chars]"
+    };
+    char[] alphabet = {'\uD83D', '\uDE00', 'x', ' '};
+    var lines = new ArrayList<String>();
+    for (int length = 0; length <= 4; length++) {
+      for (int code = 0; code < 1 << (2 * length); code++) {
+        var chars = new char[length];
+        for (int at = 0; at < length; at++) {
+          chars[at] = alphabet[(code >> (2 * at)) & 3];
+        }
+        lines.add(new String(chars));
+      }
+    }
+    int matched = 0;
+    for (int code = 0; code < pieces.length * pieces.length * pieces.length; code++) {
+      // Anchors of one, two and three pieces; a code past the count's range is another count's.
+      for (int count = 1; count <= 3; count++) {
+        var anchor = new StringBuilder();
+        int rest = code;
+        for (int piece = 0; piece < count; piece++) {
+          anchor.append(pieces[rest % pieces.length]);
+          rest /= pieces.length;
+        }
+        if (rest != 0) {
+          continue;
+        }
+        var former = formerPattern(anchor.toString());
+        var matcher = RedactedAnchor.lineMatcher(anchor.toString());
+        for (var line : lines) {
+          boolean expected = former.matcher(line).matches();
+          matched += expected ? 1 : 0;
+          assertEquals(
+              expected,
+              matcher.test(line),
+              () -> "anchor <" + escaped(anchor) + "> line <" + escaped(line) + ">");
+        }
+      }
+    }
+    assertTrue(matched > 500, "the lines include many that match: " + matched);
+  }
+
+  /** {@code text} with what a report could not show (half a pair, a tab) written as its code. */
+  private static String escaped(CharSequence text) {
+    return text.chars()
+        .mapToObj(c -> c > ' ' && c < 127 ? String.valueOf((char) c) : "\\u%04X".formatted(c))
+        .collect(Collectors.joining());
+  }
+
+  @Test
+  void randomAnchorsMatchTheLinesTheirFormerPatternMatched() {
+    var random = new Random(932);
+    int matched = 0;
+    for (int round = 0; round < 40_000; round++) {
+      var anchor = new StringBuilder();
+      int pieces = 1 + random.nextInt(6);
+      for (int piece = 0; piece < pieces; piece++) {
+        anchor.append(ANCHOR_PIECES[random.nextInt(ANCHOR_PIECES.length)]);
+      }
+      var line = lineFor(anchor.toString(), random);
+      boolean expected = formerPattern(anchor.toString()).matcher(line).matches();
+      matched += expected ? 1 : 0;
+
+      assertEquals(
+          expected,
+          RedactedAnchor.lineMatcher(anchor.toString()).test(line),
+          () -> "anchor <" + escaped(anchor) + "> line <" + escaped(line) + ">");
+    }
+    assertTrue(matched > 4_000, "the lines include many that match: " + matched);
   }
 }

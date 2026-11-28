@@ -28,6 +28,7 @@ import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import jakarta.ws.rs.WebApplicationException;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
@@ -131,6 +132,24 @@ class ConfigKeyContextResolverTest {
               "WEBHOOK_DEDUP_TTL",
               "thrillhousebot.review.ci-gating"),
           tokens);
+    }
+
+    /** A documentation line holding a letter under a long run of combining marks. */
+    @Test
+    void shouldNotReadARunOfCombiningMarksAgainFromEachOfItsMarks() {
+      var marks = "a" + "\u0301".repeat(60_000);
+
+      var tokens =
+          assertTimeoutPreemptively(
+              Duration.ofSeconds(10),
+              () ->
+                  ConfigKeyContextResolver.extractTokens(
+                      List.of(
+                          docDiff(
+                              "README.md",
+                              "set `WEBHOOK_DEDUP_TTL` " + marks + " REVIEW_CI_GATING" + marks))));
+
+      assertEquals(List.of("WEBHOOK_DEDUP_TTL"), tokens);
     }
 
     @Test

@@ -26,6 +26,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import io.quarkiverse.githubapp.GitHubClientProvider;
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -1043,5 +1044,19 @@ class FindingFeedbackCaptureServiceTest {
             eq("+1"),
             anyInt(),
             eq(GitHubReactionClient.MAX_REACTION_PAGES + 1));
+  }
+
+  /** A reply holding a letter under a long run of combining marks, near GitHub's comment limit. */
+  @Test
+  void aReplyWithALongRunOfCombiningMarksIsNotReadAgainFromEachOfItsMarks() {
+    var marks = "a" + "\u0301".repeat(60_000);
+
+    assertTimeoutPreemptively(
+        Duration.ofSeconds(10),
+        () -> {
+          assertFalse(FindingFeedbackCaptureService.isNotUsefulReply(marks));
+          assertTrue(
+              FindingFeedbackCaptureService.isNotUsefulReply(marks + " false positive " + marks));
+        });
   }
 }

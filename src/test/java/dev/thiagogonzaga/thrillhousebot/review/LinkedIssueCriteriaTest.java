@@ -17,12 +17,14 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient.IssueComment;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -1464,5 +1466,27 @@ class LinkedIssueCriteriaTest {
                 + " — the review of the diff found it unmet: handleManifest takes any size"),
         rendered);
     assertFalse(rendered.contains("no changed file runs a sweep"), rendered);
+  }
+
+  @Test
+  void aQuotedPassageOfEitherKindIsReadWhereverItStarts() {
+    var text = "it \"keeps 'rows\" for. a day' and \"more\"";
+
+    assertEquals(
+        List.of(
+            new QuotedPassages.Passage(3, 16),
+            new QuotedPassages.Passage(10, 28),
+            new QuotedPassages.Passage(33, 39)),
+        LinkedIssueCriteria.quotes(text));
+  }
+
+  /** Single quotes that open a passage nothing closes: the line is not read again from each. */
+  @Test
+  void aLongTextOfUnclosedQuotesIsReadOnce() {
+    var text = " 'a".repeat(130_000) + " \"kept\"";
+
+    assertEquals(
+        List.of(new QuotedPassages.Passage(390_001, 390_007)),
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> LinkedIssueCriteria.quotes(text)));
   }
 }

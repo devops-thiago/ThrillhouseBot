@@ -238,11 +238,13 @@ final class HeuristicCodeDetector {
         // code all terminate the bounded window.
         addedLines.clear();
       } else {
-        addedLines.addLast(line);
+        // The patterns look for word boundaries, which a run of combining marks makes costly.
+        var read = CombiningMarks.bounded(line);
+        addedLines.addLast(read);
         if (addedLines.size() > 4) {
           addedLines.removeFirst();
         }
-        if (isHeuristicLine(line, scope.javaScript())
+        if (isHeuristicLine(read, scope.javaScript())
             || isHeuristicWindow(addedLines, scope.javaScript())) {
           return true;
         }

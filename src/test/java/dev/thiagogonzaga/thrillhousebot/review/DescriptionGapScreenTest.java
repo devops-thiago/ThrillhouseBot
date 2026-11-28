@@ -1160,4 +1160,98 @@ class DescriptionGapScreenTest {
     }
     return kept;
   }
+
+  @Test
+  void lettersCarryingOnAStemAreFoundAnywhereAfterItInTheWord() {
+    var source = DescriptionGapScreen.normalize("the internationalisation of 2 labels");
+
+    assertTrue(DescriptionGapScreen.appearsIn("inter[n]ation[al]isation of", source));
+    assertTrue(DescriptionGapScreen.appearsIn("inter[n]nation[al]tion of", source));
+    assertTrue(DescriptionGapScreen.appearsIn("the inter[n]tion[s] of", source));
+    assertTrue(DescriptionGapScreen.appearsIn("inter[n]isation", source));
+    // The letters must come after the stem, in order, and end the word when the quote ends it.
+    assertFalse(DescriptionGapScreen.appearsIn("inter[n]ter of", source));
+    assertFalse(DescriptionGapScreen.appearsIn("inter[n]tion[al]nation[s] of", source));
+    assertFalse(DescriptionGapScreen.appearsIn("inter[n]isa of", source));
+    assertFalse(DescriptionGapScreen.appearsIn("inter[n]nation", source));
+    assertFalse(DescriptionGapScreen.appearsIn("internationalisation[s]of", source));
+    assertTrue(
+        DescriptionGapScreen.appearsIn(
+            "lab[el]2 rows", DescriptionGapScreen.normalize("lab2 rows")));
+    assertFalse(
+        DescriptionGapScreen.appearsIn(
+            "lab[el]2 rows", DescriptionGapScreen.normalize("label rows")));
+  }
+
+  /**
+   * A quote of many stems, each carried on by letters or directly by the next stem, against one
+   * long word that holds them all but does not end as the quote does. The pattern tried every way
+   * the stems could share the word.
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {"bbb[s]", "", " b"})
+  void aWordIsReadOnceForAllTheStemsOfAQuote(String stem) {
+    var quote = "abc[s]" + stem.repeat(30);
+    var word = "abc" + "b".repeat(50_000);
+
+    assertFalse(
+        assertTimeoutPreemptively(
+            Duration.ofSeconds(10), () -> DescriptionGapScreen.appearsIn(quote, word + "1 x")));
+    assertTrue(
+        assertTimeoutPreemptively(
+            Duration.ofSeconds(10), () -> DescriptionGapScreen.appearsIn(quote, word + " x")));
+  }
+
+  /** The pattern a part of a quote was compiled to, before a stem's ending was read once. */
+  private static Pattern needleBefore(String part) {
+    var segments = part.split("", -1);
+    var body = new StringBuilder();
+    for (var i = 0; i < segments.length; i++) {
+      var words = DescriptionGapScreen.normalize(segments[i]);
+      if (!words.isEmpty()) {
+        if (!body.isEmpty() && !Character.isLetterOrDigit(segments[i].charAt(0))) {
+          body.append(' ');
+        }
+        body.append(Pattern.quote(words));
+      }
+      if (i < segments.length - 1) {
+        body.append("\\p{L}*");
+      }
+    }
+    return body.isEmpty() ? null : Pattern.compile("(?<= )" + body + "(?= )");
+  }
+
+  private static final String[] PART_PIECES = {
+    "a", "a", "b", "ab", "1", " ", " ", "-", "", "", "", "𝐚", "é"
+  };
+
+  private static final String[] SOURCE_PIECES = {
+    "a", "a", "a", "b", "b", "ab", "1", " ", "𝐚", "é"
+  };
+
+  /** Where a part is found from each place a search can start, the same as before. */
+  @Test
+  void randomPartsAreFoundWhereThePatternFoundThem() {
+    var random = new Random(1445);
+    int found = 0;
+    for (int round = 0; round < 150_000; round++) {
+      var part = randomText(random, PART_PIECES, 9);
+      var haystack =
+          " " + DescriptionGapScreen.normalize(randomText(random, SOURCE_PIECES, 16)) + " ";
+      var before = needleBefore(part);
+      var now = DescriptionGapScreen.needle(part);
+      assertEquals(before == null, now == null, () -> "a needle for: " + part);
+      for (int from = 0; before != null && from < haystack.length(); from++) {
+        var was = before.matcher(haystack);
+        var is = now.matcher(haystack);
+        int at = from;
+        assertEquals(
+            was.find(from) ? was.start() : -1,
+            is.find(from) ? is.start() : -1,
+            () -> "<" + part.replace('', '*') + "> in <" + haystack + "> from " + at);
+        found += was.find(from) ? 1 : 0;
+      }
+    }
+    assertTrue(found > 50_000, "many of the parts are found: " + found);
+  }
 }

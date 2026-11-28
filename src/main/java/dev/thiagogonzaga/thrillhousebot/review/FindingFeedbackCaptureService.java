@@ -487,7 +487,9 @@ public class FindingFeedbackCaptureService {
             null));
   }
 
-  private static boolean isNotUsefulReply(String body) {
-    return NOT_USEFUL_REPLY_PATTERNS.stream().anyMatch(p -> p.matcher(body).find());
+  static boolean isNotUsefulReply(String body) {
+    // The patterns look for word boundaries, which a run of combining marks makes costly.
+    var read = CombiningMarks.bounded(body);
+    return NOT_USEFUL_REPLY_PATTERNS.stream().anyMatch(p -> p.matcher(read).find());
   }
 }

@@ -380,6 +380,17 @@ class CiFailureContextResolverTest {
       assertFalse(section.chars().anyMatch(c -> c == 0x1B || c == '\r' || c == 0x202E || c == 0));
     }
 
+    /**
+     * CI and issue text is matched with word boundaries, which a long run of marks makes costly.
+     */
+    @Test
+    void cleanCutsALongRunOfCombiningMarks() {
+      var marks = "\u0301".repeat(5_000);
+      assertEquals(
+          "e" + "\u0301".repeat(CombiningMarks.MAX_RUN) + " failed\nne\u0301",
+          CiFailureContextResolver.clean("e" + marks + " failed\nne\u0301"));
+    }
+
     @Test
     void cleanKeepsOrdinaryTextAndHandlesNull() {
       assertEquals("", CiFailureContextResolver.clean(null));

@@ -476,7 +476,7 @@ final class IacScanner {
     if (kind == FileKind.OTHER) {
       return hits;
     }
-    var lines = patch.lines();
+    var lines = patch.lines().stream().map(IacScanner::read).toList();
     for (int i = 0; i < lines.size(); i++) {
       var line = lines.get(i);
       if (!line.added() || isComment(line.text())) {
@@ -484,10 +484,22 @@ final class IacScanner {
       }
       var rule = match(kind, lines, i, patch, newFile);
       if (rule != null) {
-        hits.add(new Hit(rule, i, line.number(), line.text()));
+        hits.add(new Hit(rule, i, line.number(), patch.lines().get(i).text()));
       }
     }
     return hits;
+  }
+
+  /**
+   * The line as every rule reads it, the added one and those around it: with its runs of combining
+   * marks bounded ({@link CombiningMarks}), so no line sets what a word boundary costs. A hit keeps
+   * the line as the patch holds it.
+   */
+  private static PatchLines.Line read(PatchLines.Line line) {
+    var text = CombiningMarks.bounded(line.text());
+    return text.equals(line.text())
+        ? line
+        : new PatchLines.Line(line.number(), line.added(), text, line.hunk());
   }
 
   private static SecurityRule match(

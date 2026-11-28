@@ -274,7 +274,8 @@ public class ConfigKeyContextResolver {
       }
       if (isDocumentationFile(file.filename()) && file.patch() != null) {
         scanned++;
-        collectTokens(addedLines(file.patch()), tokens);
+        // The token patterns look for word boundaries, which a run of combining marks makes costly.
+        collectTokens(CombiningMarks.bounded(addedLines(file.patch())), tokens);
       }
     }
     return List.copyOf(tokens);

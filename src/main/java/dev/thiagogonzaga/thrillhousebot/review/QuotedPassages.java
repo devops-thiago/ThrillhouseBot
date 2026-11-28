@@ -48,6 +48,19 @@ final class QuotedPassages {
 
   /** The passages of {@code text}, in order. */
   static List<Passage> in(String text) {
+    return passages(text, true);
+  }
+
+  /**
+   * The single-quoted passages of {@code text}, in order, read as though it held no double-quoted
+   * ones: a double quote is a character like any other, so a passage may start inside a
+   * double-quoted one or hold one.
+   */
+  static List<Passage> inSingleQuotes(String text) {
+    return passages(text, false);
+  }
+
+  private static List<Passage> passages(String text, boolean doubleQuoted) {
     var passages = new ArrayList<Passage>();
     // No single quote before this index is closed on its line.
     int unclosedBefore = 0;
@@ -55,7 +68,7 @@ final class QuotedPassages {
     while (at < text.length()) {
       int end = -1;
       char c = text.charAt(at);
-      if (c == '"') {
+      if (c == '"' && doubleQuoted) {
         end = doubleQuoteEnd(text, at);
       } else if (c == '\'' && at >= unclosedBefore && !letterOrNumberBefore(text, at)) {
         end = singleQuoteEnd(text, at);

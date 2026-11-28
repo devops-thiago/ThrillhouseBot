@@ -165,6 +165,17 @@ public class ReviewOrchestrator {
       String baseRef,
       boolean forceSummary) {
 
+    /**
+     * The title and the description are held with their runs of combining marks bounded ({@link
+     * CombiningMarks}). Every screen that matches them with a word boundary reads them from here,
+     * so none of them has to bound its own copy. Neither is posted back to the pull request; the
+     * title shown in a notification and on the dashboard is this one.
+     */
+    public ReviewRequest {
+      prTitle = prTitle == null ? null : CombiningMarks.bounded(prTitle);
+      prDescription = prDescription == null ? null : CombiningMarks.bounded(prDescription);
+    }
+
     /** The installation and repository every row this review stores is scoped to. */
     public RepoScope scope() {
       return new RepoScope(installationId, repositoryId);
