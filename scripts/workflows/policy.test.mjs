@@ -235,7 +235,8 @@ test('a repeated changelog heading is found outside fenced examples only', () =>
 });
 
 test('an unclosed fence hides no changelog heading', () => {
-  const section = ['## [Unreleased]', '', '### Security', '- a', '', '```', '', '### Security', '- b'].join('\n');
+  const heading = '### Security';
+  const section = ['## [Unreleased]', '', heading, '- a', '', '```', '', heading, '- b'].join('\n');
   assert.deepEqual(subheadingsOf(section), ['Security', 'Security']);
   assert.deepEqual(repeatedIn(subheadingsOf(section)), ['Security']);
   // A fence that is closed after all still hides what is inside it.
