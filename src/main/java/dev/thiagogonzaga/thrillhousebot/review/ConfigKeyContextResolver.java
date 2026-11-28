@@ -30,7 +30,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
-import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 /**
  * Resolves the configuration keys a documentation-only diff <em>describes</em> to the code that
@@ -209,7 +208,7 @@ public class ConfigKeyContextResolver {
   private final GitHubPullRequestClient prClient;
 
   @Inject
-  public ConfigKeyContextResolver(@RestClient GitHubPullRequestClient prClient) {
+  public ConfigKeyContextResolver(GitHubPullRequestClient prClient) {
     this.prClient = prClient;
   }
 

@@ -37,7 +37,6 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
-import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 /**
  * Resolves each candidate finding's cited {@code path:line} against the file it names, at the pull
@@ -114,7 +113,7 @@ public class CitedLocationResolver {
   private final GitHubPullRequestClient prClient;
 
   @Inject
-  public CitedLocationResolver(@RestClient GitHubPullRequestClient prClient) {
+  public CitedLocationResolver(GitHubPullRequestClient prClient) {
     this.prClient = prClient;
   }
 

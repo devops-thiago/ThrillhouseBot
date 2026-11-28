@@ -33,8 +33,8 @@ import static org.mockito.Mockito.when;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubLabelClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubTokenReads;
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.webhook.ReviewTriggerFilter;
 import java.util.List;
@@ -70,7 +70,7 @@ class CiHoldRevisitTest {
           new PullRequestLabelGate(
               mock(ReviewTriggerFilter.class),
               authClient,
-              mock(GitHubLabelClient.class),
+              mock(GitHubTokenReads.class),
               checkRunManager,
               skipEmitter));
 

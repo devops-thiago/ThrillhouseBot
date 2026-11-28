@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubLabelClient;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubTokenReads;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -40,7 +41,6 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
 public class PrLabeler {
 
   private static final String ACCEPT = "application/vnd.github+json";
-  private static final int LABELS_PER_PAGE = 100;
 
   // GitHub serves at most 100 labels per page; stop on a short page or after this many pages.
   static final int MAX_LABEL_PAGES = 10;
@@ -51,15 +51,18 @@ public class PrLabeler {
 
   private final ThrillhouseConfig config;
   private final GitHubLabelClient labelClient;
+  private final GitHubTokenReads reads;
   private final GitHubCommentClient commentClient;
 
   @Inject
   public PrLabeler(
       ThrillhouseConfig config,
       @RestClient GitHubLabelClient labelClient,
+      GitHubTokenReads reads,
       @RestClient GitHubCommentClient commentClient) {
     this.config = config;
     this.labelClient = labelClient;
+    this.reads = reads;
     this.commentClient = commentClient;
   }
 
@@ -74,9 +77,9 @@ public class PrLabeler {
   }
 
   /**
-   * Fetches every label defined on the repository, paginating up to {@link #MAX_LABEL_PAGES}.
-   * Returns an empty list when the feature is disabled or the lookup fails — labelling then simply
-   * does not happen.
+   * Fetches every label defined on the repository, up to {@link #MAX_LABEL_PAGES} pages, leaving
+   * out the blocked ones, which are never offered to the model (#1238). Returns an empty list when
+   * the feature is disabled or the lookup fails — labelling then simply does not happen.
    */
   public List<GitHubLabelClient.Label> fetchExistingLabels(String auth, String owner, String repo) {
     if (!enabled()) {
@@ -85,17 +88,9 @@ public class PrLabeler {
     var blocked = blockedLabels();
     var all = new ArrayList<GitHubLabelClient.Label>();
     try {
-      List<GitHubLabelClient.Label> page = null;
-      for (int p = 1;
-          p <= MAX_LABEL_PAGES && (page == null || page.size() == LABELS_PER_PAGE);
-          p++) {
-        page = labelClient.listLabels(auth, ACCEPT, owner, repo, LABELS_PER_PAGE, p);
-        if (page == null) {
-          break;
-        }
-        // A blocked label is never offered to the model (#1238).
-        page.stream().filter(label -> !isBlocked(label.name(), blocked)).forEach(all::add);
-      }
+      reads.repositoryLabels(auth, owner, repo, MAX_LABEL_PAGES).stream()
+          .filter(label -> !isBlocked(label.name(), blocked))
+          .forEach(all::add);
     } catch (RuntimeException e) {
       Log.warn("Failed to fetch repository labels; skipping label suggestions", e);
       return List.of();
@@ -309,47 +304,26 @@ public class PrLabeler {
 
   /**
    * Lower-cased names of every label currently on the PR, used to keep additive re-reviews from
-   * exceeding max-labels. GitHub paginates issue labels at {@value #LABELS_PER_PAGE} per page, so
-   * we walk pages up to {@link #MAX_LABEL_PAGES} — a label beyond page one still counts against the
-   * per-PR budget. Best-effort: on a fetch failure we keep the pages we already read rather than
-   * discarding them — dropping page-one labels when a later page fails would under-count the
-   * current set and let {@link #applyLabels} over-apply past max-labels. If even the first page
-   * fails the set is empty, which falls back to applying this review's reconciled suggestions.
+   * exceeding max-labels. Best-effort: when they cannot be read the set is empty, which falls back
+   * to applying this review's reconciled suggestions.
    */
   private Set<String> currentLabelKeys(LabelRequest request) {
     var keys = new HashSet<String>();
     try {
-      List<GitHubLabelClient.Label> page = null;
-      for (int p = 1;
-          p <= MAX_LABEL_PAGES && (page == null || page.size() == LABELS_PER_PAGE);
-          p++) {
-        page =
-            labelClient.listIssueLabels(
-                request.auth(),
-                ACCEPT,
-                request.owner(),
-                request.repo(),
-                request.prNumber(),
-                LABELS_PER_PAGE,
-                p);
-        if (page == null) {
-          break;
-        }
-        for (var label : page) {
-          var name = label.name();
-          if (name != null && !name.isBlank()) {
-            keys.add(name.strip().toLowerCase(Locale.ROOT));
-          }
+      for (var label :
+          reads.issueLabels(request.auth(), request.owner(), request.repo(), request.prNumber())) {
+        var name = label.name();
+        if (name != null && !name.isBlank()) {
+          keys.add(name.strip().toLowerCase(Locale.ROOT));
         }
       }
     } catch (RuntimeException e) {
       Log.debugf(
           e,
-          "Could not read all current labels for %s/%s #%d; capping against the %d already read",
+          "Could not read the current labels for %s/%s #%d; capping against none",
           request.owner(),
           request.repo(),
-          request.prNumber(),
-          keys.size());
+          request.prNumber());
     }
     return keys;
   }

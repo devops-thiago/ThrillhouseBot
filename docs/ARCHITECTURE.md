@@ -48,11 +48,12 @@ flowchart LR
 The `github/` package handles app authentication and installation tokens (through the Quarkiverse
 GitHub App extension's application client) and GitHub API calls for pull request files, reviews and
 review comments, issue comments, check runs, labels, reactions, thread resolution over GraphQL, the
-instructions file and the repository settings file. Workflow run, artifact and installation
-repository listings, artifact and job log download addresses, and a dashboard user's repository
-listing go through hub4j with the token the caller holds (`GitHubTokenReads`). Where hub4j has no
-method, the connector under it covers the call; the renamed repository's redirect and a user's
-installation listing stay on REST clients.
+instructions file and the repository settings file. Workflow run, artifact, installation
+repository and label listings, pull request details, files, comparisons, file contents and trees,
+artifact and job log download addresses, and a dashboard user's repository listing go through
+hub4j with the token the caller holds (`GitHubTokenReads`, `GitHubPullRequestReads`). Where hub4j
+has no method, the connector under it covers the call; the renamed repository's redirect and a
+user's installation listing stay on REST clients.
 
 ## Request flow
 
