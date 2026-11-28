@@ -60,7 +60,7 @@ public class AutoReviewRateLimiter {
 
   /**
    * The epoch-millis deadline until which automatic reviews of a PR are throttled, and the head the
-   * review that opened the window covered.
+   * review that opened the window covered; {@code null} once {@link #forgetCoveredHead} dropped it.
    */
   record Window(long deadline, String sha) {}
 
@@ -146,6 +146,18 @@ public class AutoReviewRateLimiter {
   private boolean windowOpen(String key, long now) {
     var window = deadlines.get(key);
     return window != null && window.deadline() > now;
+  }
+
+  /**
+   * Forgets which head the PR's last automatic review covered, leaving its window as it is. Called
+   * when the approval that review gave is withdrawn on a push ({@link ApprovalOnPush}): if the head
+   * then returns to that commit inside the window, the event is no longer one that "needs no review
+   * at all", so {@link #hold} keeps it for the window's end and the commit is reviewed, and can be
+   * approved, again. The heads a ready-for-review lifted the window for are not touched.
+   */
+  public void forgetCoveredHead(String owner, String repo, int prNumber) {
+    deadlines.computeIfPresent(
+        key(owner, repo, prNumber), (ignored, window) -> new Window(window.deadline(), null));
   }
 
   /**

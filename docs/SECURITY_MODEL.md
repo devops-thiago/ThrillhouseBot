@@ -33,10 +33,12 @@ security limits. To report a vulnerability, see
   closed. This lasts one review: the held review is stored and can be read, so
   the next one is judged against it and what the unreadable reviews raised is
   no longer tracked.
-- A review that does not approve dismisses the approvals the bot gave earlier
-  on the same pull request, so an approval of an older head does not go on
-  counting for code the bot declined to approve. Only the bot's own reviews are
-  dismissed.
+- The bot's approval is for one commit. When commits are pushed to a pull
+  request the bot approved, it dismisses its approval at once, before any
+  review of the new head and whether or not one will run, so an approval of an
+  older head does not go on counting for code the bot has not reviewed. A
+  review that does not approve dismisses any approval the bot still has, too.
+  Only the bot's own reviews are dismissed.
 
 ## What you cannot expect
 
@@ -49,29 +51,42 @@ security limits. To report a vulnerability, see
   HTTPS to work.
 - OAuth sessions and some review state live in memory in a single process (see
   Known limitations in the README). A restart signs dashboard users out.
-- The bot's approval is not withdrawn at the moment commits are pushed. It is
-  dismissed when the review of the new head finishes without approving, and it
-  stays if that review never runs or fails, if the bot could not read the pull
-  request's reviews, or if a branch protection rule stops the App from
-  dismissing reviews. The bot logs a warning in each of the last two cases:
-  one when the reviews could not be listed, saying that earlier approvals were
-  not checked, and one for each approval it could not dismiss. A refusal for
-  want of permission (a 403 that is not a rate limit) ends the attempt for
-  that round. Any other failure (a timeout, a server error, a rate limit, or a
-  404 or 422 for one review) leaves that approval in place and the bot goes on
-  to its older ones. The bot reads at most 1,000 reviews per pull request,
-  oldest first, and logs a warning when it reaches that limit, since an
-  approval past it is not seen. A push inside `AUTO_REVIEW_MIN_INTERVAL` or
-  past a full repository queue is kept and reviewed late instead of skipped,
-  so timing a push to land inside the window does not by itself avoid the
-  review. That later review is held in memory. It does not run if the bot
-  restarts while it waits, if 10,000 pull requests already have one kept, if
-  the repository's queue stays full for an hour, if the review cannot be
-  started (the executor refuses it, or starting it fails for an hour), or if
-  the pull request is paused meanwhile, or converted to a draft while drafts
-  are skipped. If the bot's
-  approval counts towards a required review, turn on "Dismiss stale pull
-  request approvals when new commits are pushed" for the branch.
+- The bot's approval of an earlier commit stays after a push only when the bot
+  cannot withdraw it: it did not receive the push event (the bot was down, or
+  the delivery failed and was not redelivered), it restarted or its review
+  executor turned the work away before the dismissal ran (the dismissal is
+  queued in memory), the repository's account was taken off
+  `GITHUB_ALLOWED_ACCOUNTS` after the approval (the bot then ignores every
+  event from it), it could not list the pull request's reviews, or GitHub
+  did not let it dismiss the review, which a branch protection rule that
+  restricts who may dismiss reviews does. An event that arrives late or is
+  redelivered and names a commit the bot approved dismisses nothing by itself;
+  the event for the newer head does. A pull request reopened with commits
+  added while it was closed is treated like a push. The bot
+  logs a warning when the reviews could not be listed, saying that earlier
+  approvals were not checked, and one for each approval it could not dismiss.
+  A refusal for want of permission (a 403 that is not a rate limit) ends that
+  attempt. Any other failure (a timeout, a server error, a rate limit, or a 404
+  or 422 for one review) leaves that approval in place and the bot goes on to
+  its older ones. A later push, or a later review that does not approve, tries
+  again. The bot reads at most 1,000 reviews per pull request, oldest first,
+  and logs a warning when it reaches that limit, since an approval past it is
+  not seen. The dismissal waits for a review of the same pull request that is
+  already running or waiting for a review slot, so for that long the old
+  approval still counts. If the
+  bot's approval counts towards a required review, also turn on "Dismiss stale
+  pull request approvals when new commits are pushed" for the branch, so
+  GitHub drops it on the push whatever happens to the bot.
+- A push inside `AUTO_REVIEW_MIN_INTERVAL` or past a full repository queue is
+  kept and reviewed late instead of skipped, so timing a push to land inside
+  the window does not by itself avoid the review. That later review is held in
+  memory. It does not run if the bot restarts while it waits, if 10,000 pull
+  requests already have one kept, if the repository's queue stays full for an
+  hour, if the review cannot be started (the executor refuses it, or starting
+  it fails for an hour), or if the pull request is paused meanwhile, or
+  converted to a draft while drafts are skipped. The approval of the old head
+  is dismissed on the push all the same, so the pull request is then left
+  without the bot's approval, not with a stale one.
 - Only the latest release gets security fixes.
 
 ## Threat model

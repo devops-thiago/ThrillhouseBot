@@ -231,20 +231,26 @@ cannot resolve its review threads.
   files also reads the pull request; and its labels now come with one read of its issue instead of
   a paged listing. These calls follow `HTTP_CONNECT_TIMEOUT` and `HTTP_REQUEST_TIMEOUT` rather
   than the REST client's settings.
-- **An approval is withdrawn when a later review does not approve**: the bot approved a pull
-  request, more commits were pushed, and the review of the new head ended as `COMMENT` (findings,
-  an earlier finding still open, a CI hold, a partly reviewed diff). GitHub goes on counting an
-  approval after its author posts a comment review, so the approval of the old head kept satisfying
-  a required-review rule for code the bot had not approved. A review that does not end in an
-  approval now dismisses every approval the bot still has on the pull request before it posts, with
-  a message naming the head it reviewed. Only the bot's own reviews are dismissed, and a review
-  that approves again dismisses nothing. The call uses the `Pull requests: Read & write` permission
-  the App already has. On a protected branch GitHub may refuse it unless the App is allowed to
-  dismiss reviews there (the rule's "Restrict who can dismiss pull request reviews" list): the bot
-  then logs a warning, posts its review as usual and the old approval stays. Turn on "Dismiss
-  stale pull request approvals when new commits are pushed" wherever the bot's approval counts;
-  it is also the only protection for a push the bot does not review (a skipped, failed or
-  superseded run). Affects every release up to 0.9.3.
+- **An approval is withdrawn when commits are pushed, and when a later review does not approve**:
+  the bot approved a pull request and more commits were pushed. The approval of the old head kept
+  satisfying a required-review rule for code the bot had not approved: until the new head was
+  reviewed, for good when it was not (a draft, a filtered or paused pull request, a failed run), and
+  even after a review that ended as `COMMENT` (findings, an earlier finding still open, a CI hold, a
+  partly reviewed diff), because GitHub goes on counting an approval after its author posts a
+  comment review. The bot now dismisses its approvals of earlier commits as soon as the push arrives
+  (or the pull request is reopened on another commit), without a model call and whether or not the
+  new head will be reviewed, with a message saying commits were pushed after the approval and naming
+  the new head. A review that does not end in an approval also dismisses every approval the bot
+  still has before it posts, with a message naming the head it reviewed. Only the bot's own reviews
+  are dismissed. A review that approves posts a new approval, so a pull request that stays clean
+  shows a dismissal and a new approval for each push; a force-push back to the approved commit
+  dismisses nothing. Each push costs one request to list the pull request's reviews. The dismissal
+  uses the `Pull requests: Read & write` permission the App already has. On a protected branch
+  GitHub may refuse it unless the App is allowed to dismiss reviews there (the rule's "Restrict who
+  can dismiss pull request reviews" list): the bot then logs a warning, reviews as usual and the old
+  approval stays. Keep "Dismiss stale pull request approvals when new commits are pushed" on
+  wherever the bot's approval counts, for a push the bot never hears about or cannot act on. Affects
+  every release up to 0.9.3.
 - **Only someone with write access can get a finding closed or declined.** A reply on a finding's
   thread was shown to the model whoever wrote it, and a finding the model then reported as
   declined (`justified`) no longer held the approval, so a reply from the pull request's author

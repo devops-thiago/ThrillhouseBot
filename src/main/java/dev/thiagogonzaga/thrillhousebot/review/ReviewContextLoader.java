@@ -1074,10 +1074,9 @@ public class ReviewContextLoader {
    * The pull request's reviews, oldest first, or an empty list when they could not be listed. A
    * pull request with no review yet lists as empty without failing, so a failure here is never the
    * ordinary first review: it is logged at warn with what the round loses, because the publisher
-   * takes the approvals it dismisses from this one listing ({@code
-   * ReviewPublisher.withdrawStandingApprovals}) and an empty one dismisses nothing. A listing that
-   * filled every page is logged too: GitHub lists oldest first, so the reviews left unread are the
-   * newest.
+   * takes the approvals it dismisses from this one listing ({@code ApprovalWithdrawals.afterRound})
+   * and an empty one dismisses nothing. A listing that filled every page is logged too: GitHub
+   * lists oldest first, so the reviews left unread are the newest.
    */
   List<GitHubReviewClient.ReviewResponse> fetchPriorReviews(
       String auth, String owner, String repo, int prNumber) {

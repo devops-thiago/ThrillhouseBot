@@ -906,7 +906,7 @@ class ReviewPublisherTest {
             "r",
             1,
             reviewId,
-            ReviewPublisher.approvalWithdrawnMessage(headSha));
+            ApprovalWithdrawals.approvalWithdrawnMessage(headSha));
   }
 
   private void verifyNothingDismissed() {
@@ -936,7 +936,7 @@ class ReviewPublisherTest {
             "r",
             1,
             1L,
-            ReviewPublisher.approvalWithdrawnMessage("sha2"));
+            ApprovalWithdrawals.approvalWithdrawnMessage("sha2"));
     order
         .verify(reviewClient)
         .createReview(anyString(), anyString(), eq("o"), eq("r"), eq(1), any());
@@ -1184,7 +1184,7 @@ class ReviewPublisherTest {
             anyString(), anyString(), anyString(), anyString(), anyInt(), eq(2L), anyString()))
         .thenThrow(new WebApplicationException(response));
 
-    try (var log = CapturedLog.of(ReviewPublisher.class)) {
+    try (var log = CapturedLog.of(ApprovalWithdrawals.class)) {
       post(
           "sha3",
           heldOnCi(),
@@ -1212,7 +1212,7 @@ class ReviewPublisherTest {
                     .entity("{\"message\":\"Resource not accessible by integration\"}")
                     .build()));
 
-    try (var log = CapturedLog.of(ReviewPublisher.class)) {
+    try (var log = CapturedLog.of(ApprovalWithdrawals.class)) {
       post(
           "sha3",
           heldOnCi(),
@@ -1234,7 +1234,139 @@ class ReviewPublisherTest {
     assertEquals(
         "ThrillhouseBot withdrew this approval: its review round for sha2 did not approve the"
             + " pull request.",
-        ReviewPublisher.approvalWithdrawnMessage("sha2"));
+        ApprovalWithdrawals.approvalWithdrawnMessage("sha2"));
+  }
+
+  @Test
+  void pushDismissalMessageSaysTheNewHeadHasNoReviewYet() {
+    assertEquals(
+        "ThrillhouseBot withdrew this approval: commits were pushed after it, and sha2 has not"
+            + " been reviewed yet.",
+        ApprovalWithdrawals.approvalWithdrawnOnPushMessage("sha2"));
+  }
+
+  private void verifyDismissedOnPush(long reviewId, String headSha) {
+    verify(reviewClient)
+        .dismissReview(
+            "auth",
+            "application/vnd.github+json",
+            "o",
+            "r",
+            1,
+            reviewId,
+            ApprovalWithdrawals.approvalWithdrawnOnPushMessage(headSha));
+  }
+
+  @Test
+  void pushWithdrawsEveryStandingBotApprovalNewestFirstAndPostsNothing() {
+    try (var log = CapturedLog.of(ApprovalWithdrawals.class)) {
+      publisher.withdrawApprovalsAfterPush(
+          "auth",
+          "o",
+          "r",
+          1,
+          "sha3",
+          List.of(
+              review(1L, "APPROVED", "sha1", BOT_LOGIN),
+              review(2L, "APPROVED", "sha2", BOT_LOGIN),
+              review(3L, "APPROVED", "sha2", "maintainer"),
+              review(4L, "DISMISSED", "sha1", BOT_LOGIN)));
+
+      var order = org.mockito.Mockito.inOrder(reviewClient);
+      order
+          .verify(reviewClient)
+          .dismissReview(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), eq(2L), anyString());
+      order
+          .verify(reviewClient)
+          .dismissReview(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), eq(1L), anyString());
+      verifyDismissedOnPush(2L, "sha3");
+      verifyDismissedOnPush(1L, "sha3");
+      org.mockito.Mockito.verifyNoMoreInteractions(reviewClient);
+      assertEquals(2, log.at(Level.INFO).size(), log.at(Level.INFO).toString());
+      assertTrue(
+          log.at(Level.INFO).stream()
+              .allMatch(
+                  line ->
+                      line.endsWith("commits were pushed after it and sha3 has not been reviewed")),
+          log.at(Level.INFO).toString());
+    }
+  }
+
+  @Test
+  void pushDismissalRefusedForWantOfPermissionIsLoggedAndStopsTheWalk() {
+    when(reviewClient.dismissReview(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), anyLong(), anyString()))
+        .thenThrow(
+            new WebApplicationException(
+                Response.status(403)
+                    .entity("{\"message\":\"Resource not accessible by integration\"}")
+                    .build()));
+
+    try (var log = CapturedLog.of(ApprovalWithdrawals.class)) {
+      publisher.withdrawApprovalsAfterPush(
+          "auth",
+          "o",
+          "r",
+          1,
+          "sha3",
+          List.of(
+              review(1L, "APPROVED", "sha1", BOT_LOGIN),
+              review(2L, "APPROVED", "sha2", BOT_LOGIN)));
+
+      verify(reviewClient, times(1))
+          .dismissReview(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), anyLong(), anyString());
+      var warnings = log.at(Level.WARNING);
+      assertEquals(1, warnings.size(), warnings.toString());
+      assertTrue(warnings.getFirst().contains("Pull requests: write"), warnings.getFirst());
+      assertTrue(
+          warnings
+              .getFirst()
+              .contains("although commits were pushed after it and sha3 has not been reviewed"),
+          warnings.getFirst());
+      assertFalse(warnings.getFirst().contains("round"), warnings.getFirst());
+    }
+  }
+
+  @Test
+  void pushDismissalThatFailsOtherwiseStillTriesTheOlderApprovals() {
+    when(reviewClient.dismissReview(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), eq(2L), anyString()))
+        .thenThrow(new WebApplicationException(502));
+
+    publisher.withdrawApprovalsAfterPush(
+        "auth",
+        "o",
+        "r",
+        1,
+        "sha3",
+        List.of(
+            review(1L, "APPROVED", "sha1", BOT_LOGIN), review(2L, "APPROVED", "sha2", BOT_LOGIN)));
+
+    verifyDismissedOnPush(1L, "sha3");
+  }
+
+  @Test
+  void roundThatDoesNotApproveSkipsAnApprovalThePushAlreadyDismissed() {
+    // The push dismissed the approval of sha1; the listing the later round reads says so.
+    post("sha2", heldOnCi(), List.of(review(1L, "DISMISSED", "sha1", BOT_LOGIN)));
+
+    verifyNothingDismissed();
+    assertEquals("COMMENT", postedReviewEvent());
+  }
+
+  @Test
+  void roundLogsItsOwnReasonForADismissal() {
+    try (var log = CapturedLog.of(ApprovalWithdrawals.class)) {
+      post("sha2", heldOnCi(), List.of(review(1L, "APPROVED", "sha1", BOT_LOGIN)));
+
+      assertTrue(
+          log.at(Level.INFO)
+              .contains("Dismissed approval 1 on o/r #1 — the round for sha2 did not approve"),
+          log.at(Level.INFO).toString());
+    }
   }
 
   @Test

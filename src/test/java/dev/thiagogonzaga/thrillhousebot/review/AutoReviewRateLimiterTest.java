@@ -239,6 +239,32 @@ class AutoReviewRateLimiterTest {
   }
 
   @Test
+  void forgettingTheCoveredHeadKeepsTheWindowAndMakesThatHeadDueAtItsEnd() {
+    var clock = new MutableClock(1_000);
+    var limiter = new AutoReviewRateLimiter(INTERVAL_MS, BIG_THRESHOLD, clock);
+    assertTrue(limiter.clearForReadyHead("owner", "repo", 1, "sha-a"));
+    limiter.recordCompletion("owner", "repo", 1, "sha-a");
+
+    limiter.forgetCoveredHead("owner", "repo", 1);
+
+    var hold = limiter.hold("owner", "repo", 1, "sha-a");
+    assertTrue(hold.throttled());
+    assertEquals(OptionalLong.of(1_000 + INTERVAL_MS), hold.reviewDueAt());
+    // The ready-for-review lift is remembered apart from the window: no second lift for sha-a.
+    assertFalse(limiter.clearForReadyHead("owner", "repo", 1, "sha-a"));
+  }
+
+  @Test
+  void forgettingTheCoveredHeadOfAPullRequestWithNoWindowOpensNone() {
+    var limiter = new AutoReviewRateLimiter(INTERVAL_MS, BIG_THRESHOLD, new MutableClock(0));
+
+    limiter.forgetCoveredHead("owner", "repo", 1);
+
+    assertEquals(AutoReviewRateLimiter.Hold.NONE, limiter.hold("owner", "repo", 1, "sha-a"));
+    assertTrue(limiter.deadlines.isEmpty());
+  }
+
+  @Test
   void nothingIsDueLaterForAPullRequestThatIsNotThrottled() {
     var clock = new MutableClock(0);
     var limiter = new AutoReviewRateLimiter(INTERVAL_MS, BIG_THRESHOLD, clock);
