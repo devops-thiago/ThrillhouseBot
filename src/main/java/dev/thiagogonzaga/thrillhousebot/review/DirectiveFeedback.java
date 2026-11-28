@@ -60,12 +60,15 @@ final class DirectiveFeedback {
             .toList();
     var ack = new StringBuilder();
     if (matched.isEmpty()) {
-      ack.append("This comment names no open finding on record by both its `path:line` and title.");
+      ack.append(
+          OutdatedOutputHider.NO_OPEN_FINDING_OPENING + " by both its `path:line` and title.");
     } else {
       ack.append(
           clear
-              ? "The next review will close these, named by `path:line` and title:"
-              : "The next review will record these as declined, checking each reason against the"
+              ? OutdatedOutputHider.NEXT_REVIEW_OPENING
+                  + "close these, named by `path:line` and title:"
+              : OutdatedOutputHider.NEXT_REVIEW_OPENING
+                  + "record these as declined, checking each reason against the"
                   + " reviewed code:");
       list(ack, matched);
     }

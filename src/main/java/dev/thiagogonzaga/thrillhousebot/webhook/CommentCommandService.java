@@ -25,6 +25,7 @@ import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
 import dev.thiagogonzaga.thrillhousebot.review.ChangelogEntryGenerator;
 import dev.thiagogonzaga.thrillhousebot.review.DocGenerationService;
+import dev.thiagogonzaga.thrillhousebot.review.OutdatedOutputHider;
 import dev.thiagogonzaga.thrillhousebot.review.PrDescriptionGenerator;
 import dev.thiagogonzaga.thrillhousebot.review.PrImprovementService;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewContextLoader;
@@ -471,7 +472,7 @@ public class CommentCommandService {
     }
     var botRootCommentIds = botRootCommentIds(auth, ctx);
     if (botRootCommentIds.isEmpty()) {
-      postComment(auth, ctx, "No open ThrillhouseBot finding threads to resolve.");
+      postComment(auth, ctx, OutdatedOutputHider.NOTHING_TO_RESOLVE_NOTICE);
       return;
     }
     Map<Long, ReviewThreadService.ThreadRef> threads;
@@ -532,9 +533,10 @@ public class CommentCommandService {
   private static String resolveRefused(int resolved) {
     return resolved == 0
         ? RESOLVE_NOT_PERMITTED_NOTICE
-        : "✅ Resolved "
+        : OutdatedOutputHider.RESOLVED_OPENING
             + resolved
-            + " ThrillhouseBot finding thread(s). ⚠️ GitHub then refused to let this App resolve"
+            + OutdatedOutputHider.FINDING_THREADS
+            + ". ⚠️ GitHub then refused to let this App resolve"
             + " review threads, so the rest stay open."
             + RESOLVE_GRANT_HINT;
   }
@@ -546,18 +548,25 @@ public class CommentCommandService {
   private static String resolveOutcome(int resolved, int failed) {
     if (failed == 0) {
       return resolved > 0
-          ? "✅ Resolved " + resolved + " ThrillhouseBot finding thread(s)."
-          : "No open ThrillhouseBot finding threads to resolve.";
+          ? OutdatedOutputHider.RESOLVED_OPENING
+              + resolved
+              + OutdatedOutputHider.FINDING_THREADS
+              + "."
+          : OutdatedOutputHider.NOTHING_TO_RESOLVE_NOTICE;
     }
     var leftOpen = " could not be resolved and stay(s) open; the bot's log has GitHub's reason.";
     return resolved > 0
-        ? "✅ Resolved "
+        ? OutdatedOutputHider.RESOLVED_OPENING
             + resolved
-            + " ThrillhouseBot finding thread(s). ⚠️ "
+            + OutdatedOutputHider.FINDING_THREADS
+            + ". ⚠️ "
             + failed
             + " more"
             + leftOpen
-        : "⚠️ " + failed + " ThrillhouseBot finding thread(s)" + leftOpen;
+        : OutdatedOutputHider.LEFT_OPEN_OPENING
+            + failed
+            + OutdatedOutputHider.FINDING_THREADS
+            + leftOpen;
   }
 
   private void handlePause(CommandContext ctx, String auth) {
@@ -571,7 +580,8 @@ public class CommentCommandService {
     postComment(
         auth,
         ctx,
-        "⏸️ ThrillhouseBot is now paused on this PR — automatic and manual reviews are silenced. "
+        OutdatedOutputHider.PAUSE_OPENING
+            + "now paused on this PR — automatic and manual reviews are silenced. "
             + "Comment `/resume` to re-enable.");
   }
 
@@ -608,8 +618,8 @@ public class CommentCommandService {
         auth,
         ctx,
         wasPaused
-            ? "▶️ ThrillhouseBot resumed on this PR. Comment `/review` to run a review now."
-            : "ThrillhouseBot was not paused on this PR.");
+            ? OutdatedOutputHider.RESUMED_NOTICE + " Comment `/review` to run a review now."
+            : OutdatedOutputHider.NOT_PAUSED_NOTICE);
   }
 
   /**
@@ -660,7 +670,7 @@ public class CommentCommandService {
     postComment(
         auth,
         ctx,
-        "🚫 `"
+        OutdatedOutputHider.DISABLED_OPENING
             + command
             + "` is disabled on this ThrillhouseBot deployment. An administrator can turn it back"
             + " on with `thrillhousebot.review."
@@ -675,7 +685,7 @@ public class CommentCommandService {
    * caller cannot support.
    */
   private static String noOutputNotice(String command) {
-    return "🤖 ThrillhouseBot has no `"
+    return OutdatedOutputHider.NO_OUTPUT_OPENING
         + command
         + "` output to post for this PR — it found nothing to suggest, or the generation did not"
         + " complete. Re-run `"

@@ -61,6 +61,7 @@ class CiHoldRevisitTest {
   private final CheckRunManager checkRunManager = mock(CheckRunManager.class);
   private final ReviewPublisher reviewPublisher = mock(ReviewPublisher.class);
   private final CiHoldRegistry registry = new CiHoldRegistry();
+  private final OutdatedOutputHider outdatedOutput = mock(OutdatedOutputHider.class);
   private final ReviewSkipEmitter skipEmitter =
       new ReviewSkipEmitter(io.opentelemetry.api.OpenTelemetry.noop());
 
@@ -93,7 +94,8 @@ class CiHoldRevisitTest {
             checkRunManager,
             reviewPublisher,
             registry,
-            labelGate);
+            labelGate,
+            outdatedOutput);
     when(authClient.getAuthHeader(123L, "repo")).thenReturn(AUTH);
     when(contextLoader.currentHeadSha(eq(AUTH), any())).thenReturn(Optional.of(HEAD));
   }
@@ -227,6 +229,21 @@ class CiHoldRevisitTest {
     assertEquals("Approved ✅", update.getValue().title());
     assertEquals(DETAILS_URL, update.getValue().detailsUrl());
     assertTrue(registry.heldAt("owner", "repo", 42, HEAD).isEmpty());
+    verify(outdatedOutput).hide(eq(AUTH), any(), any(), eq(List.of()), eq(List.of()));
+  }
+
+  @Test
+  void aFailedTidyUpAfterTheApprovalIsSwallowed() {
+    hold();
+    when(ciStatusEvaluator.evaluate(AUTH, "owner", "repo", HEAD, "main")).thenReturn(green());
+    doThrow(new RuntimeException("boom"))
+        .when(outdatedOutput)
+        .hide(any(), any(), any(), any(), any());
+
+    revisit.revisit(RECHECK);
+
+    verify(checkRunManager).updateCheckRun(any());
+    assertTrue(registry.heldAt("owner", "repo", 42, HEAD).isEmpty());
   }
 
   @Test
@@ -264,6 +281,7 @@ class CiHoldRevisitTest {
         update.getValue().summary());
     assertTrue(update.getValue().summary().endsWith(CiHoldRevisit.REVISIT_NOTE));
     assertTrue(registry.heldAt("owner", "repo", 42, HEAD).isPresent());
+    verifyNoInteractions(outdatedOutput);
   }
 
   @Test

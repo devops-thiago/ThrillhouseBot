@@ -21,6 +21,7 @@ import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -70,6 +71,7 @@ public class CiHoldRevisit {
   private final ReviewPublisher reviewPublisher;
   private final CiHoldRegistry registry;
   private final PullRequestLabelGate labelGate;
+  private final OutdatedOutputHider outdatedOutput;
 
   @Inject
   public CiHoldRevisit(
@@ -80,7 +82,9 @@ public class CiHoldRevisit {
       CheckRunManager checkRunManager,
       ReviewPublisher reviewPublisher,
       CiHoldRegistry registry,
-      PullRequestLabelGate labelGate) {
+      PullRequestLabelGate labelGate,
+      OutdatedOutputHider outdatedOutput) {
+    this.outdatedOutput = outdatedOutput;
     this.authClient = authClient;
     this.contextLoader = contextLoader;
     this.ciStatusEvaluator = ciStatusEvaluator;
@@ -119,6 +123,7 @@ public class CiHoldRevisit {
   }
 
   private void reevaluate(Recheck task, CiHoldRegistry.HeldVerdict verdict) {
+    var startedAt = Instant.now();
     var auth = authClient.getAuthHeader(task.installationId(), task.repo());
     var req =
         new ReviewOrchestrator.ReviewRequest(
@@ -225,6 +230,21 @@ public class CiHoldRevisit {
           task.repo(),
           task.prNumber(),
           verdict.checkRunId());
+    }
+    hideOutdated(auth, req, startedAt);
+  }
+
+  /** The approval supersedes the review that held it back; best-effort like the check run. */
+  private void hideOutdated(String auth, ReviewOrchestrator.ReviewRequest req, Instant startedAt) {
+    try {
+      outdatedOutput.hide(auth, req, startedAt, List.of(), List.of());
+    } catch (RuntimeException e) {
+      Log.warnf(
+          e,
+          "Posted the held approval for %s/%s #%d, but hiding the outdated output failed",
+          req.owner(),
+          req.repo(),
+          req.prNumber());
     }
   }
 

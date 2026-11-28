@@ -714,6 +714,10 @@ public interface ThrillhouseConfig {
     @WithName("summary-ribbon")
     SummaryRibbonConfig summaryRibbon();
 
+    /** Minimizing of the bot's superseded comments and reviews (#1441). */
+    @WithName("hide-outdated")
+    HideOutdatedConfig hideOutdated();
+
     @WithName("large-pr-nudge")
     LargePrNudgeConfig largePrNudge();
 
@@ -1107,6 +1111,16 @@ public interface ThrillhouseConfig {
      * risk table when there is no critical or high finding.
      */
     @WithDefault("true")
+    boolean enabled();
+  }
+
+  /**
+   * Opt-in tidying of a pull request after each review (#1441): the bot's superseded reviews,
+   * summaries and status notices are minimized as outdated. Nothing is deleted.
+   */
+  interface HideOutdatedConfig {
+    /** Minimize the bot's superseded comments and reviews after posting a review. */
+    @WithDefault("false")
     boolean enabled();
   }
 

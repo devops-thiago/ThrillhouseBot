@@ -780,6 +780,26 @@ Where the bot's approval counts towards a required review, also turn on
 branch protection rule or ruleset, so GitHub drops it on the push whatever
 happens to the bot.
 
+### Hiding outdated output
+
+With `REVIEW_HIDE_OUTDATED_ENABLED` on, each posted review is followed by a
+tidy-up of what the bot wrote before. It minimizes these as outdated, and a
+reader can still expand every one of them:
+
+- earlier reviews that have a body;
+- summary comments other than the newest;
+- status notices and command acknowledgements posted before the review started,
+  such as a failure notice or the answer to `/resolve`;
+- the root comment of a thread whose finding is addressed when GitHub would not
+  resolve the thread.
+
+The same tidy-up follows an approval that was held back for CI and posted once it
+turned green. The newest summary, the newest review, a request for changes that
+still stands, the newest review body that describes a still-open finding in full,
+open threads, answers to `/describe`, `/help` and other requests for content, and
+everything other people wrote stay as they are. A refusal from GitHub is logged
+with its reason and the review is unaffected.
+
 ### Summary comment
 
 The summary keeps its long sections folded: **Changes Overview**, **Changed

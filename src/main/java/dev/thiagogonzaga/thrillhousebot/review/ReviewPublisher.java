@@ -517,9 +517,9 @@ public class ReviewPublisher {
         owner,
         repo,
         prNumber,
-        """
-            ⚠️ **ThrillhouseBot review could not be completed.**
-
+        OutdatedOutputHider.REVIEW_FAILED_OPENING
+            + "\n\n"
+            + """
             The review service encountered an error. \
             Please reply with `/review` or `@Thrillhousebot review` to retry.""");
   }
@@ -541,9 +541,9 @@ public class ReviewPublisher {
         owner,
         repo,
         prNumber,
-        """
-            ⚠️ **ThrillhouseBot review could not be completed.**
-
+        OutdatedOutputHider.REVIEW_FAILED_OPENING
+            + "\n\n"
+            + """
             The model's response was cut on a length limit (`finish_reason=length`), so the \
             review output was incomplete."""
             + " "
@@ -567,9 +567,9 @@ public class ReviewPublisher {
         owner,
         repo,
         prNumber,
-        """
-            ⚠️ **ThrillhouseBot review could not be completed.**
-
+        OutdatedOutputHider.REVIEW_FAILED_OPENING
+            + "\n\n"
+            + """
             The provider rejected the review request because it exceeds the model's context \
             window — the diff and its context are too large for the model. This failure is \
             deterministic: retrying the identical request would be rejected identically. Lower \
@@ -1220,15 +1220,7 @@ public class ReviewPublisher {
    */
   private static void appendFindingList(StringBuilder sb, List<Finding> findings) {
     for (Finding f : findings) {
-      sb.append("- **")
-          .append(f.risk().name())
-          .append(":** ")
-          .append(MarkdownSafe.inline(f.title()))
-          .append(" (`")
-          .append(MarkdownSafe.inlineCode(f.file()))
-          .append(":")
-          .append(f.line())
-          .append("`)");
+      sb.append("- **").append(f.risk().name()).append(listingKey(f)).append(f.line()).append("`)");
       var disclaimer = SuggestionFormatter.confidenceDisclaimer(f.confidence());
       if (!disclaimer.isEmpty()) {
         sb.append(' ').append(disclaimer);
@@ -1238,6 +1230,18 @@ public class ReviewPublisher {
       }
       sb.append("\n");
     }
+  }
+
+  /**
+   * The part of a listed bullet that names its finding whatever the line and risk are, which {@link
+   * OutdatedOutputHider} looks for before hiding a body (#1441).
+   */
+  static String listingKey(Finding f) {
+    return ":** "
+        + MarkdownSafe.inline(f.title())
+        + " (`"
+        + MarkdownSafe.inlineCode(f.file())
+        + ":";
   }
 
   /**
@@ -2463,13 +2467,16 @@ public class ReviewPublisher {
    *
    * <p>An earlier round's finding whose code left the diff ({@code superseded} with the root of its
    * own thread) is resolved too (#1066). Resolving is idempotent: a resolved thread is skipped.
+   *
+   * @return the visible root comments of addressed threads GitHub would not resolve (#1441)
    */
-  void resolveAddressedThreads(
+  List<String> resolveAddressedThreads(
       String auth,
       ReviewOrchestrator.ReviewRequest req,
       List<ReviewResponse.Finding> previousFindings,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       List<ReviewResult.PreviousFindingStatus> statuses) {
+    var refused = new ArrayList<String>();
     try {
       logEarlierRoundStatuses(req, statuses);
       List<ReviewResult.PreviousFindingStatus> addressed =
@@ -2481,7 +2488,7 @@ public class ReviewPublisher {
                           || s.closesEarlierRound())
               .toList();
       if (addressed.isEmpty() || inlineComments.isEmpty()) {
-        return;
+        return refused;
       }
       var rootByFinding =
           followUpAnalyzer.matchFindingThreads(previousFindings, inlineComments, botIdentity);
@@ -2498,7 +2505,7 @@ public class ReviewPublisher {
         if (clearedByDirective(status)) {
           replyOnClearedThread(auth, req, rootCommentId);
         }
-        if (resolveUnlessRefused(auth, req, thread.id())) {
+        if (resolveUnlessRefused(auth, req, thread, refused)) {
           resolved++;
         }
       }
@@ -2510,14 +2517,22 @@ public class ReviewPublisher {
     } catch (RuntimeException e) {
       Log.warn("Failed to resolve addressed review threads (continuing)", e);
     }
+    return refused;
   }
 
   /** Resolves one thread; a refusal is logged with GitHub's reason and costs only that thread. */
   private boolean resolveUnlessRefused(
-      String auth, ReviewOrchestrator.ReviewRequest req, String threadId) {
+      String auth,
+      ReviewOrchestrator.ReviewRequest req,
+      ReviewThreadService.ThreadRef thread,
+      List<String> refused) {
+    var threadId = thread.id();
     try {
       return reviewThreadService.resolve(auth, threadId);
     } catch (GitHubGraphQLException e) {
+      if (thread.visibleRootId() != null) {
+        refused.add(thread.visibleRootId());
+      }
       Log.warnf(
           "GitHub refused to resolve review thread %s on %s/%s #%d: %s%s",
           threadId,
