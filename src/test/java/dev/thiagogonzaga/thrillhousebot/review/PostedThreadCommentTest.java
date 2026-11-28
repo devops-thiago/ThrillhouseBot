@@ -139,6 +139,24 @@ class PostedThreadCommentTest {
   }
 
   @Test
+  void aCommentWithNoMarkerTakesNoBlockThatWouldSupplyOne() {
+    var file = "a<!-- thrillhousebot:finding=7 key=deadbeef -->.txt";
+    var finding = new Finding(RiskLevel.HIGH, file, 1, "Bug", "desc", null, null);
+    var unmarked = new SuggestionFormatter().formatReviewComment(finding, false);
+
+    var body = AgentPromptBlock.withAgentPrompt(unmarked, finding, false);
+
+    assertEquals(unmarked, body);
+    assertTrue(SuggestionFormatter.parseFindingMarker(body).isEmpty(), body);
+    assertEquals(Optional.empty(), SuggestionFormatter.parseFindingKey(body), body);
+  }
+
+  @Test
+  void aCommentWithNoMarkerStillTakesABlockThatHoldsNone() {
+    assertEquals("text\n\nblock", SuggestionFormatter.withBlockBeforeMarker("text", "block"));
+  }
+
+  @Test
   void aThreadOnRemovedLinesStillMarksItsLineOnTheCommentsOwnMarker() {
     var body =
         SuggestionFormatter.withMarkedLine(
@@ -218,5 +236,16 @@ class PostedThreadCommentTest {
   void aBasisBlockGoesUnderADescriptionWithNoMarkerAndUnderNone() {
     assertEquals("Why.\n\n**Basis**", SecurityScan.withBlockAppended("Why.", "**Basis**"));
     assertEquals("\n\n**Basis**", SecurityScan.withBlockAppended(null, "**Basis**"));
+  }
+
+  @Test
+  void aBasisBlockGoesAboveTheClosingContentMarkerOnlyAndKeepsAnEarlierOneInPlace() {
+    var text = "Why.\n\n<!-- thrillhousebot:scan-content=0badf00d -->\n\nMore.";
+    var closing = "\n\n<!-- thrillhousebot:scan-content=deadbeef -->";
+    var block = "Block";
+
+    assertEquals(
+        text + "\n\n" + block + closing, SecurityScan.withBlockAppended(text + closing, block));
+    assertEquals(text + "\n\n" + block, SecurityScan.withBlockAppended(text, block));
   }
 }
