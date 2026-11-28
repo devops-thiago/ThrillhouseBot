@@ -269,6 +269,13 @@ Prices used for cost tracking, keyed by model name (the `AI_MODEL` value) like t
 |---|---|---|---|
 | `REVIEW_SUMMARY_COLLAPSE_ENABLED`<br>`thrillhousebot.review.summary-collapse.enabled` | Fold the change totals, the changed-files table and the previous-findings counts, and the risk table when there is no critical or high finding. | boolean | `true` |
 
+## `thrillhousebot.review.summary-ribbon`
+
+| Variable | Description | Type | Default |
+|---|---|---|---|
+| `REVIEW_SUMMARY_RIBBON_ENABLED`<br>`thrillhousebot.review.summary-ribbon.enabled` | Show the verdict, the severity counts, the change facts and a one-sentence purpose. | boolean | `true` |
+| `REVIEW_SUMMARY_IMPACT_LINE_ENABLED`<br>`thrillhousebot.review.summary-ribbon.impact-line` | Add a line naming the highest severity still open. | boolean | `false` |
+
 ## `thrillhousebot.review.ticket-context`
 
 | Variable | Description | Type | Default |

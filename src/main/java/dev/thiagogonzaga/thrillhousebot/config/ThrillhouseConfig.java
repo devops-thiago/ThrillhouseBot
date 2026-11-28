@@ -710,6 +710,10 @@ public interface ThrillhouseConfig {
     @WithName("summary-collapse")
     SummaryCollapseConfig summaryCollapse();
 
+    /** The ribbon under the summary title (#1446, #1450). */
+    @WithName("summary-ribbon")
+    SummaryRibbonConfig summaryRibbon();
+
     @WithName("large-pr-nudge")
     LargePrNudgeConfig largePrNudge();
 
@@ -1079,6 +1083,18 @@ public interface ThrillhouseConfig {
      */
     @WithDefault("false")
     boolean enabled();
+  }
+
+  /** The scannable block under the summary title (#1446, #1450). No model call. */
+  interface SummaryRibbonConfig {
+    /** Show the verdict, the severity counts, the change facts and a one-sentence purpose. */
+    @WithDefault("true")
+    boolean enabled();
+
+    /** Add a line naming the highest severity still open. */
+    @WithName("impact-line")
+    @WithDefault("false")
+    boolean impactLine();
   }
 
   /**

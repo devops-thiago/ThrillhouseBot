@@ -2101,8 +2101,7 @@ class VerdictBuilderTest {
     var result = realSummaryBuilder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, FULL_COVERAGE);
 
     assertTrue(
-        result
-            .summaryMarkdown()
+        belowRibbon(result.summaryMarkdown())
             .startsWith(
                 PrSummaryGenerator.SUMMARY_HEADING
                     + "\n\n> **AI review scope:** 1 file excluded from AI review by the ignore"
@@ -2149,8 +2148,7 @@ class VerdictBuilderTest {
 
     assertEquals(ReviewState.APPROVE, result.reviewState());
     assertTrue(
-        result
-            .summaryMarkdown()
+        belowRibbon(result.summaryMarkdown())
             .startsWith(
                 PrSummaryGenerator.SUMMARY_HEADING
                     + "\n\n> **AI review scope:** 1 pure rename omitted from AI review "
@@ -2176,8 +2174,7 @@ class VerdictBuilderTest {
     var result = realSummaryBuilder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, FULL_COVERAGE);
 
     assertTrue(
-        result
-            .summaryMarkdown()
+        belowRibbon(result.summaryMarkdown())
             .startsWith(
                 PrSummaryGenerator.SUMMARY_HEADING
                     + "\n\n> **AI review scope:** 2 ignore globs declared in this repository's"
@@ -2209,8 +2206,7 @@ class VerdictBuilderTest {
     var result = scanning.build(ctx, CLEAN_RESPONSE, CI_CLEAR, FULL_COVERAGE);
 
     assertTrue(
-        result
-            .summaryMarkdown()
+        belowRibbon(result.summaryMarkdown())
             .startsWith(
                 PrSummaryGenerator.SUMMARY_HEADING
                     + "\n\n> **AI review scope:** 1 line the security scan matched was not"
@@ -2246,8 +2242,7 @@ class VerdictBuilderTest {
     var result = realSummaryBuilder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, FULL_COVERAGE);
 
     assertTrue(
-        result
-            .summaryMarkdown()
+        belowRibbon(result.summaryMarkdown())
             .startsWith(
                 PrSummaryGenerator.SUMMARY_HEADING
                     + "\n\n> **AI review scope:** 1 ignore glob declared in this repository's"
@@ -2276,8 +2271,7 @@ class VerdictBuilderTest {
     var result = realSummaryBuilder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, FULL_COVERAGE);
 
     assertTrue(
-        result
-            .summaryMarkdown()
+        belowRibbon(result.summaryMarkdown())
             .startsWith(
                 PrSummaryGenerator.SUMMARY_HEADING
                     + "\n\n> **AI review scope:** the configured coverage artifact was not read:"
@@ -2308,8 +2302,7 @@ class VerdictBuilderTest {
             contextWithUnmatchedGlobs(List.of()), CLEAN_RESPONSE, CI_CLEAR, plan);
 
     assertTrue(
-        result
-            .summaryMarkdown()
+        belowRibbon(result.summaryMarkdown())
             .startsWith(
                 PrSummaryGenerator.SUMMARY_HEADING
                     + "\n\n> **AI review scope:** this review ran at a lower reasoning effort after"
@@ -2342,8 +2335,7 @@ class VerdictBuilderTest {
             contextWithUnmatchedGlobs(List.of()), CLEAN_RESPONSE, CI_CLEAR, stoppedOnly);
 
     assertTrue(
-        result
-            .summaryMarkdown()
+        belowRibbon(result.summaryMarkdown())
             .startsWith(
                 PrSummaryGenerator.SUMMARY_HEADING
                     + "\n\n> **AI review scope:** a model call spent its whole output allowance"
@@ -2384,8 +2376,7 @@ class VerdictBuilderTest {
     var result = realSummaryBuilder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
 
     assertTrue(
-        result
-            .summaryMarkdown()
+        belowRibbon(result.summaryMarkdown())
             .startsWith(
                 PrSummaryGenerator.SUMMARY_HEADING
                     + "\n\n> **AI review scope:** 1 ignore glob declared in this repository's"
@@ -2427,6 +2418,18 @@ class VerdictBuilderTest {
   private static ReviewContextLoader.ReviewContext contextCarrying(
       List<String> unmatched, SupersededFindingsCarryover.Carried carried) {
     return scopedContext(unmatched, carried, "");
+  }
+
+  /**
+   * The summary with its ribbon cut out, after asserting that the ribbon opens it: the review-scope
+   * note follows the ribbon.
+   */
+  private static String belowRibbon(String summary) {
+    var heading = PrSummaryGenerator.SUMMARY_HEADING + "\n\n";
+    var end = SummaryRibbon.END + "\n\n";
+    var ribbonEnd = summary.indexOf(end);
+    assertTrue(summary.startsWith(heading + "**") && ribbonEnd > 0, summary);
+    return heading + summary.substring(ribbonEnd + end.length());
   }
 
   /** The same one-file context, carrying only a refused coverage artifact's reason (#813). */
