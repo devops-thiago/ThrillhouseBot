@@ -26,9 +26,19 @@ const FENCE = /^ {0,3}(`{3,}|~{3,})/;
  * Each `## [name]` section of a changelog, keyed by name, with trailing blank lines dropped. A
  * `## [name]` line inside a fenced code block is text of the section around it, not a heading. A
  * fence that is never closed hides nothing: every heading then counts, so a stray fence cannot
- * take the released sections after it out of the check.
+ * take the released sections after it out of the check. A name that heads more than one section
+ * keeps the text of all of them, in file order, so no copy stands in for another.
  */
 export function changelogSections(text) {
+  return parse(text).sections;
+}
+
+/** The section names of a changelog that head more than one section. */
+export function repeatedSections(text) {
+  return parse(text).repeated;
+}
+
+function parse(text) {
   const lines = text.split(/\r?\n/);
   return sectionsOf(lines, true) ?? sectionsOf(lines, false);
 }
@@ -36,10 +46,16 @@ export function changelogSections(text) {
 /** The sections of {@code lines}, or null when fences are honoured and one is left open. */
 function sectionsOf(lines, honourFences) {
   const sections = new Map();
+  const repeated = new Set();
   let name = null;
   let body = [];
   let fence = null;
-  const close = () => { if (name !== null) sections.set(name, body.join('\n').trimEnd()); };
+  const close = () => {
+    if (name === null) return;
+    const text = body.join('\n').trimEnd();
+    if (sections.has(name)) repeated.add(name);
+    sections.set(name, sections.has(name) ? `${sections.get(name)}\n\n${text}` : text);
+  };
   for (const line of lines) {
     const marker = honourFences ? FENCE.exec(line)?.[1] : undefined;
     if (fence === null) {
@@ -53,18 +69,26 @@ function sectionsOf(lines, honourFences) {
   }
   if (fence !== null) return null;
   close();
-  return sections;
+  return { sections, repeated };
 }
 
-/** The released sections of {@code base} that {@code head} removed or changed. */
+/**
+ * The released sections of {@code base} that {@code head} removed, changed or repeated. A second
+ * section under a released heading is a change to that release wherever it is put, so it is
+ * reported even when one of the copies still matches the base.
+ */
 export function changelogViolations(base, head, released) {
-  const before = changelogSections(base);
-  const after = changelogSections(head);
+  const before = parse(base);
+  const after = parse(head);
   const violations = [];
-  for (const [name, text] of before) {
+  for (const [name, text] of before.sections) {
     if (!released.has(name)) continue;
-    if (!after.has(name)) violations.push(`CHANGELOG.md: the released section [${name}] was removed or renamed`);
-    else if (after.get(name) !== text) violations.push(`CHANGELOG.md: the released section [${name}] was changed`);
+    if (!after.sections.has(name)) violations.push(`CHANGELOG.md: the released section [${name}] was removed or renamed`);
+    else if (after.sections.get(name) !== text) {
+      violations.push(after.repeated.has(name) && !before.repeated.has(name)
+        ? `CHANGELOG.md: the released section [${name}] appears more than once`
+        : `CHANGELOG.md: the released section [${name}] was changed`);
+    }
   }
   return violations;
 }

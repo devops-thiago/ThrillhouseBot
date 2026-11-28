@@ -3,6 +3,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { changelogSections, repeatedSections } from '../released-history/check.mjs';
 
 // Rules the workflows and the files around them are held to. They are read as text, the way a
 // reviewer reads them, so a rule that stops holding fails here with the file and the line.
@@ -144,6 +145,132 @@ test('the test image job that can write to the registry runs no build from the c
     }
     if (name !== 'build-push' && /mvnw|npm /.test(text)) assert.doesNotMatch(text, /docker\/login-action/, `${name} builds and logs in to the registry`);
   }
+});
+
+test('a gh command in a job with no checkout names the repository', () => {
+  for (const path of workflows) {
+    for (const [name, job] of jobsOf(path)) {
+      if (job.includes('actions/checkout@') || /^\s+GH_REPO:/m.test(job)) continue;
+      for (const line of job.split('\n').filter((text) => /(?:^|[\s(])gh (?:pr|issue|release|run|workflow|label|cache) /.test(text) && !text.trim().startsWith('#'))) {
+        assert.match(line, / (?:--repo|-R) "\$(?:REPO|GITHUB_REPOSITORY|\{GITHUB_REPOSITORY\})"/, `${path} job ${name}: '${line.trim()}' has no git remote to read the repository from`);
+      }
+    }
+  }
+  const comment = stepsOf(jobsOf('.github/workflows/docker-test-image.yml').get('build-push')).find((step) => step.includes('name: Comment on PR'));
+  assert.match(comment, /^\s+gh pr comment "\$PR" --repo "\$GITHUB_REPOSITORY" /m);
+});
+
+test('the released-history check reads the test merge of the head it was started for', () => {
+  const path = '.github/workflows/released-history.yml';
+  const text = read(path);
+  assert.match(text, /^ {2}pull_request_target:$/m);
+  assert.match(text, /^permissions:\n {2}contents: read\n\njobs:/m, 'the workflow token can do more than read');
+  const job = jobsOf(path).get('released-history');
+  assert.doesNotMatch(job, /^\s+permissions:/m);
+  // Only the default checkout: the pull request reaches the job as git objects, never as files.
+  const checkouts = stepsOf(job).filter((step) => step.includes('actions/checkout@'));
+  assert.equal(checkouts.length, 1);
+  assert.doesNotMatch(checkouts[0], /^\s+(?:ref|repository):/m, 'the checkout names a ref');
+  assert.doesNotMatch(job, /git (?:checkout|switch|worktree|merge|pull|reset)\b|gh pr checkout|npm |\bnpx\b/, 'the job checks out or runs something from the pull request');
+  const fetch = stepsOf(job).find((step) => step.includes('refs/pull/${PR_NUMBER}/merge'));
+  assert.match(fetch, /^\s+PR_HEAD_SHA: \$\{\{ github\.event\.pull_request\.head\.sha \}\}$/m);
+  assert.doesNotMatch(fetch.slice(fetch.indexOf('run: |')), /\$\{\{/, 'the script interpolates an expression');
+  assert.match(fetch, /merged_head=\$\(git rev-parse --verify --quiet "refs\/remotes\/pull\/merge\^2"/);
+  const guard = fetch.indexOf('if [ "$merged_head" != "$PR_HEAD_SHA" ]; then');
+  assert.ok(guard > 0 && fetch.slice(guard).search(/\n\s+exit 1\n/) > 0, 'a test merge of another head is not refused');
+  assert.ok(guard < fetch.indexOf('>> "$GITHUB_ENV"'), 'the merge is handed on before its head is compared');
+  assert.match(job, /run: BASE_SHA="\$MERGE_BASE_SHA" HEAD_SHA="\$MERGE_SHA" node scripts\/released-history\/check\.mjs$/m);
+});
+
+const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+// An ATX heading of level three: up to three spaces, `###`, then its text or the end of the line.
+const SUBHEADING = /^ {0,3}###(?:[ \t]+(.*))?$/;
+// What opens a block quote or a list item: `>`, a bullet or a number, each up to three spaces in.
+const CONTAINER = /^ {0,3}(?:>[ \t]?|(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|$))/;
+
+/** {@code line} without the block quote and list markers it starts with, however many are nested. */
+function withoutContainers(line) {
+  let text = line;
+  for (let match = CONTAINER.exec(text); match; match = CONTAINER.exec(text)) text = text.slice(match[0].length);
+  return text;
+}
+
+/**
+ * The level-three headings of a changelog section, leaving out the ones inside a fenced code
+ * block. A heading may start up to three spaces in and may end with a closing run of `#`. A
+ * heading or a fence that opens a block quote or a list item is read as one, since GitHub shows
+ * a heading there too. A fence that is never closed hides nothing: every heading then counts,
+ * so a stray fence cannot take the headings after it out of the check.
+ */
+function subheadingsOf(section) {
+  const lines = section.split('\n');
+  return subheadingsIn(lines, true) ?? subheadingsIn(lines, false);
+}
+
+/** The headings of {@code lines}, or null when fences are honoured and one is left open. */
+function subheadingsIn(lines, honourFences) {
+  const headings = [];
+  let fence = null;
+  for (const line of lines) {
+    const text = withoutContainers(line);
+    const marker = honourFences ? FENCE.exec(text)?.[1] : undefined;
+    if (fence === null) {
+      if (marker) fence = marker;
+      else headings.push(...subheadingOf(text));
+    } else if (marker && marker[0] === fence[0] && marker.length >= fence.length && text.trim() === marker) {
+      fence = null;
+    }
+  }
+  return fence === null ? headings : null;
+}
+
+/** The heading text of {@code line} in a list of one, or an empty list when it is no heading. */
+function subheadingOf(line) {
+  const match = SUBHEADING.exec(line.trimEnd());
+  return match ? [(match[1] ?? '').replace(/(?:^|[ \t]+)#+$/, '').trim()] : [];
+}
+
+const repeatedIn = (values) => [...new Set(values.filter((value, index) => values.indexOf(value) !== index))];
+
+test('the changelog names each version once, and each kind of change once in the unreleased section', () => {
+  const changelog = read('CHANGELOG.md');
+  assert.deepEqual([...repeatedSections(changelog)], [], 'CHANGELOG.md has two sections for one version');
+  // Released sections stay as they shipped, so only the unreleased one is held to this.
+  assert.deepEqual(repeatedIn(subheadingsOf(changelogSections(changelog).get('Unreleased'))), [], 'CHANGELOG.md: [Unreleased] has a heading twice; merge the two lists');
+});
+
+test('a repeated changelog heading is found outside fenced examples only', () => {
+  const section = ['## [Unreleased]', '', '### Fixed', '- a', '', '```md', '### Fixed', '```', '', '~~~', '```', '### Security', '~~~', '', '### Security', '- b', '', '### Fixed', '- c'].join('\n');
+  assert.deepEqual(subheadingsOf(section), ['Fixed', 'Security', 'Fixed']);
+  assert.deepEqual(repeatedIn(subheadingsOf(section)), ['Fixed']);
+});
+
+test('an unclosed fence hides no changelog heading', () => {
+  const heading = '### Security';
+  const section = ['## [Unreleased]', '', heading, '- a', '', '```', '', heading, '- b'].join('\n');
+  assert.deepEqual(subheadingsOf(section), ['Security', 'Security']);
+  assert.deepEqual(repeatedIn(subheadingsOf(section)), ['Security']);
+  // A fence that is closed after all still hides what is inside it.
+  assert.deepEqual(subheadingsOf(`${section}\n\`\`\``), ['Security']);
+});
+
+test('a changelog heading counts with up to three spaces before it', () => {
+  const section = ['### Fixed', ' ### Fixed', '  ### Added', '   ### Security', '    ### Changed', '\t### Changed', '#### Removed', '###Removed',
+    '  #1318): wrapped text', '###\tSecurity', '### Added ###', '### Fixed\r', '###'].join('\n');
+  assert.deepEqual(subheadingsOf(section), ['Fixed', 'Fixed', 'Added', 'Security', 'Security', 'Added', 'Fixed', '']);
+  assert.deepEqual(repeatedIn(subheadingsOf(section)), ['Fixed', 'Security', 'Added']);
+});
+
+test('a changelog heading counts inside a block quote or a list item', () => {
+  const section = ['### Fixed', '> ### Fixed', '- ### Security', '1. ### Security', '> - ### Added', '* text', '- #1318): text', '>### Changed'].join('\n');
+  assert.deepEqual(subheadingsOf(section), ['Fixed', 'Fixed', 'Security', 'Security', 'Added', 'Changed']);
+  assert.deepEqual(repeatedIn(subheadingsOf(section)), ['Fixed', 'Security']);
+});
+
+test('a fence that opens a list item or a block quote hides the headings inside it', () => {
+  const section = ['### Fixed', '- ```md', '  ### Fixed', '  ```', '> ~~~', '> ### Security', '> ~~~', '### Security'].join('\n');
+  assert.deepEqual(subheadingsOf(section), ['Fixed', 'Security']);
+  assert.deepEqual(repeatedIn(subheadingsOf(section)), []);
 });
 
 test('the Maven wrapper checks the distribution it downloads', () => {

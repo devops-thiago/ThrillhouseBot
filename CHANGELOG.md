@@ -74,80 +74,6 @@ cannot resolve its review threads.
   writes no file, commit or branch.
 - **A GitHub Enterprise setup guide**: `docs/GITHUB_ENTERPRISE.md` and a docs-site page say which
   GitHub Enterprise products work and what to set up on GitHub for an organization (#1488).
-### Security
-
-- **Text a model wrote can no longer notify people, post raw HTML or offer its own suggestion**:
-  a finding's title and description, a status note, a file summary, a description gap, a reply and
-  the `/describe` and `/changelog` drafts were posted as the model wrote them, so text steered by a
-  pull request could `@`-mention users and teams, hide content in HTML, forge one of the bot's
-  hidden markers, or add a second `suggestion` block a reader could commit with one click. An `@`
-  that could start a mention is now followed by a zero-width space (`@&#8203;name`), which reads
-  the same and notifies nobody; an `@` directly after a letter or digit, as in an email address,
-  is unchanged, and so is one after a `/` in the path of an `http(s)://` address (bare, as a
-  markdown link's destination, or in `<…>`), where GitHub reads no mention. In descriptions, notes and replies a `<` that could open a tag or comment is
-  escaped, a fenced block marked `suggestion` becomes a plain code block, and an unclosed fence is
-  closed. Code spans and fenced code keep their content byte for byte; a fenced block nested in a
-  list or quote is moved to the top level. A title copied from the rendered summary into an
-  `@thrillhousebot resolved` or `declined` comment still names its finding.
-- **The skip counter on `/metrics` no longer names repositories**: `thrillhouse.review.skips`
-  carried a `repository` label (`owner/repo`), and the Prometheus endpoint is unauthenticated, so
-  anyone who could reach it could list private repository names. The counter keeps `reason` only,
-  over OTLP as well. **Dashboards or alerts that group or filter this metric by `repository` need
-  updating**; the repository and pull request of each skip are still in the
-  `Automatic review skipped` log line.
-- **Dashboard WebSocket access is re-checked with the keepalive off**: `WEBSOCKET_KEEPALIVE_MS=0`
-  also stopped the periodic check of what each open connection may still read, so a login whose
-  access was removed kept receiving events until it disconnected. The check now runs every 25
-  seconds on a timer of its own, whatever the keepalive is set to.
-- **Installation tokens are limited to the repository being worked on**: every token was minted
-  for all repositories of the installation. Reviews, commands, replies, reactions and the other
-  work on one repository now use a token that reaches that repository only, with the same
-  permissions; a refreshed token keeps the same limit. The dashboard backfill, which lists an
-  installation's repositories, and the calls made through the GitHub App extension's own client
-  (repository settings, instructions, permission checks, linked issues, dashboard access) still
-  use installation-wide tokens.
-- **Lines exempted from the security scan are listed in the summary**: a
-  `thrillhousebot:allow-secret` or `thrillhousebot:allow-iac` comment silenced a match with no
-  trace, and anyone who can push to the pull request can write one. The summary's review-scope
-  note now counts the exempted lines and names them by `path:line` and marker, never by content
-  (the first 30 are named, the rest are a count), so a reviewer can check that each one is
-  deliberate.
-- **The hosted installer no longer sends the manifest code to smee.io**: with a Smee channel as
-  the host, GitHub redirected the browser to the channel URL with the one-time `?code=` that
-  converts into the new App's private key and secrets. The redirect now goes to
-  `http://localhost:8080`, as the OAuth callback already did; the webhook stays on the channel.
-- **A file read refuses a path that leaves the repository**: a path from model output or a
-  repository file with a `..` segment or a leading `/` could address another endpoint of the
-  GitHub API with the bot's token. Such a path is now treated as a missing file without a request.
-- **A "Basis" block on each finding** (#1435, off by default): `REVIEW_SHOW_EVIDENCE=true` prints
-  under the description what the review established for it: the path-scoped rules covering the
-  file, the failing check the finding cites, the second pass's verdict, and the review learning
-  that demoted it. Each line is a name, path, id or fixed phrase, and is left out when empty.
-- **GitHub App authentication goes through the Quarkiverse GitHub App extension** (#1314): the
-  extension signs the App JWT, and its application client mints installation tokens and lists the
-  App's installations, so the bot's own JWT signing and the `nimbus-jose-jwt` dependency are gone.
-  Minting a token now takes three GitHub requests instead of one (the App, the installation, then
-  the token), and the installation listing adds one for the App. These calls follow
-  `HTTP_CONNECT_TIMEOUT` and `HTTP_REQUEST_TIMEOUT` (10s each by default) rather than the REST
-  client's settings. They go to `GITHUB_API_URL`. hub4j's response logger is capped at `INFO`: below
-  that it writes out an answer it cannot parse, which for a token request holds the token.
-- **Workflow run, artifact and installation repository listings go through hub4j** (#1314): the
-  patch coverage lookup and the startup scope backfill make them with the same installation token
-  as before, to `GITHUB_API_URL`. The coverage lookup adds one request, to read the repository.
-  These calls follow `HTTP_CONNECT_TIMEOUT` and `HTTP_REQUEST_TIMEOUT` (10s each by default)
-  rather than the REST client's settings.
-- **Artifact and job log downloads and the dashboard's repository listing go through hub4j**
-  (#1314), with the same tokens and to `GITHUB_API_URL`. A job log's address now costs three
-  requests instead of one, as the repository and the job are read first. These calls follow
-  `HTTP_CONNECT_TIMEOUT` and `HTTP_REQUEST_TIMEOUT` rather than the REST client's settings.
-- **Pull request and label reads go through hub4j** (#1314): details, files, comparisons, file
-  contents, trees and labels are read with the same installation token as before, from
-  `GITHUB_API_URL`. hub4j reads the repository first, once per token; listing a pull request's
-  files also reads the pull request; and its labels now come with one read of its issue instead of
-  a paged listing. These calls follow `HTTP_CONNECT_TIMEOUT` and `HTTP_REQUEST_TIMEOUT` rather
-  than the REST client's settings.
-
-
 ### Fixed
 
 - **A review no longer drifts into another language** (#1467): no prompt said which language to
@@ -235,6 +161,76 @@ cannot resolve its review threads.
 
 ### Security
 
+- **Text a model wrote can no longer notify people, post raw HTML or offer its own suggestion**:
+  a finding's title and description, a status note, a file summary, a description gap, a reply and
+  the `/describe` and `/changelog` drafts were posted as the model wrote them, so text steered by a
+  pull request could `@`-mention users and teams, hide content in HTML, forge one of the bot's
+  hidden markers, or add a second `suggestion` block a reader could commit with one click. An `@`
+  that could start a mention is now followed by a zero-width space (`@&#8203;name`), which reads
+  the same and notifies nobody; an `@` directly after a letter or digit, as in an email address,
+  is unchanged, and so is one after a `/` in the path of an `http(s)://` address (bare, as a
+  markdown link's destination, or in `<…>`), where GitHub reads no mention. In descriptions, notes and replies a `<` that could open a tag or comment is
+  escaped, a fenced block marked `suggestion` becomes a plain code block, and an unclosed fence is
+  closed. Code spans and fenced code keep their content byte for byte; a fenced block nested in a
+  list or quote is moved to the top level. A title copied from the rendered summary into an
+  `@thrillhousebot resolved` or `declined` comment still names its finding.
+- **The skip counter on `/metrics` no longer names repositories**: `thrillhouse.review.skips`
+  carried a `repository` label (`owner/repo`), and the Prometheus endpoint is unauthenticated, so
+  anyone who could reach it could list private repository names. The counter keeps `reason` only,
+  over OTLP as well. **Dashboards or alerts that group or filter this metric by `repository` need
+  updating**; the repository and pull request of each skip are still in the
+  `Automatic review skipped` log line.
+- **Dashboard WebSocket access is re-checked with the keepalive off**: `WEBSOCKET_KEEPALIVE_MS=0`
+  also stopped the periodic check of what each open connection may still read, so a login whose
+  access was removed kept receiving events until it disconnected. The check now runs every 25
+  seconds on a timer of its own, whatever the keepalive is set to.
+- **Installation tokens are limited to the repository being worked on**: every token was minted
+  for all repositories of the installation. Reviews, commands, replies, reactions and the other
+  work on one repository now use a token that reaches that repository only, with the same
+  permissions; a refreshed token keeps the same limit. The dashboard backfill, which lists an
+  installation's repositories, and the calls made through the GitHub App extension's own client
+  (repository settings, instructions, permission checks, linked issues, dashboard access) still
+  use installation-wide tokens.
+- **Lines exempted from the security scan are listed in the summary**: a
+  `thrillhousebot:allow-secret` or `thrillhousebot:allow-iac` comment silenced a match with no
+  trace, and anyone who can push to the pull request can write one. The summary's review-scope
+  note now counts the exempted lines and names them by `path:line` and marker, never by content
+  (the first 30 are named, the rest are a count), so a reviewer can check that each one is
+  deliberate.
+- **The hosted installer no longer sends the manifest code to smee.io**: with a Smee channel as
+  the host, GitHub redirected the browser to the channel URL with the one-time `?code=` that
+  converts into the new App's private key and secrets. The redirect now goes to
+  `http://localhost:8080`, as the OAuth callback already did; the webhook stays on the channel.
+- **A file read refuses a path that leaves the repository**: a path from model output or a
+  repository file with a `..` segment or a leading `/` could address another endpoint of the
+  GitHub API with the bot's token. Such a path is now treated as a missing file without a request.
+- **A "Basis" block on each finding** (#1435, off by default): `REVIEW_SHOW_EVIDENCE=true` prints
+  under the description what the review established for it: the path-scoped rules covering the
+  file, the failing check the finding cites, the second pass's verdict, and the review learning
+  that demoted it. Each line is a name, path, id or fixed phrase, and is left out when empty.
+- **GitHub App authentication goes through the Quarkiverse GitHub App extension** (#1314): the
+  extension signs the App JWT, and its application client mints installation tokens and lists the
+  App's installations, so the bot's own JWT signing and the `nimbus-jose-jwt` dependency are gone.
+  Minting a token now takes three GitHub requests instead of one (the App, the installation, then
+  the token), and the installation listing adds one for the App. These calls follow
+  `HTTP_CONNECT_TIMEOUT` and `HTTP_REQUEST_TIMEOUT` (10s each by default) rather than the REST
+  client's settings. They go to `GITHUB_API_URL`. hub4j's response logger is capped at `INFO`: below
+  that it writes out an answer it cannot parse, which for a token request holds the token.
+- **Workflow run, artifact and installation repository listings go through hub4j** (#1314): the
+  patch coverage lookup and the startup scope backfill make them with the same installation token
+  as before, to `GITHUB_API_URL`. The coverage lookup adds one request, to read the repository.
+  These calls follow `HTTP_CONNECT_TIMEOUT` and `HTTP_REQUEST_TIMEOUT` (10s each by default)
+  rather than the REST client's settings.
+- **Artifact and job log downloads and the dashboard's repository listing go through hub4j**
+  (#1314), with the same tokens and to `GITHUB_API_URL`. A job log's address now costs three
+  requests instead of one, as the repository and the job are read first. These calls follow
+  `HTTP_CONNECT_TIMEOUT` and `HTTP_REQUEST_TIMEOUT` rather than the REST client's settings.
+- **Pull request and label reads go through hub4j** (#1314): details, files, comparisons, file
+  contents, trees and labels are read with the same installation token as before, from
+  `GITHUB_API_URL`. hub4j reads the repository first, once per token; listing a pull request's
+  files also reads the pull request; and its labels now come with one read of its issue instead of
+  a paged listing. These calls follow `HTTP_CONNECT_TIMEOUT` and `HTTP_REQUEST_TIMEOUT` rather
+  than the REST client's settings.
 - **An approval is withdrawn when a later review does not approve**: the bot approved a pull
   request, more commits were pushed, and the review of the new head ended as `COMMENT` (findings,
   an earlier finding still open, a CI hold, a partly reviewed diff). GitHub goes on counting an

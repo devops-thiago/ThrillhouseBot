@@ -390,4 +390,5 @@ jobs:
           Tags: \`${TAGS}\`
           EOF
           )
-          gh pr comment "$PR" --body "$body"
+          # This job has no checkout, so gh cannot read the repository from a git remote.
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "$body"
