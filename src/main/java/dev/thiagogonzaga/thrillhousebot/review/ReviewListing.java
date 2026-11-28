@@ -65,6 +65,7 @@ public class ReviewListing {
   static final int APPROVALS_PER_LOGIN = 100;
 
   private static final String NODES = "nodes";
+  private static final String DATABASE_ID = "databaseId";
   private static final String APPROVED = "APPROVED";
   private static final String DISMISSED = "DISMISSED";
 
@@ -163,10 +164,10 @@ public class ReviewListing {
       String login) {
     for (JsonNode node : nodes) {
       // GitHub hands review ids out in order, and the REST dismissal takes this same id.
-      if (node.path("databaseId").isNumber() && seen.add(node.path("databaseId").asLong())) {
+      if (node.path(DATABASE_ID).isNumber() && seen.add(node.path(DATABASE_ID).asLong())) {
         older.add(
             new GitHubReviewClient.ReviewResponse(
-                node.path("databaseId").asLong(),
+                node.path(DATABASE_ID).asLong(),
                 "",
                 state,
                 node.path("commit").path("oid").asText(null),
