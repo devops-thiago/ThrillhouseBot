@@ -1486,7 +1486,11 @@ class PathMentionsTest {
   @MethodSource("urlsBesideACombiningMark")
   void aCombiningMarkIsPartOfAWordOnlyOnALetterOrDigit(String text, List<String> spans) {
     assertEquals(spans, spansBefore(text), () -> "the URLs the pattern found in: " + text);
-    assertEquals(spans, spansNow(text), () -> "the URLs of: " + text);
+    assertSpansAsBefore(text);
+  }
+
+  private static void assertSpansAsBefore(String text) {
+    assertEquals(spansBefore(text), spansNow(text), () -> "the URLs of: " + text);
   }
 
   private static Stream<Arguments> urlsBesideACombiningMark() {
@@ -1510,7 +1514,7 @@ class PathMentionsTest {
         text.append(URL_PIECES[random.nextInt(URL_PIECES.length)]);
       }
       var written = text.toString();
-      assertEquals(spansBefore(written), spansNow(written), () -> "the URLs of: " + written);
+      assertSpansAsBefore(written);
     }
   }
 
@@ -1553,7 +1557,7 @@ class PathMentionsTest {
         text.append(MARK_PIECES[random.nextInt(MARK_PIECES.length)]);
       }
       var written = text.toString();
-      assertEquals(spansBefore(written), spansNow(written), () -> "the URLs of: " + written);
+      assertSpansAsBefore(written);
     }
   }
 
