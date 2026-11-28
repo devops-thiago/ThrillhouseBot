@@ -1401,4 +1401,31 @@ class ReviewResultTest {
     assertTrue(brief.contains("2 finding(s) were severe enough to block on their own"), brief);
     assertTrue(brief.endsWith("."), brief);
   }
+
+  @Test
+  void notHeldOnCiWhenNoStoredEarlierRoundCouldBeRead() {
+    var held =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.COMMENT,
+            false,
+            "",
+            List.of(),
+            PENDING_BUILD,
+            0,
+            false,
+            true,
+            null,
+            0,
+            List.of(),
+            true);
+
+    assertTrue(held.ciHoldsApproval());
+    assertFalse(held.heldOnCiOnly());
+  }
 }

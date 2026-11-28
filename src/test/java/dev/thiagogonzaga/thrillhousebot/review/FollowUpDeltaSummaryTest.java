@@ -84,7 +84,8 @@ class FollowUpDeltaSummaryTest {
         true,
         ReviewResult.TruncationDetail.EMPTY,
         0,
-        openPrevious);
+        openPrevious,
+        false);
   }
 
   private static ReviewResult.PreviousFindingStatus replaced(int id) {

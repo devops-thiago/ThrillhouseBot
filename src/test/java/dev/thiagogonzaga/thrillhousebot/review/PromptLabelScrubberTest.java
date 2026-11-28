@@ -356,7 +356,8 @@ class PromptLabelScrubberTest {
             true,
             null,
             0,
-            List.of(carried));
+            List.of(carried),
+            false);
     var scrubbedOpen = PromptLabelScrubber.scrub(withOpen).openPreviousFindings();
     assertEquals(1, scrubbedOpen.size());
     assertEquals("Race.", scrubbedOpen.getFirst().description());
@@ -382,7 +383,8 @@ class PromptLabelScrubberTest {
             true,
             null,
             0,
-            List.of(carried));
+            List.of(carried),
+            false);
     assertEquals(
         "Race.",
         PromptLabelScrubber.scrub(onlyCarriedLeaks)

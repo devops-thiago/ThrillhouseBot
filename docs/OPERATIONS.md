@@ -95,8 +95,9 @@ one starts. `docker compose up -d` does this. In Kubernetes, use
 Within the one process each review runs on its own virtual thread. Automatic
 reviews are limited per repository: at most `AUTO_REVIEW_MAX_CONCURRENT_PER_REPO`
 (default `4`) run at once, up to `AUTO_REVIEW_MAX_QUEUED_PER_REPO` (default `50`)
-wait for a slot, and one past that is skipped and counted as
-`REPOSITORY_QUEUE_FULL`. Across repositories `AI_MAX_CONCURRENT_CALLS` (default
+wait for a slot, and one past that asks again every 30 seconds and is skipped
+and counted as `REPOSITORY_QUEUE_FULL` after an hour of a full queue, or at once
+when 10,000 pull requests already have a review kept for later. Across repositories `AI_MAX_CONCURRENT_CALLS` (default
 `16`) caps the model calls in flight, and `REVIEW_MAX_TOKENS_PER_REVIEW`
 (default `1000000`) caps what one review spends. A manual `/review` takes no
 repository slot. Setting any of these to `0` turns that limit off; then the

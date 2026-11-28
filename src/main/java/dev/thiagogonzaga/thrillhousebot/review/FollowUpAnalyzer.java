@@ -2503,8 +2503,11 @@ public class FollowUpAnalyzer {
    * may weigh and nothing more: it cannot close a finding, however the model read it.
    *
    * <p>Only a status naming a finding of the previous round is touched; an id outside it names
-   * nothing and closes nothing. A finding declined with a directive on the PR conversation is
-   * restored by {@link #declineNamedInConversation}, which runs on this pass's result.
+   * nothing and closes nothing. A model status never arrives here with one: {@link
+   * ModelStatusScreen} drops a status that names no listed finding as soon as the review call
+   * returns ({@code UnconfirmedDeclineAcrossRoundsTest}). A finding declined with a directive on
+   * the PR conversation is restored by {@link #declineNamedInConversation}, which runs on this
+   * pass's result.
    *
    * <p>The verdict path runs this first, before the supersede pass, so a finding put back to {@code
    * unresolved} whose code has left the diff is superseded like any other; {@link #recheckDeclines}
@@ -3397,8 +3400,11 @@ public class FollowUpAnalyzer {
    * #stillOpenFindings}); a phantom entry made the count exceed the list beside it (#934). Dropping
    * one cannot let APPROVE past an open finding: a previous finding the model did not report under
    * its own id is held by the backstop ({@link #heldPreviousFindings}). With no previous findings
-   * to map ids onto (the review-body fallback, where nothing was persisted) the statuses are the
-   * only hold there is, so they are returned unchanged.
+   * to map ids onto there is nothing to tell a phantom from, so the statuses are returned
+   * unchanged. They hold nothing there either: the status screen ({@link ModelStatusScreen}) has
+   * already dropped every status that names no listed finding. When that is because no stored round
+   * could be read, the verdict is held by {@link
+   * ReviewContextLoader.ReviewContext#priorRoundsUnreadable()} instead.
    *
    * @param previous the effective previous round's findings, the id space of {@code statuses}
    */
@@ -5037,6 +5043,7 @@ public class FollowUpAnalyzer {
         || line.startsWith(ReviewResult.NO_ISSUES_CI_PENDING_LEAD_IN)
         || line.startsWith(ReviewResult.NO_ISSUES_CI_UNREADABLE_LEAD_IN)
         || line.startsWith(ReviewResult.TRUNCATION_NOTICE_LEAD_IN)
+        || line.startsWith(ReviewResult.PRIOR_ROUNDS_UNREADABLE_LEAD_IN)
         || line.startsWith(ZERO_ISSUES_FIRST_LINE);
   }
 

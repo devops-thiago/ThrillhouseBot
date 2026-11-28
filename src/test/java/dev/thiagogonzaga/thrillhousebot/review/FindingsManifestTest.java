@@ -61,7 +61,8 @@ class FindingsManifestTest {
         true,
         null,
         0,
-        openPrevious);
+        openPrevious,
+        false);
   }
 
   private static JsonNode manifest(ReviewResult result) throws Exception {
