@@ -1367,6 +1367,15 @@ class ReviewDispatcherTest {
   }
 
   @Test
+  void droppingTheDeferredReviewOfAPullRequestSaysWhetherOneStillWaited() {
+    deferred.defer(reviewRequest("owner", "repo", 7, "sha1"), Long.MAX_VALUE);
+
+    assertFalse(dispatcher.dropDeferred(new RepoScope(1L, TestScopes.REPOSITORY_ID), 8));
+    assertTrue(dispatcher.dropDeferred(new RepoScope(1L, TestScopes.REPOSITORY_ID), 7));
+    assertTrue(deferred.isEmpty());
+  }
+
+  @Test
   void theDeferredReviewOfAPullRequestCanBeDroppedByScope() {
     deferred.defer(reviewRequest("owner", "repo", 7, "sha1"), Long.MAX_VALUE);
 

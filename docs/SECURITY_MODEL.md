@@ -54,7 +54,8 @@ security limits. To report a vulnerability, see
   does not run if the bot restarts while it waits, if 10,000 pull requests
   already have one kept, if the repository's queue stays full for an hour, if
   the review cannot be started (the executor refuses it, or starting it fails
-  for an hour), or if the pull request is paused meanwhile. If the bot's
+  for an hour), or if the pull request is paused meanwhile, or converted to a
+  draft while drafts are skipped. If the bot's
   approval counts towards a required review, turn on "Dismiss stale pull
   request approvals when new commits are pushed" for the branch.
 - Only the latest release gets security fixes.

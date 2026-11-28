@@ -468,8 +468,10 @@ for an hour after it was first started. Past that, a push held back for another
 pull request is skipped at once, with `reason=RATE_LIMITED` for the window and
 `reason=REPOSITORY_QUEUE_FULL` for the queue. A kept review is also given up,
 and counted as skipped, when the same commit is still being turned away an hour
-after its first start, when the executor refuses it as it comes due, or when
-the PR was paused while it waited.
+after its first start, when the executor refuses it as it comes due, when the
+PR was paused while it waited, or when the PR was converted to a draft while it
+waited and drafts are skipped (`reason=DRAFT`; marking the PR ready reviews
+it).
 
 ### Dimension routing
 

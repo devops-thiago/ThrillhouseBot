@@ -621,7 +621,8 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   entry before it queues, so a request handed back late cannot replace a newer push already queued
   for the pull request's worker. An entry goes on close or merge, on a newer automatic dispatch, on
   an event for the head already reviewed, on an event the
-  pause or trigger filters reject, on `converted_to_draft` when drafts are skipped, on a hand-back
+  pause or trigger filters reject, on `converted_to_draft` when drafts are skipped (a recorded skip when the review
+  still waited), on a hand-back
   that finds the pull request paused or that the executor refuses (both recorded skips), and at
   shutdown; a restart loses them all. Handing an entry out does not remove it: unless one of those
   removes it, it stays, counted towards the 10,000, for an hour after its first hand-out. A new drop path for automatic reviews must defer the same way.

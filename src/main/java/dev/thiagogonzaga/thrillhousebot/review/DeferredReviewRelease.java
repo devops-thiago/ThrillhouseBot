@@ -26,6 +26,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 import java.time.Duration;
+import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -131,31 +132,49 @@ public class DeferredReviewRelease {
     }
   }
 
+  /** A request this pass dropped, to be counted as skipped. */
+  private record Dropped(ReviewSkipReason reason, String detail) {}
+
   private void handBackOrWaitAgain(ReviewOrchestrator.ReviewRequest request) {
+    Optional<Dropped> dropped;
     try {
-      handBack(request);
+      dropped = handBack(request);
     } catch (RuntimeException e) {
-      // Only the entry this pass took waits again: one an event replaced or removed since, or one
-      // dropped just before the throw, is left as it is.
-      var fate = deferred.waitAgain(request, RETRY);
-      Log.warnf(
-          "Could not hand back the deferred review of %s/%s #%d, %s: %s",
-          request.owner(),
-          request.repo(),
-          request.prNumber(),
-          afterFailedHandBack(fate),
-          LogSafe.oneLine(e.toString()));
-      if (fate == DeferredReviews.HandedOut.DROPPED) {
-        skipEmitter.recordSkip(
-            ReviewSkipReason.DISPATCH_REJECTED,
-            request.installationId(),
-            request.owner(),
-            request.repo(),
-            request.prNumber(),
-            "the deferred review could not be handed back and is no longer kept; a later push"
-                + " or a manual /review reviews it");
-      }
+      dropped = waitAgain(request, e);
     }
+    // Counted outside the hand-back, so a count that fails is not taken for a failed hand-back.
+    dropped.ifPresent(
+        drop ->
+            skipEmitter.recordSkip(
+                drop.reason(),
+                request.installationId(),
+                request.owner(),
+                request.repo(),
+                request.prNumber(),
+                drop.detail()));
+  }
+
+  /**
+   * Makes a request whose hand-back threw wait again. Only the entry this pass took does: one an
+   * event replaced or removed since is left as it is.
+   */
+  private Optional<Dropped> waitAgain(
+      ReviewOrchestrator.ReviewRequest request, RuntimeException e) {
+    var fate = deferred.waitAgain(request, RETRY);
+    Log.warnf(
+        "Could not hand back the deferred review of %s/%s #%d, %s: %s",
+        request.owner(),
+        request.repo(),
+        request.prNumber(),
+        afterFailedHandBack(fate),
+        LogSafe.oneLine(e.toString()));
+    return fate == DeferredReviews.HandedOut.DROPPED
+        ? Optional.of(
+            new Dropped(
+                ReviewSkipReason.DISPATCH_REJECTED,
+                "the deferred review could not be handed back and is no longer kept; a later push"
+                    + " or a manual /review reviews it"))
+        : Optional.empty();
   }
 
   private static String afterFailedHandBack(DeferredReviews.HandedOut fate) {
@@ -166,32 +185,25 @@ public class DeferredReviewRelease {
     };
   }
 
-  private void handBack(ReviewOrchestrator.ReviewRequest request) {
+  private Optional<Dropped> handBack(ReviewOrchestrator.ReviewRequest request) {
     if (pauses.isPaused(request.scope(), request.owner(), request.repo(), request.prNumber())) {
       // A head an event kept since is left to its own hand-back, which reads the pause again.
-      if (deferred.dropHandedOut(request) == DeferredReviews.HandedOut.DROPPED) {
-        skipEmitter.recordSkip(
-            ReviewSkipReason.PAUSED,
-            request.installationId(),
-            request.owner(),
-            request.repo(),
-            request.prNumber(),
-            "PR was paused via /pause while its review waited for a limit");
-      }
-      return;
+      return deferred.dropHandedOut(request) == DeferredReviews.HandedOut.DROPPED
+          ? Optional.of(
+              new Dropped(
+                  ReviewSkipReason.PAUSED,
+                  "PR was paused via /pause while its review waited for a limit"))
+          : Optional.empty();
     }
     // The executor refuses when it is saturated or shutting down. The request is then dropped, not
     // deferred again: a shutdown would loop.
-    if (deferred.handBack(request, dispatcher::dispatchDeferred)
-        == DeferredReviews.HandedOut.DROPPED) {
-      skipEmitter.recordSkip(
-          ReviewSkipReason.DISPATCH_REJECTED,
-          request.installationId(),
-          request.owner(),
-          request.repo(),
-          request.prNumber(),
-          "review executor rejected the deferred review; a later push or a manual /review"
-              + " reviews it");
-    }
+    return deferred.handBack(request, dispatcher::dispatchDeferred)
+            == DeferredReviews.HandedOut.DROPPED
+        ? Optional.of(
+            new Dropped(
+                ReviewSkipReason.DISPATCH_REJECTED,
+                "review executor rejected the deferred review; a later push or a manual /review"
+                    + " reviews it"))
+        : Optional.empty();
   }
 }

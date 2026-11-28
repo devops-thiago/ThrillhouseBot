@@ -144,6 +144,10 @@ public final class ReviewDispatcher {
   /**
    * Queues a review {@link DeferredReviews} handed back, like {@link #dispatch}. Its entry there is
    * left alone, so a request a limit turns away again is counted as the same one.
+   *
+   * <p>{@link DeferredReviews#handBack} calls this while it updates that entry, so that a newer
+   * event cannot be queued in between. Nothing on this path may call into {@link DeferredReviews},
+   * and the review must start on another thread, as the executor's tasks do.
    */
   public boolean dispatchDeferred(ReviewOrchestrator.ReviewRequest req) {
     return enqueue(req);
@@ -210,6 +214,16 @@ public final class ReviewDispatcher {
   /** Drops the review a limit held back for the pull request; a newer event ruled it out. */
   public void forgetDeferred(RepoScope scope, int prNumber) {
     deferredReviews.forget(scope, prNumber);
+  }
+
+  /**
+   * Drops the review a limit held back for the pull request, like {@link #forgetDeferred}, for an
+   * event that records no skip of its own.
+   *
+   * @return whether a review that still waited for the limit was dropped, so the caller counts it
+   */
+  public boolean dropDeferred(RepoScope scope, int prNumber) {
+    return deferredReviews.forgetWaiting(scope, prNumber);
   }
 
   private boolean enqueue(ReviewOrchestrator.ReviewRequest req) {

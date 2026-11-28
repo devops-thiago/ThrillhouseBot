@@ -354,6 +354,18 @@ public class DeferredReviews {
     pending.remove(new Key(scope.installationId(), scope.repositoryId(), prNumber));
   }
 
+  /**
+   * Drops whatever is kept for the pull request, like {@link #forget(RepoScope, int)}.
+   *
+   * @return whether a review that still waited to be handed out was dropped, so the caller counts
+   *     the skip; {@code false} when nothing was kept, and for an entry already handed out, whose
+   *     review this does not stop
+   */
+  public boolean forgetWaiting(RepoScope scope, int prNumber) {
+    var removed = pending.remove(new Key(scope.installationId(), scope.repositoryId(), prNumber));
+    return removed != null && !removed.released();
+  }
+
   /** Drops whatever is kept for the request's pull request. */
   public void forget(ReviewOrchestrator.ReviewRequest request) {
     pending.remove(key(request));

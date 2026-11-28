@@ -350,6 +350,21 @@ class DeferredReviewsTest {
   }
 
   @Test
+  void droppingAPullRequestSaysWhetherAReviewStillWaited() {
+    assertFalse(deferred.forgetWaiting(SCOPE, 1));
+
+    deferred.defer(request(1, "sha-a"), 1_000);
+    assertTrue(deferred.forgetWaiting(SCOPE, 1));
+    assertTrue(deferred.isEmpty());
+
+    // One already handed out is removed too, and is not a review this stopped.
+    deferred.defer(request(1, "sha-a"), 0);
+    deferred.takeDue();
+    assertFalse(deferred.forgetWaiting(SCOPE, 1));
+    assertTrue(deferred.isEmpty());
+  }
+
+  @Test
   void closingAPullRequestDropsItsDeferredReviewAndReopeningDoesNot() {
     deferred.defer(request(1, "sha-a"), 0);
     deferred.defer(request(2, "sha-b"), 0);
