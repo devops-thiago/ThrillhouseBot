@@ -999,6 +999,17 @@ live `fence(...)` (#604).
 - **Learnings are scoped per installation and repository.** Every `ReviewLearningService` read
   and write filters on both (`listForAudit` is the dashboard's repo-access-checked exception), and
   `retract` treats an id from another repository as not found.
+- **Bound combining marks before a `\b` pattern reads an added line.** `java.util.regex` steps
+  back over a run of combining marks at every place it tries `\b`, so a long run costs its length
+  squared whatever the pattern is. `IacScanner`, `HeuristicCodeDetector` and
+  `ConfigKeyContextResolver.extractTokens` match on `CombiningMarks.bounded` text (runs cut to 30
+  marks); a new reader of added lines whose patterns use `\b` does the same. Bound the copy that is
+  matched only: a scan hit, an anchor, a fingerprint and a redaction literal keep the line as the
+  patch holds it. No line is skipped for its length by this, so a finding on a minified line stays.
+- **An anchor or quote from the model is matched without backtracking into it.**
+  `RedactedAnchor` matches piece by piece rather than with a compiled pattern, and
+  `DescriptionGapScreen.needle` writes each stem ending so no letter is read twice. Both are held
+  to the patterns they replaced by generated-input tests; keep those when changing either.
 - **A detected secret is never echoed.** Only `SecretScanner.redact` output (first characters and
   length) goes into a scan finding's title and description, and a secret finding has no
   `suggestion_old`, because the anchor is persisted with the session and shown on the dashboard.

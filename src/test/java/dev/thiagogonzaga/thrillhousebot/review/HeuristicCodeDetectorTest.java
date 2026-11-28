@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
+import java.util.Arrays;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -502,5 +503,24 @@ class HeuristicCodeDetectorTest {
     assertFalse(
         HeuristicCodeDetector.declaresHeuristicMember(
             "const parseAll = (a" + padding + ") => a", true));
+  }
+
+  /** Many added lines, each a letter under as many combining marks as a scanned line can hold. */
+  @Test
+  void shouldNotReadARunOfCombiningMarksAgainFromEachOfItsMarks() {
+    var marks = "a" + "\u0301".repeat(HeuristicCodeDetector.MAX_SCANNED_LINE_CHARS - 40);
+    var lines = new String[4_000];
+    Arrays.fill(lines, marks);
+
+    assertFalse(
+        assertTimeoutPreemptively(
+            Duration.ofSeconds(10),
+            () ->
+                HeuristicCodeDetector.introducesHeuristicCode(
+                    diff("src/main/java/A.java", lines))));
+    assertTrue(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff("src/main/java/A.java", marks + " Pattern.compile(\"a\");")),
+        "what the line holds beside the run is still read");
   }
 }

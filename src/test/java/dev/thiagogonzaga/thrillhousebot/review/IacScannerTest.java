@@ -1050,4 +1050,58 @@ class IacScannerTest {
     var context = PatchLines.parse("@@ -1,1 +1,2 @@\n   privileged: true\n+  image: x\n");
     assertTrue(IacScanner.scan("pod.yaml", context, false).isEmpty());
   }
+
+  /** A letter under more combining marks than any written text stacks on one. */
+  private static final String MARKS = "a" + "\u0301".repeat(60_000);
+
+  @Test
+  void aLongRunOfCombiningMarksIsNotReadAgainFromEachOfItsMarks() {
+    var hits =
+        assertTimeoutPreemptively(
+            Duration.ofSeconds(10),
+            () ->
+                scanNew(
+                    "s3.tf",
+                    "  bucket = \"" + MARKS + "\"",
+                    "  acl = \"public-read\" # " + MARKS,
+                    MARKS + " acl = \"public-read\"",
+                    MARKS + "acl = \"public-read\""));
+
+    assertEquals(List.of(SecurityRule.PUBLIC_BUCKET, SecurityRule.PUBLIC_BUCKET), rules(hits));
+    assertEquals(List.of(2, 3), hits.stream().map(IacScanner.Hit::line).toList());
+    assertEquals(
+        MARKS + " acl = \"public-read\"", hits.get(1).text(), "a hit keeps the line as it stands");
+  }
+
+  @Test
+  void theLinesAroundAnAddedOneAreReadTheSameWay() {
+    var hits =
+        assertTimeoutPreemptively(
+            Duration.ofSeconds(10),
+            () ->
+                scanNew(
+                    "infra/sg.tf",
+                    "resource \"aws_security_group\" \"bastion\" {",
+                    "  ingress {",
+                    "    description = \"" + MARKS + "\"",
+                    "    from_port   = 22",
+                    "    to_port     = 22",
+                    "    cidr_blocks = [\"0.0.0.0/0\"]",
+                    "  }",
+                    "}"));
+
+    assertEquals(List.of(SecurityRule.OPEN_ADMIN_PORT), rules(hits));
+  }
+
+  /** A minified file is one long line: it is read whole, and what it holds is still reported. */
+  @Test
+  void aRiskySettingOnALongOrdinaryLineIsStillReported() {
+    var filler = "\"Tags\":[{\"Key\":\"team\",\"Value\":\"blood bank\"}],".repeat(10_000);
+    var line = "{\"Properties\":{" + filler + "\"AccessControl\":\"PublicRead\"}}";
+
+    var hits =
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> scanNew("bucket.json", line));
+
+    assertEquals(List.of(SecurityRule.PUBLIC_BUCKET), rules(hits));
+  }
 }
