@@ -75,8 +75,9 @@ security limits. To report a vulnerability, see
   that window is still found and dismissed. If that second request fails, an
   approval older than the newest 1,000 reviews is not seen that time, and the
   bot logs a warning. The dismissal waits for a review of the same pull request that is
-  already running or waiting for a review slot, so for that long the old
-  approval still counts. If the
+  already running, so for that long the old approval still counts. It does
+  not wait for a review that is itself waiting for one of the repository's
+  review slots. If the
   bot's approval counts towards a required review, also turn on "Dismiss stale
   pull request approvals when new commits are pushed" for the branch, so
   GitHub drops it on the push whatever happens to the bot.

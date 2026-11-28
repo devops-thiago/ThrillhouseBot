@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -1822,6 +1823,80 @@ class ReviewDispatcherTest {
     verify(skipEmitter, never()).recordSkip(any(), anyLong(), any(), any(), anyInt(), any());
     now.addAndGet(WINDOW_MS);
     assertEquals(List.of(reviewRequest("owner", "repo", 3, "sha-new")), deferred.takeDue());
+  }
+
+  @Test
+  void anApprovalWithdrawalDoesNotWaitForTheSlotItsPullRequestsReviewWaitsFor()
+      throws InterruptedException {
+    var limits = new AutoReviewSlots(1, 5);
+    var limited = limitedDispatcher(limits);
+    var started = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    blockReviewUntil(started, release);
+    limited.dispatch(reviewRequest("owner", "repo", 1, "sha1"));
+    assertTrue(started.await(5, TimeUnit.SECONDS));
+    limited.dispatch(reviewRequest("owner", "repo", 2, "sha2"));
+    awaitWaiting(limits, 1);
+
+    // A push whose own review does not run (a draft, a filter): only the withdrawal is queued.
+    assertTrue(limited.dispatchApprovalWithdrawal(push(2, "sha3")));
+
+    verify(approvalOnPush, timeout(5000)).withdraw(push(2, "sha3"));
+    verify(orchestrator, never()).review(reviewRequest("owner", "repo", 2, "sha2"));
+    // The review it interrupted goes back to waiting and runs once a slot is free.
+    awaitWaiting(limits, 1);
+    release.countDown();
+    verify(orchestrator, timeout(5000)).review(reviewRequest("owner", "repo", 2, "sha2"));
+    awaitEmptyDispatcherState(limited, 5, TimeUnit.SECONDS);
+    // The review that waited ran on the head before the push, so the withdrawal runs once more
+    // after it and sees an approval that review gave.
+    var order = inOrder(approvalOnPush, orchestrator);
+    order.verify(approvalOnPush).withdraw(push(2, "sha3"));
+    order.verify(orchestrator).review(reviewRequest("owner", "repo", 2, "sha2"));
+    order.verify(approvalOnPush).withdraw(push(2, "sha3"));
+    verify(approvalOnPush, times(2)).withdraw(any());
+    assertEquals(0, limits.trackedRepositories());
+  }
+
+  @Test
+  void aSecondPushDuringTheSlotWaitIsWithdrawnAtOnceToo() throws InterruptedException {
+    var limits = new AutoReviewSlots(1, 5);
+    var limited = limitedDispatcher(limits);
+    var started = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    blockReviewUntil(started, release);
+    limited.dispatch(reviewRequest("owner", "repo", 1, "sha1"));
+    assertTrue(started.await(5, TimeUnit.SECONDS));
+    limited.dispatch(reviewRequest("owner", "repo", 2, "sha2"));
+    awaitWaiting(limits, 1);
+
+    limited.dispatchApprovalWithdrawal(push(2, "sha3"));
+    verify(approvalOnPush, timeout(5000)).withdraw(push(2, "sha3"));
+    awaitWaiting(limits, 1);
+    limited.dispatchApprovalWithdrawal(push(2, "sha4"));
+
+    verify(approvalOnPush, timeout(5000)).withdraw(push(2, "sha4"));
+    verify(orchestrator, never()).review(reviewRequest("owner", "repo", 2, "sha2"));
+    release.countDown();
+    awaitEmptyDispatcherState(limited, 5, TimeUnit.SECONDS);
+    verify(orchestrator).review(reviewRequest("owner", "repo", 2, "sha2"));
+  }
+
+  @Test
+  void withdrawalIsLeftToTheWorkerWhenANewerReviewReplacesTheOneThatWaits() {
+    var state = new ReviewDispatcher.PerPrState();
+    var trigger = SpanContext.getInvalid();
+    state.onDispatch(reviewRequest("owner", "repo", 42, "sha2"), trigger);
+    state.takeNext();
+    assertFalse(state.slotWaitShouldEnd());
+
+    state.onWithdrawal(push(42, "sha3"), trigger);
+    assertTrue(state.slotWaitShouldEnd());
+    state.onDispatch(reviewRequest("owner", "repo", 42, "sha3"), trigger);
+
+    // The worker drops the review that waited and takes the withdrawal next, with no slot.
+    assertNull(state.withdrawalDueInSlotWait());
+    assertEquals(push(42, "sha3"), state.takeNext().withdrawal());
   }
 
   @Test

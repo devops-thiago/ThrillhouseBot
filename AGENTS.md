@@ -371,7 +371,11 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   which is exactly when an approval of the old one would otherwise stay. It never runs on the
   webhook thread. The pull request's worker runs it after a review in flight (so an approval that
   review posts is seen) and before the review the push queued, takes no repository slot and makes
-  no model call. It lists the reviews once; nothing records the bot's last verdict per pull
+  no model call. It does not wait for a slot either: when the worker is waiting for one with an
+  earlier review (`AutoReviewSlots.acquire` has no time limit), `dispatchApprovalWithdrawal`
+  wakes it (`recheckWaiters`, outside the state's monitor), `ReviewDispatcher.acquireSlot` runs
+  the withdrawal and asks for a slot again, and the withdrawal stays pending so it runs once
+  more after that review, which is of a head from before the push and may still approve it. It lists the reviews once; nothing records the bot's last verdict per pull
   request reliably (`reviewsession` has no verdict, the limiter and the CI hold are in memory), so
   do not skip the listing on such a signal. While a standing bot approval is for the head, nothing
   is dismissed (a force-push back to the approved commit keeps it). Otherwise the head is read

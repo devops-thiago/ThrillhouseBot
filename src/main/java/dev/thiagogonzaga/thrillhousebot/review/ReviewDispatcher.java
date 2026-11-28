@@ -363,6 +363,11 @@ public final class ReviewDispatcher {
    * rate window, a full queue and the trigger filters hold back reviews, not this. Pushes that
    * arrive while one waits collapse into the latest head.
    *
+   * <p>It does not wait for a slot either. When the worker is waiting for one with an earlier
+   * review of the pull request, it is woken, runs the withdrawal and goes back to waiting ({@link
+   * #reviewWithinRepositoryLimit}); the withdrawal then runs a second time after that review, which
+   * is of a head from before the push and may still post an approval.
+   *
    * @return {@code true} if the withdrawal was queued or coalesced; {@code false} if the executor
    *     rejected the task, so the caller can roll back the webhook dedup state and a redelivery can
    *     retry.
@@ -370,8 +375,19 @@ public final class ReviewDispatcher {
   public boolean dispatchApprovalWithdrawal(ApprovalOnPush.Push task) {
     var key = new PrKey(task.owner(), task.repo(), task.prNumber());
     var trigger = Span.current().getSpanContext();
-    return queueOnWorker(
-        key, "Approval withdrawal", task.headSha(), state -> state.onWithdrawal(task, trigger));
+    if (!queueOnWorker(
+        key, "Approval withdrawal", task.headSha(), state -> state.onWithdrawal(task, trigger))) {
+      return false;
+    }
+    // The pull request's worker may be waiting for a repository slot with an earlier review. The
+    // withdrawal needs no slot, so the worker is woken to run it now. Read after the withdrawal
+    // is queued: a worker that starts to wait later sees it before it waits.
+    var state = states.get(key);
+    var waiting = state != null ? state.waitingForSlot() : null;
+    if (waiting != null) {
+      autoReviewSlots.recheckWaiters(waiting.installationId(), waiting.repositoryId());
+    }
+    return true;
   }
 
   /** Hands work other than a review to the pull request's worker, starting one when none runs. */
@@ -551,12 +567,15 @@ public final class ReviewDispatcher {
    * window is read again once the slot is held, because the wait can outlast another review of the
    * pull request. A request that arrives for the pull request during the wait replaces this one:
    * the wait ends and the worker takes the newer request next, at once when it is a manual review.
+   *
+   * <p>An approval withdrawal that arrives during the wait ends it too, without replacing the
+   * review: the slot can be minutes away, and until the withdrawal runs the approval of the old
+   * head counts. The worker runs it and asks for a slot again, at the back of the queue.
    */
   private void reviewWithinRepositoryLimit(
       PerPrState state, PerPrState.ReviewBatch batch, PerPrState.Served served) {
     var req = batch.request();
-    var outcome =
-        autoReviewSlots.acquire(req.installationId(), req.repositoryId(), state::hasQueuedReview);
+    var outcome = acquireSlot(state, req);
     switch (outcome) {
       case ACQUIRED -> reviewHoldingSlot(state, batch, served);
       case QUEUE_FULL -> deferQueueFull(req);
@@ -569,6 +588,38 @@ public final class ReviewDispatcher {
               req.repo(),
               req.prNumber(),
               outcome);
+    }
+  }
+
+  /**
+   * Asks for a repository slot for {@code req}, running each approval withdrawal that arrives while
+   * the worker waits and then asking again. The state knows the wait for as long as it lasts, so
+   * {@link #dispatchApprovalWithdrawal} can wake the worker.
+   */
+  private AutoReviewSlots.Outcome acquireSlot(
+      PerPrState state, ReviewOrchestrator.ReviewRequest req) {
+    var key = new PrKey(req.owner(), req.repo(), req.prNumber());
+    state.beginSlotWait(req);
+    try {
+      while (true) {
+        var outcome =
+            autoReviewSlots.acquire(
+                req.installationId(), req.repositoryId(), state::slotWaitShouldEnd);
+        var due =
+            outcome == AutoReviewSlots.Outcome.SUPERSEDED ? state.withdrawalDueInSlotWait() : null;
+        if (due == null) {
+          return outcome;
+        }
+        var push = due.withdrawal();
+        inRunSpan(
+            APPROVAL_WITHDRAWAL_SPAN,
+            key,
+            push.headSha(),
+            due.served(),
+            () -> withdrawApproval(push));
+      }
+    } finally {
+      state.endSlotWait();
     }
   }
 
@@ -723,6 +774,16 @@ public final class ReviewDispatcher {
     ApprovalOnPush.Push pendingWithdrawal;
 
     /**
+     * Whether the pending withdrawal has not run at all yet. It runs once in the middle of a wait
+     * for a repository slot ({@link #withdrawalDueInSlotWait}) and stays pending, so that it runs
+     * again after the review that waited; this says the first of the two is still owed.
+     */
+    private boolean withdrawalDue;
+
+    /** The review the worker is waiting for a repository slot with, {@code null} otherwise. */
+    private ReviewOrchestrator.ReviewRequest waitingForSlot;
+
+    /**
      * Whether the worker has done nothing since it started but withdraw approvals. A review
      * dispatched meanwhile replaces no other request, so it is not counted as coalesced.
      */
@@ -791,8 +852,12 @@ public final class ReviewDispatcher {
         }
       }
 
+      Served peek() {
+        return new Served(List.copyOf(links), requests);
+      }
+
       Served drain() {
-        var served = new Served(List.copyOf(links), requests);
+        var served = peek();
         links.clear();
         requests = 0;
         return served;
@@ -856,10 +921,48 @@ public final class ReviewDispatcher {
       }
     }
 
-    /** Whether a request arrived after the one the worker is serving. */
-    boolean hasQueuedReview() {
+    /**
+     * Whether the wait for a repository slot should stop: a newer request replaces the review that
+     * waits, or an approval withdrawal arrived, which needs no slot and must not wait for one.
+     */
+    boolean slotWaitShouldEnd() {
       synchronized (lock) {
-        return latestRequest != null;
+        return latestRequest != null || withdrawalDue;
+      }
+    }
+
+    /**
+     * The approval withdrawal to run now, in the middle of a wait for a repository slot, with the
+     * requests it serves; {@code null} when none is owed, or when a newer request replaces the
+     * review that waits, since the worker then takes the withdrawal next anyway. The withdrawal
+     * stays pending: the review that waits is of a head from before the push, so the worker runs
+     * the withdrawal again after it, as it does after any review in flight.
+     */
+    Next withdrawalDueInSlotWait() {
+      synchronized (lock) {
+        if (latestRequest != null || !withdrawalDue) {
+          return null;
+        }
+        withdrawalDue = false;
+        return new Next(null, null, pendingWithdrawal, withdrawalTriggers.peek());
+      }
+    }
+
+    void beginSlotWait(ReviewOrchestrator.ReviewRequest req) {
+      synchronized (lock) {
+        waitingForSlot = req;
+      }
+    }
+
+    void endSlotWait() {
+      synchronized (lock) {
+        waitingForSlot = null;
+      }
+    }
+
+    ReviewOrchestrator.ReviewRequest waitingForSlot() {
+      synchronized (lock) {
+        return waitingForSlot;
       }
     }
 
@@ -911,6 +1014,7 @@ public final class ReviewDispatcher {
           return RecheckOutcome.RETRY;
         }
         pendingWithdrawal = task;
+        withdrawalDue = true;
         withdrawalTriggers.add(trigger);
         if (running) {
           return RecheckOutcome.QUEUED;
@@ -927,6 +1031,7 @@ public final class ReviewDispatcher {
         if (pendingWithdrawal != null) {
           var push = pendingWithdrawal;
           pendingWithdrawal = null;
+          withdrawalDue = false;
           return new Next(null, null, push, withdrawalTriggers.drain());
         }
         onlyWithdrawing = false;
