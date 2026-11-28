@@ -965,6 +965,16 @@ public class VerdictBuilder {
       CiFailureCitations ciCitations,
       PrSummaryGenerator.DescriptionSources descriptionSources) {}
 
+  /**
+   * The verdict of a round given its inputs directly, with no loaded context: the entry the tests
+   * use to judge the verdict rules on their own. It has no stored round to read, so the hold on
+   * earlier rounds that cannot be read ({@link
+   * ReviewContextLoader.ReviewContext#priorRoundsUnreadable()}) never applies here. A review that
+   * posts goes through {@link #build(ReviewContextLoader.ReviewContext, ReviewResponse,
+   * CiStatusEvaluator.CiEvaluation, DiffBudgetPlanner.BudgetPlan, String, CiFailureCitations,
+   * LinkedIssueContext)}, which passes that state on; {@code VerdictBuilderEntryPointInvariantTest}
+   * fails when production code calls this one.
+   */
   ReviewResult buildResult(
       ReviewResponse aiResponse,
       boolean isFirstReview,
