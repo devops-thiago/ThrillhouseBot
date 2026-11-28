@@ -111,12 +111,13 @@ public class DeferredReviewRelease {
   }
 
   /**
-   * Hands every due request back to the dispatcher. One for a pull request paused since, or one the
-   * dispatcher's executor refuses, is dropped and counted as skipped at once. One whose hand-back
-   * threw waits again, unless a newer head an event kept since waits in its place, and is counted
-   * as skipped once {@link DeferredReviews} refuses to keep it any longer. Whatever one request
-   * throws, the rest of the due requests are still handed back: {@link DeferredReviews#takeDue}
-   * hands each out once, so a request this pass left behind would wait until it is given up.
+   * Hands every due request back to the dispatcher, unless an event replaced or removed its entry
+   * since it was taken: such a request gives way and is neither handed back nor counted. One for a
+   * pull request paused since, or one the dispatcher's executor refuses, is dropped and counted as
+   * skipped at once. One whose hand-back threw waits again, and is counted as skipped once it has
+   * been failing for {@link DeferredReviews#GIVE_UP_AFTER}. Whatever one request throws, the rest
+   * of the due requests are still handed back: {@link DeferredReviews#takeDue} hands each out once,
+   * so a request this pass left behind would wait until it is given up.
    */
   void release() {
     for (var request : deferred.takeDue()) {
@@ -134,16 +135,17 @@ public class DeferredReviewRelease {
     try {
       handBack(request);
     } catch (RuntimeException e) {
-      // Put back without displacing a newer head an event deferred since this one was handed out.
-      boolean waitsAgain = deferred.requeueFor(request, RETRY);
+      // Only the entry this pass took waits again: one an event replaced or removed since, or one
+      // dropped just before the throw, is left as it is.
+      var fate = deferred.waitAgain(request, RETRY);
       Log.warnf(
           "Could not hand back the deferred review of %s/%s #%d, %s: %s",
           request.owner(),
           request.repo(),
           request.prNumber(),
-          waitsAgain ? "trying again" : "giving it up",
+          afterFailedHandBack(fate),
           LogSafe.oneLine(e.toString()));
-      if (!waitsAgain) {
+      if (fate == DeferredReviews.HandedOut.DROPPED) {
         skipEmitter.recordSkip(
             ReviewSkipReason.DISPATCH_REJECTED,
             request.installationId(),
@@ -156,21 +158,32 @@ public class DeferredReviewRelease {
     }
   }
 
+  private static String afterFailedHandBack(DeferredReviews.HandedOut fate) {
+    return switch (fate) {
+      case WAITS_AGAIN -> "trying again";
+      case DROPPED -> "giving it up";
+      default -> "and it is no longer the review kept for the pull request";
+    };
+  }
+
   private void handBack(ReviewOrchestrator.ReviewRequest request) {
     if (pauses.isPaused(request.scope(), request.owner(), request.repo(), request.prNumber())) {
-      deferred.forget(request);
-      skipEmitter.recordSkip(
-          ReviewSkipReason.PAUSED,
-          request.installationId(),
-          request.owner(),
-          request.repo(),
-          request.prNumber(),
-          "PR was paused via /pause while its review waited for a limit");
+      // A head an event kept since is left to its own hand-back, which reads the pause again.
+      if (deferred.dropHandedOut(request) == DeferredReviews.HandedOut.DROPPED) {
+        skipEmitter.recordSkip(
+            ReviewSkipReason.PAUSED,
+            request.installationId(),
+            request.owner(),
+            request.repo(),
+            request.prNumber(),
+            "PR was paused via /pause while its review waited for a limit");
+      }
       return;
     }
-    if (!dispatcher.dispatchDeferred(request)) {
-      // The executor is saturated or shutting down. Not deferred again: a shutdown would loop.
-      deferred.forget(request);
+    // The executor refuses when it is saturated or shutting down. The request is then dropped, not
+    // deferred again: a shutdown would loop.
+    if (deferred.handBack(request, dispatcher::dispatchDeferred)
+        == DeferredReviews.HandedOut.DROPPED) {
       skipEmitter.recordSkip(
           ReviewSkipReason.DISPATCH_REJECTED,
           request.installationId(),

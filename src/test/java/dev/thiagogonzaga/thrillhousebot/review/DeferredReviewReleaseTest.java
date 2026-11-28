@@ -46,6 +46,8 @@ import org.junit.jupiter.api.Test;
 class DeferredReviewReleaseTest {
 
   private static final String DATABASE_DOWN = "database unavailable";
+  private static final String SHA_A = "sha-a";
+  private static final String SHA_B = "sha-b";
 
   private final AtomicLong now = new AtomicLong(0);
   private final DeferredReviews deferred = new DeferredReviews(10, now::get);
@@ -81,16 +83,16 @@ class DeferredReviewReleaseTest {
               return 42L;
             });
     when(dispatcher.dispatchDeferred(any())).thenReturn(true);
-    deferred.defer(request(1, "sha-a"), 0);
-    deferred.defer(request(2, "sha-b"), 1_000);
+    deferred.defer(request(1, SHA_A), 0);
+    deferred.defer(request(2, SHA_B), 1_000);
 
     release.onStart(null);
     tick.getFirst().handle(42L);
     submitted.removeFirst().run();
 
     // Only the review that is due goes back to the dispatcher.
-    verify(dispatcher).dispatchDeferred(request(1, "sha-a"));
-    verify(dispatcher, never()).dispatchDeferred(request(2, "sha-b"));
+    verify(dispatcher).dispatchDeferred(request(1, SHA_A));
+    verify(dispatcher, never()).dispatchDeferred(request(2, SHA_B));
     verifyNoInteractions(skipEmitter);
 
     release.onStop(null);
@@ -115,7 +117,7 @@ class DeferredReviewReleaseTest {
   @Test
   void aTickWhileAnotherIsStillRunningSubmitsNoSecondRun() {
     captureSubmittedWork();
-    deferred.defer(request(1, "sha-a"), 1_000);
+    deferred.defer(request(1, SHA_A), 1_000);
 
     release.schedule();
     release.schedule();
@@ -129,7 +131,7 @@ class DeferredReviewReleaseTest {
 
   @Test
   void anExecutorThatRefusesWorkLeavesTheNextTickFreeToRun() {
-    deferred.defer(request(1, "sha-a"), 1_000);
+    deferred.defer(request(1, SHA_A), 1_000);
     doThrow(new RejectedExecutionException("shutting down")).when(executor).execute(any());
 
     release.schedule();
@@ -142,7 +144,7 @@ class DeferredReviewReleaseTest {
   @Test
   void aPullRequestPausedWhileItsReviewWaitedIsNotReviewed() {
     when(pauses.isPaused(any(), eq("owner"), eq("repo"), eq(1))).thenReturn(true);
-    deferred.defer(request(1, "sha-a"), 0);
+    deferred.defer(request(1, SHA_A), 0);
 
     release.release();
 
@@ -161,7 +163,7 @@ class DeferredReviewReleaseTest {
   @Test
   void aReviewTheExecutorRejectsIsCountedAndNotDeferredAgain() {
     when(dispatcher.dispatchDeferred(any())).thenReturn(false);
-    deferred.defer(request(1, "sha-a"), 0);
+    deferred.defer(request(1, SHA_A), 0);
 
     release.release();
 
@@ -181,18 +183,18 @@ class DeferredReviewReleaseTest {
     when(pauses.isPaused(any(), any(), any(), eq(1)))
         .thenThrow(new IllegalStateException(DATABASE_DOWN));
     when(dispatcher.dispatchDeferred(any())).thenReturn(true);
-    deferred.defer(request(1, "sha-a"), 0);
-    deferred.defer(request(2, "sha-b"), 0);
+    deferred.defer(request(1, SHA_A), 0);
+    deferred.defer(request(2, SHA_B), 0);
 
     release.release();
 
-    verify(dispatcher).dispatchDeferred(request(2, "sha-b"));
-    verify(dispatcher, never()).dispatchDeferred(request(1, "sha-a"));
+    verify(dispatcher).dispatchDeferred(request(2, SHA_B));
+    verify(dispatcher, never()).dispatchDeferred(request(1, SHA_A));
     verify(skipEmitter, never()).recordSkip(any(), anyLong(), any(), any(), anyInt(), any());
 
     // It is due again after the retry delay.
     now.set(DeferredReviewRelease.RETRY.toMillis());
-    assertEquals(List.of(request(1, "sha-a")), deferred.takeDue());
+    assertEquals(List.of(request(1, SHA_A)), deferred.takeDue());
   }
 
   @Test
@@ -201,16 +203,16 @@ class DeferredReviewReleaseTest {
     when(pauses.isPaused(any(), any(), any(), eq(1)))
         .thenAnswer(
             invocation -> {
-              deferred.defer(request(1, "sha-b"), 1_000);
+              deferred.defer(request(1, SHA_B), 1_000);
               throw new IllegalStateException(DATABASE_DOWN);
             });
-    deferred.defer(request(1, "sha-a"), 0);
+    deferred.defer(request(1, SHA_A), 0);
 
     release.release();
 
     verify(skipEmitter, never()).recordSkip(any(), anyLong(), any(), any(), anyInt(), any());
     now.set(DeferredReviewRelease.RETRY.toMillis());
-    assertEquals(List.of(request(1, "sha-b")), deferred.takeDue());
+    assertEquals(List.of(request(1, SHA_B)), deferred.takeDue());
   }
 
   @Test
@@ -245,7 +247,7 @@ class DeferredReviewReleaseTest {
   void aReviewThatCouldNotBeHandedBackForAnHourIsCountedAsSkipped() {
     when(pauses.isPaused(any(), any(), any(), eq(1)))
         .thenThrow(new IllegalStateException(DATABASE_DOWN));
-    deferred.defer(request(1, "sha-a"), 0);
+    deferred.defer(request(1, SHA_A), 0);
 
     // First handed out at 0: it waits again after every failure until the hour is up.
     release.release();
@@ -266,6 +268,131 @@ class DeferredReviewReleaseTest {
             eq(1),
             anyString());
     verify(dispatcher, never()).dispatchDeferred(any());
+    assertTrue(deferred.isEmpty());
+  }
+
+  @Test
+  void aReviewTheDispatcherFailedToTakeWaitsAgain() {
+    when(dispatcher.dispatchDeferred(any())).thenThrow(new IllegalStateException("no tracer"));
+    deferred.defer(request(1, SHA_A), 0);
+
+    release.release();
+
+    verifyNoInteractions(skipEmitter);
+    assertEquals(List.of(), deferred.takeDue());
+    now.set(DeferredReviewRelease.RETRY.toMillis());
+    assertEquals(List.of(request(1, SHA_A)), deferred.takeDue());
+  }
+
+  @Test
+  void anExecutorRefusalLeavesTheNewerHeadDeferredMeanwhileInPlace() {
+    // A push arrives after the review was handed out, and the executor refuses work.
+    when(pauses.isPaused(any(), any(), any(), eq(1)))
+        .thenAnswer(
+            invocation -> {
+              deferred.defer(request(1, SHA_B), 1_000);
+              return false;
+            });
+    when(dispatcher.dispatchDeferred(any())).thenReturn(false);
+    deferred.defer(request(1, SHA_A), 0);
+
+    release.release();
+
+    // The older request gave way to the newer head, which still waits: nothing is skipped.
+    verifyNoInteractions(skipEmitter);
+    verify(dispatcher, never()).dispatchDeferred(any());
+    now.set(1_000);
+    assertEquals(List.of(request(1, SHA_B)), deferred.takeDue());
+  }
+
+  @Test
+  void aPauseFoundAtHandBackLeavesTheNewerHeadDeferredMeanwhileToItsOwnHandBack() {
+    // The pull request was resumed and pushed to between the pause lookup and its answer.
+    when(pauses.isPaused(any(), any(), any(), eq(1)))
+        .thenAnswer(
+            invocation -> {
+              deferred.defer(request(1, SHA_B), 1_000);
+              return true;
+            })
+        .thenReturn(false);
+    when(dispatcher.dispatchDeferred(any())).thenReturn(true);
+    deferred.defer(request(1, SHA_A), 0);
+
+    release.release();
+
+    verifyNoInteractions(skipEmitter);
+    verify(dispatcher, never()).dispatchDeferred(any());
+    now.set(1_000);
+    release.release();
+    verify(dispatcher).dispatchDeferred(request(1, SHA_B));
+  }
+
+  @Test
+  void aReviewThatCouldNotBeHandedBackDoesNotDisplaceANewerHeadTheWorkerPutBack() {
+    // A newer push was dispatched, which drops the entry, and its worker then put it back.
+    when(pauses.isPaused(any(), any(), any(), eq(1)))
+        .thenAnswer(
+            invocation -> {
+              deferred.forget(request(1, SHA_A));
+              deferred.requeue(request(1, SHA_B), 1_000);
+              throw new IllegalStateException(DATABASE_DOWN);
+            });
+    deferred.defer(request(1, SHA_A), 0);
+
+    release.release();
+
+    verifyNoInteractions(skipEmitter);
+    now.set(1_000 + DeferredReviewRelease.RETRY.toMillis());
+    assertEquals(List.of(request(1, SHA_B)), deferred.takeDue());
+  }
+
+  @Test
+  void aReviewThatCouldNotBeHandedBackIsNotKeptAgainOnceItsPullRequestWasForgotten() {
+    // The pull request is closed between the hand-out and the failed hand-back.
+    when(pauses.isPaused(any(), any(), any(), eq(1)))
+        .thenAnswer(
+            invocation -> {
+              deferred.forget(request(1, SHA_A).scope(), 1);
+              throw new IllegalStateException(DATABASE_DOWN);
+            });
+    deferred.defer(request(1, SHA_A), 0);
+
+    release.release();
+
+    verifyNoInteractions(skipEmitter);
+    assertTrue(deferred.isEmpty());
+  }
+
+  @Test
+  void aReviewWhoseEntryANewerEventDroppedIsNotHandedBack() {
+    // A newer push is dispatched between the hand-out and the hand-back, which drops the entry.
+    when(pauses.isPaused(any(), any(), any(), eq(1)))
+        .thenAnswer(
+            invocation -> {
+              deferred.forget(request(1, SHA_A));
+              return false;
+            });
+    deferred.defer(request(1, SHA_A), 0);
+
+    release.release();
+
+    verifyNoInteractions(dispatcher, skipEmitter);
+    assertTrue(deferred.isEmpty());
+  }
+
+  @Test
+  void aDroppedReviewWhoseSkipCannotBeRecordedIsNotKeptAgain() {
+    when(pauses.isPaused(any(), any(), any(), eq(1))).thenReturn(true);
+    when(dispatcher.dispatchDeferred(request(2, SHA_B))).thenReturn(false);
+    doThrow(new IllegalStateException("metrics unavailable"))
+        .when(skipEmitter)
+        .recordSkip(any(), anyLong(), any(), any(), anyInt(), any());
+    deferred.defer(request(1, SHA_A), 0);
+    deferred.defer(request(2, SHA_B), 0);
+
+    release.release();
+
+    // Both were dropped on purpose; failing to count that does not put them back.
     assertTrue(deferred.isEmpty());
   }
 
