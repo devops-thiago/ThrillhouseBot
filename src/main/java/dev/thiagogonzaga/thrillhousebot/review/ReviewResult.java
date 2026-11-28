@@ -579,11 +579,17 @@ public record ReviewResult(
 
   /** The {@link #earlierRoundCloses} the backstop gave {@code status}. */
   public List<ReviewResponse.Finding> earlierRoundCloses(String status) {
+    return earlierRoundClosingStatuses(status).stream()
+        .map(s -> s.earlierRound().finding())
+        .toList();
+  }
+
+  /** The statuses behind {@link #earlierRoundCloses(String)}, each with its note. */
+  List<PreviousFindingStatus> earlierRoundClosingStatuses(String status) {
     return previousStatuses.stream()
         .filter(PreviousFindingStatus::closesEarlierRound)
         .filter(s -> !s.earlierRound().namedByTheRound())
         .filter(s -> status.equalsIgnoreCase(s.status()))
-        .map(s -> s.earlierRound().finding())
         .toList();
   }
 
