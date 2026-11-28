@@ -108,7 +108,8 @@ public final class PrImproveAssistantPrompts {
             }
 
             If the change set needs no improvement, return {"improvements": []}.
-            """;
+            """
+          + PrReviewPrompts.ENGLISH_PROSE_RULE;
 
   /**
    * The system prompt as a runtime value, for callers that only need to <em>size</em> it — the

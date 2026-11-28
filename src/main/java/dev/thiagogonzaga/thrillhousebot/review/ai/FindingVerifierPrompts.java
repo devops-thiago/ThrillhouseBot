@@ -466,7 +466,8 @@ public final class FindingVerifierPrompts {
             discarded. For
             "confirmed", repeat the original risk and confidence. Leave out "suggestion" for a
             finding with no suggestion_new, and "cut" when nothing is to be cut.
-            """;
+            """
+          + PrReviewPrompts.ENGLISH_PROSE_RULE;
 
   /**
    * The monolithic verifier system prompt: the core with every carve-out, each carve-out beside the
