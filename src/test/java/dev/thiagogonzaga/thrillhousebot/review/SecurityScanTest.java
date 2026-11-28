@@ -2947,6 +2947,59 @@ class SecurityScanTest {
   }
 
   @Test
+  void aMarkerThisVersionCannotReadNeverCoversEvenOnAnUnchangedHead() {
+    var line = "T=" + fake.githubToken();
+    var s = upgraded("webhook-secret-one");
+    var raised = raisedFor(s, line);
+    var files = List.of(added("app.env", line));
+    var current = s.contentFingerprint(SecurityRule.GITHUB_TOKEN, line);
+
+    // A scheme this version does not know, the tag in another case, and markers that hold no
+    // fingerprint at all: none is read as a finding stored before markers existed, which would
+    // let the newest round's decline cover the detection without comparing anything.
+    for (var marker :
+        List.of("v3:" + current, "V2:" + current, "v2:", "", "not-hex", "v2:" + current + " x")) {
+      var stored = storedWithMarker(raised, marker);
+      assertNull(SecurityScan.fingerprintOf(stored.description()), marker);
+      assertEquals(
+          1,
+          s.merge(
+                  response(),
+                  s.scan(files),
+                  List.of(),
+                  Set.of(),
+                  List.of(),
+                  new SecurityScan.Declines(List.of(stored), true))
+              .findings()
+              .size(),
+          marker);
+    }
+    // The same decline with the marker this version posted does cover it.
+    assertTrue(
+        s.merge(
+                response(),
+                s.scan(files),
+                List.of(),
+                Set.of(),
+                List.of(),
+                new SecurityScan.Declines(List.of(raised), true))
+            .findings()
+            .isEmpty());
+  }
+
+  @Test
+  void aMarkerOfAnotherSchemeIsStillPostedAsTheHiddenComment() {
+    var s = upgraded("webhook-secret-one");
+    var stored = storedWithMarker(raisedFor(s, "T=" + fake.githubToken()), "v3:0badf00d");
+    var marker = "\n\n<!-- thrillhousebot:scan-content=v3:0badf00d -->";
+    assertTrue(
+        SecurityScan.postedDescription(stored.title(), stored.description()).endsWith(marker));
+    assertTrue(
+        SecurityScan.withBlockAppended(stored.description(), "A note.")
+            .endsWith("A note." + marker));
+  }
+
+  @Test
   void theWebhookKeyedFingerprintIsTheOneZeroNineThreePosted() {
     // Computed apart from this code, from the derivation 0.9.3 shipped: the key is the SHA-256
     // of the label, a zero byte and the webhook secret, and the fingerprint the first eight hex

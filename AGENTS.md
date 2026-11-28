@@ -565,7 +565,9 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   operator chooses, and never accept a fingerprint the author can compute: at 8 hex digits a
   different line that gives a declined finding's value can be searched for, which is why the
   unkeyed 0.7.0 marker is not compared and a decline recorded under it lapses once. A new scheme
-  gets a new tag. Each decline covers one detection (`DeclinedScanFindingAcrossRoundsTest`).
+  gets a new tag, and a marker whose tag this version does not know, or that holds no fingerprint,
+  covers nothing: only a finding stored with no marker at all (before 0.7.0) is matched without a
+  comparison, and only on an unchanged head. Each decline covers one detection (`DeclinedScanFindingAcrossRoundsTest`).
 - **Summary carry-over preserves every distinct path.** `PriorOverviewCarryover` uses
   `PathIndex.contains` for coverage membership, preserving `FilePaths.same` directory-suffix
   semantics without enumerating groups of same-named files (#1104).

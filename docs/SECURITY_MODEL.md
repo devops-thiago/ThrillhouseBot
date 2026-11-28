@@ -206,7 +206,9 @@ scheme it names: the current one, keyed from the App private key, or the one
 0.7.1 to 0.9.3 posted, keyed from the webhook secret. A pull request author can
 compute neither, so they cannot prepare a different secret that an earlier
 decline would cover. The marker 0.7.0 posted was not keyed and is not compared;
-a decline recorded under it lapses once and the finding is raised again.
+a decline recorded under it lapses once and the finding is raised again. The
+same holds for a marker that names a scheme the running version does not know,
+as after a rollback: it covers nothing.
 
 ### Complete mediation
 
