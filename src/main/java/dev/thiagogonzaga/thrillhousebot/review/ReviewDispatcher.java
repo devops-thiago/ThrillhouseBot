@@ -160,12 +160,21 @@ public final class ReviewDispatcher {
    * window closes if the window holds back a head its last automatic review did not cover.
    */
   public RateWindowHold holdForRateWindow(ReviewOrchestrator.ReviewRequest req) {
+    return holdForRateWindow(req, deferredReviews::defer);
+  }
+
+  /** How a review the rate window holds back is kept: {@code false} when it was not. */
+  private interface Keeper {
+    boolean keep(ReviewOrchestrator.ReviewRequest req, long dueAt);
+  }
+
+  private RateWindowHold holdForRateWindow(ReviewOrchestrator.ReviewRequest req, Keeper keeper) {
     var hold = autoReviewRateLimiter.hold(req.owner(), req.repo(), req.prNumber(), req.commitSha());
     if (!hold.throttled()) {
       return RateWindowHold.NOT_HELD;
     }
     var dueAt = hold.reviewDueAt();
-    return dueAt.isPresent() && deferredReviews.defer(req, dueAt.getAsLong())
+    return dueAt.isPresent() && keeper.keep(req, dueAt.getAsLong())
         ? RateWindowHold.KEPT
         : RateWindowHold.NOT_KEPT;
   }
@@ -411,7 +420,9 @@ public final class ReviewDispatcher {
   }
 
   private boolean skippedAsThrottled(ReviewOrchestrator.ReviewRequest req) {
-    var hold = holdForRateWindow(req);
+    // On the worker the request can be older than the head an event deferred while it waited for
+    // its turn, so it is put back without displacing that head.
+    var hold = holdForRateWindow(req, deferredReviews::requeue);
     if (hold == RateWindowHold.NOT_HELD) {
       return false;
     }
@@ -429,7 +440,7 @@ public final class ReviewDispatcher {
 
   /** Keeps a review the full repository queue turned away, or records the skip when it cannot. */
   private void deferQueueFull(ReviewOrchestrator.ReviewRequest req) {
-    if (deferredReviews.deferFor(req, QUEUE_FULL_RETRY)) {
+    if (deferredReviews.requeueFor(req, QUEUE_FULL_RETRY)) {
       return;
     }
     skipEmitter.recordSkip(
