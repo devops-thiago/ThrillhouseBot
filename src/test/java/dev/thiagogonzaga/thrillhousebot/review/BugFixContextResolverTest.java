@@ -56,10 +56,6 @@ class BugFixContextResolverTest {
           "a marker and a box on two lines are not a checkbox");
     }
 
-    /**
-     * Every blank line used to be a place the checkbox pattern started from and read the rest of
-     * the blank run, so this body took minutes. It is about six times GitHub's body limit.
-     */
     /** A body holding a letter under a long run of combining marks, near GitHub's body limit. */
     @Test
     void shouldNotReadARunOfCombiningMarksAgainFromEachOfItsMarks() {
@@ -76,6 +72,10 @@ class BugFixContextResolverTest {
           });
     }
 
+    /**
+     * Every blank line used to be a place the checkbox pattern started from and read the rest of
+     * the blank run, so this body took minutes. It is about six times GitHub's body limit.
+     */
     @Test
     void shouldReadABodyOfBlankLinesInLinearTime() {
       var blank = "x" + "\n".repeat(400_000);

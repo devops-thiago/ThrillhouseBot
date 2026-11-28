@@ -137,10 +137,10 @@ final class RedactedAnchor {
 
   /** Key material right after key material is one run, as long as the two together or longer. */
   private static void add(List<Piece> pieces, Piece shape) {
-    if (shape instanceof KeyMaterial more
+    if (shape instanceof KeyMaterial(long more)
         && !pieces.isEmpty()
-        && pieces.getLast() instanceof KeyMaterial before) {
-      pieces.set(pieces.size() - 1, new KeyMaterial(before.min() + more.min()));
+        && pieces.getLast() instanceof KeyMaterial(long before)) {
+      pieces.set(pieces.size() - 1, new KeyMaterial(before + more));
     } else {
       pieces.add(shape);
     }
@@ -149,8 +149,8 @@ final class RedactedAnchor {
   /** Whether {@code pieces}, one after the other, are the whole of {@code line}. */
   private static boolean matches(List<Piece> pieces, String line) {
     // Nearly every diff line is some other line, and where it starts or ends is enough to tell.
-    if ((pieces.getFirst() instanceof Text first && !line.startsWith(first.text()))
-        || (pieces.getLast() instanceof Text end && !line.endsWith(end.text()))) {
+    if ((pieces.getFirst() instanceof Text(String first) && !line.startsWith(first))
+        || (pieces.getLast() instanceof Text(String end) && !line.endsWith(end))) {
       return false;
     }
     // Where in the line the pieces read so far can end.
@@ -160,9 +160,9 @@ final class RedactedAnchor {
       var next = new boolean[line.length() + 1];
       boolean any =
           switch (piece) {
-            case Text text -> afterText(line, text.text(), ends, next);
-            case Value value -> afterValue(line, value.characters(), ends, next);
-            case KeyMaterial material -> afterKeyMaterial(line, material.min(), ends, next);
+            case Text(String text) -> afterText(line, text, ends, next);
+            case Value(int characters) -> afterValue(line, characters, ends, next);
+            case KeyMaterial(long min) -> afterKeyMaterial(line, min, ends, next);
           };
       if (!any) {
         return false;
