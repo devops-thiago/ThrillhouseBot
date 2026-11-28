@@ -158,6 +158,12 @@ cannot resolve its review threads.
   an option given without a value was dropped without a word, so `--host` given last wrote the
   `<your-host>` placeholder. The script now stops with a message and writes no `.env`. `--host=...`
   is accepted too.
+- **A repository config whose key is a self-referencing collection no longer fails the review**: a
+  `.github/thrillhousebot.yml` with a mapping key that is itself a mapping or list holding an alias
+  to its own container (`? {k: &a {self: *a}}`) ran out of stack while the file was loaded, and
+  the review of that pull request failed. A file with a key that is not plain text is now ignored
+  with a warning, like any other file that cannot be read, and the review runs on the global
+  settings. Affects every release up to 0.9.3.
 
 ### Security
 

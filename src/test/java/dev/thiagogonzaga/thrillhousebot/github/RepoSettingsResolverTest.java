@@ -1092,6 +1092,26 @@ class RepoSettingsResolverTest {
   }
 
   /**
+   * A key that is a collection is hashed while the document loads. One that holds an alias to its
+   * own container hashes without end, a StackOverflowError before the cycle check runs, so a
+   * document with a key that is not a scalar is refused: in a mapping, in a set, and when a merge
+   * key brings it in.
+   */
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(
+      strings = {
+        "? {k: &a {self: *a}}\n: v\nreview:\n  ignored-files: [x]",
+        "? [&a [*a]]\n: v\nreview:\n  ignored-files: [x]",
+        "s: !!set\n  ? {k: &a {self: *a}}\nreview:\n  ignored-files: [x]",
+        "base: &b\n  ? {k: &a {self: *a}}\n  : v\nreview:\n  <<: *b\n  ignored-files: [x]",
+        "? [a, b]\n: v\nreview:\n  ignored-files: [x]"
+      })
+  void refusesAKeyThatIsNotAScalar(String yaml) {
+    org.junit.jupiter.api.Assertions.assertEquals(
+        RepoSettings.EMPTY, RepoSettingsParser.parse(yaml, "key.yml"));
+  }
+
+  /**
    * #481 review. The alias ceiling counts uses, and a ladder of lists that each name the rung below
    * twice stays under it while expanding to millions of nodes. The cycle walk that only tracked the
    * current path re-walked every shared rung from each parent and took as long as the expansion
