@@ -242,7 +242,7 @@ class GitHubReviewClientTest {
     var client = mock(GitHubReviewClient.class);
     when(client.lastReviewPage(anyString(), anyString(), anyString(), anyString(), anyInt()))
         .thenCallRealMethod();
-    when(client.headReviewsOnce("auth", "json", "o", "r", 7, 100)).thenReturn(headers);
+    when(client.lastReviewPageOnce("auth", "json", "o", "r", 7, 100)).thenReturn(headers);
     return client;
   }
 

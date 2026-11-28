@@ -115,7 +115,7 @@ public interface GitHubReviewClient {
   /** One HTTP attempt at the headers of a PR's review listing. */
   @HEAD
   @Path("/repos/{owner}/{repo}/pulls/{pullNumber}/reviews")
-  Response headReviewsOnce(
+  Response lastReviewPageOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
@@ -181,7 +181,7 @@ public interface GitHubReviewClient {
         auth,
         credential -> {
           try (var response =
-              headReviewsOnce(credential, accept, owner, repo, pullNumber, REVIEWS_PER_PAGE)) {
+              lastReviewPageOnce(credential, accept, owner, repo, pullNumber, REVIEWS_PER_PAGE)) {
             if (response.getStatus() != 200) {
               throw new WebApplicationException(response.getStatus());
             }
