@@ -261,13 +261,106 @@ class GitHubReviewClientTest {
   }
 
   @Test
-  void listingWithNoLastLinkHasOnePage() {
+  void headerThatNamesNoLastPageLeavesItUnknown() {
     assertEquals(
-        1, lastPageClient(reviewHeaders(200, null)).lastReviewPage("auth", "json", "o", "r", 7));
+        GitHubReviewClient.LAST_PAGE_UNKNOWN,
+        lastPageClient(reviewHeaders(200, null)).lastReviewPage("auth", "json", "o", "r", 7));
     assertEquals(
-        1,
-        lastPageClient(reviewHeaders(200, "<https://x/reviews?page=2>; rel=\"next\""))
-            .lastReviewPage("auth", "json", "o", "r", 7));
+        GitHubReviewClient.LAST_PAGE_UNKNOWN,
+        GitHubReviewClient.lastPage("<https://x/reviews?page=2>; rel=\"next\""));
+  }
+
+  @Test
+  void lastPageIsReadWhereverThePageParameterStandsInTheQuery() {
+    assertEquals(
+        12, GitHubReviewClient.lastPage("<https://x/reviews?per_page=100&page=12>; rel=\"last\""));
+    assertEquals(
+        12, GitHubReviewClient.lastPage("<https://x/reviews?page=12&per_page=100>; rel=\"last\""));
+    assertEquals(
+        12,
+        GitHubReviewClient.lastPage(
+            "<https://x/reviews?per_page=100&page=12&direction=asc#top>; rel=\"last\""));
+    assertEquals(12, GitHubReviewClient.lastPage("<https://x/reviews?page=12#top>; rel=\"last\""));
+  }
+
+  @Test
+  void lastPageIsReadFromTheLastLinkWhereverItStandsAmongTheLinks() {
+    assertEquals(
+        40,
+        GitHubReviewClient.lastPage(
+            "<https://x/reviews?page=40>; rel=\"last\", <https://x/reviews?page=2>; rel=\"next\","
+                + " <https://x/reviews?page=1>; rel=\"first\""));
+  }
+
+  @Test
+  void lastPageIsReadWhateverTheSpacingAndTheFormOfTheRelation() {
+    assertEquals(9, GitHubReviewClient.lastPage("<https://x/r?page=9>;rel=\"last\""));
+    assertEquals(9, GitHubReviewClient.lastPage("<https://x/r?page=9> ; rel = \"last\""));
+    assertEquals(9, GitHubReviewClient.lastPage("<https://x/r?page=9>; rel=last"));
+    assertEquals(9, GitHubReviewClient.lastPage("<https://x/r?page=9>; REL=\"Last\""));
+    assertEquals(9, GitHubReviewClient.lastPage("<https://x/r?page=9>; rel=\"next last\""));
+    assertEquals(
+        9, GitHubReviewClient.lastPage("<https://x/r?page=9>; title=\"end\"; rel=\"last\""));
+  }
+
+  @Test
+  void headerThatCannotBeReadLeavesTheLastPageUnknown() {
+    for (var header :
+        List.of(
+            "",
+            "garbage",
+            "<https://x/r?per_page=100>; rel=\"last\"",
+            "<https://x/r?page=abc>; rel=\"last\"",
+            "<https://x/r?mypage=9>; rel=\"last\"",
+            "<https://x/r?page=9>; rel=\"latest\"",
+            "<https://x/r?page=9>; title=\"last\"",
+            "<https://x/r?page=9>")) {
+      assertEquals(
+          GitHubReviewClient.LAST_PAGE_UNKNOWN, GitHubReviewClient.lastPage(header), header);
+    }
+  }
+
+  @Test
+  void fullFirstPagesWithNoLastPageKnownAreWalkedForwardToTheNewestReviews() {
+    var client = clientWithReviewPages(13, 40);
+    when(client.lastReviewPage("auth", "json", "o", "r", 7))
+        .thenReturn(GitHubReviewClient.LAST_PAGE_UNKNOWN);
+
+    var all = client.listReviews("auth", "json", "o", "r", 7);
+
+    // 1,240 reviews: the walk goes on to the short page, and the newest 1,000 are kept.
+    assertEquals(1000, all.size());
+    assertEquals(3040L, all.getFirst().id());
+    assertEquals(13039L, all.getLast().id());
+    verify(client, never()).listReviewsPage("auth", "json", "o", "r", 7, 100, 14);
+  }
+
+  @Test
+  void forwardWalkWithNoLastPageKnownIsBoundedAndStillReturnsAFullListing() {
+    var client = clientWithReviewPages(500, 100);
+    when(client.lastReviewPage("auth", "json", "o", "r", 7))
+        .thenReturn(GitHubReviewClient.LAST_PAGE_UNKNOWN);
+
+    var all = client.listReviews("auth", "json", "o", "r", 7);
+
+    int end = GitHubReviewClient.MAX_REVIEW_PAGES + GitHubReviewClient.MAX_UNGUIDED_REVIEW_PAGES;
+    assertEquals(1000, all.size());
+    assertEquals(end * 1000L + 99, all.getLast().id());
+    verify(client, never()).listReviewsPage("auth", "json", "o", "r", 7, 100, end + 1);
+  }
+
+  @Test
+  void forwardWalkStopsAtAPageThatDoesNotCome() {
+    var client = clientWithReviewPages(500, 100);
+    when(client.lastReviewPage("auth", "json", "o", "r", 7))
+        .thenReturn(GitHubReviewClient.LAST_PAGE_UNKNOWN);
+    when(client.listReviewsPage("auth", "json", "o", "r", 7, 100, 12)).thenReturn(null);
+
+    var all = client.listReviews("auth", "json", "o", "r", 7);
+
+    assertEquals(1000, all.size());
+    assertEquals(11099L, all.getLast().id());
+    verify(client, never()).listReviewsPage("auth", "json", "o", "r", 7, 100, 13);
   }
 
   @Test

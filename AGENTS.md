@@ -414,7 +414,9 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   reviews lists as empty without failing, so keep the failure at warn. Both this listing and the
   push's go through `ReviewListing`. `GitHubReviewClient.listReviews` returns at most 1,000
   reviews, and past that the newest ones (it reads the last page number from the `Link` header
-  and walks the pages at the end): every inline reply adds a review, so anyone can fill a window
+  and walks the pages at the end; `lastPage` finds the link whose `rel` holds `last` and reads
+  `page` wherever it stands, and when the header does not say, the walk goes forward page by page,
+  bounded, and never settles for the oldest): every inline reply adds a review, so anyone can fill a window
   from either end, and no window over everybody's reviews is enough. For a listing at the limit
   `ReviewListing` therefore asks GraphQL for the bot's own `APPROVED` reviews, and its `DISMISSED`
   ones under an alias of their own so they cannot crowd an approval out

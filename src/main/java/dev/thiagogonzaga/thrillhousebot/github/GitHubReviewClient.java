@@ -123,13 +123,56 @@ public interface GitHubReviewClient {
       @PathParam("pullNumber") int pullNumber,
       @QueryParam("per_page") int perPage);
 
-  /** The page number in the {@code rel="last"} entry of a {@code Link} header. */
-  Pattern LAST_PAGE_LINK = Pattern.compile("[?&]page=(\\d{1,7})>; ?rel=\"last\"");
+  /** One link of a {@code Link} header: its address, then its parameters up to the next link. */
+  Pattern LINK = Pattern.compile("<([^<>]*)>([^<]*)");
+
+  /** The relations a link's parameters give it, quoted (possibly several) or bare. */
+  Pattern LINK_REL = Pattern.compile("(?i)(?:^|[;\\s])rel\\s?=\\s?(?:\"([^\"]*)\"|([^\\s;,\"]+))");
+
+  /** The {@code page} parameter of a link's address, wherever it stands in the query. */
+  Pattern PAGE_PARAMETER = Pattern.compile("[?&]page=(\\d{1,7})(?:[&#]|$)");
+
+  /** What {@link #lastReviewPage} answers when the header does not say which page is last. */
+  int LAST_PAGE_UNKNOWN = 0;
+
+  /**
+   * How many pages past the first {@value #MAX_REVIEW_PAGES} {@link #listReviews} walks forward
+   * when the last page is not known.
+   */
+  int MAX_UNGUIDED_REVIEW_PAGES = 50;
+
+  /**
+   * The page number of the link whose relations include {@code last} in a {@code Link} header, or
+   * {@link #LAST_PAGE_UNKNOWN} when the header is absent, has no such link or gives it no readable
+   * {@code page}. The links may come in any order, the relation list may hold more than one
+   * relation, and {@code page} may stand anywhere in the query.
+   */
+  static int lastPage(String linkHeader) {
+    var links = LINK.matcher(linkHeader != null ? linkHeader : "");
+    while (links.find()) {
+      var rel = LINK_REL.matcher(links.group(2));
+      if (rel.find() && namesLast(rel.group(1) != null ? rel.group(1) : rel.group(2))) {
+        var page = PAGE_PARAMETER.matcher(links.group(1));
+        return page.find() ? Integer.parseInt(page.group(1)) : LAST_PAGE_UNKNOWN;
+      }
+    }
+    return LAST_PAGE_UNKNOWN;
+  }
+
+  private static boolean namesLast(String relations) {
+    for (var relation : relations.trim().split("\\s+")) {
+      if ("last".equalsIgnoreCase(relation)) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   /**
    * The number of the last page of a PR's reviews at {@value #REVIEWS_PER_PAGE} a page, from the
-   * {@code Link} header GitHub answers the listing with; 1 when it names no last page, which is a
-   * listing of one page. Only the page number is taken from the header, never an address.
+   * {@code Link} header GitHub answers the listing with ({@link #lastPage}); {@link
+   * #LAST_PAGE_UNKNOWN} when the header does not say. Only the page number is taken from the
+   * header, never an address.
    */
   default int lastReviewPage(
       String auth, String accept, String owner, String repo, int pullNumber) {
@@ -142,9 +185,7 @@ public interface GitHubReviewClient {
             if (response.getStatus() != 200) {
               throw new WebApplicationException(response.getStatus());
             }
-            var link = response.getHeaderString("Link");
-            var last = LAST_PAGE_LINK.matcher(link != null ? link : "");
-            return last.find() ? Integer.parseInt(last.group(1)) : 1;
+            return lastPage(response.getHeaderString("Link"));
           }
         });
   }
@@ -161,6 +202,12 @@ public interface GitHubReviewClient {
    * the end are walked too, so what is returned is the newest reviews, not the oldest: the bot's
    * latest verdict and a pending review of its own are among those. A result of exactly that size
    * means older reviews may have been left out.
+   *
+   * <p>When the header does not say which page is last, the walk does not stop at the oldest
+   * reviews: it goes on page by page to the first short one, for at most {@value
+   * #MAX_UNGUIDED_REVIEW_PAGES} pages more, and the newest reviews it reached are returned. The
+   * result is then of the full size too, so a caller that reads the bot's own reviews apart at that
+   * size ({@code ReviewListing}) still does.
    */
   default List<ReviewResponse> listReviews(
       String auth, String accept, String owner, String repo, int pullNumber) {
@@ -178,6 +225,19 @@ public interface GitHubReviewClient {
       return all;
     }
     int last = lastReviewPage(auth, accept, owner, repo, pullNumber);
+    int kept = MAX_REVIEW_PAGES * REVIEWS_PER_PAGE;
+    if (last == LAST_PAGE_UNKNOWN) {
+      int end = MAX_REVIEW_PAGES + MAX_UNGUIDED_REVIEW_PAGES;
+      for (page = MAX_REVIEW_PAGES + 1;
+          batch != null && batch.size() == REVIEWS_PER_PAGE && page <= end;
+          page++) {
+        batch = listReviewsPage(auth, accept, owner, repo, pullNumber, REVIEWS_PER_PAGE, page);
+        if (batch != null) {
+          all.addAll(batch);
+        }
+      }
+      return new ArrayList<>(all.subList(all.size() - kept, all.size()));
+    }
     // One page more than is kept, because the last page is rarely full.
     int from = Math.max(MAX_REVIEW_PAGES + 1, last - MAX_REVIEW_PAGES);
     if (from > MAX_REVIEW_PAGES + 1) {
@@ -190,7 +250,6 @@ public interface GitHubReviewClient {
         all.addAll(batch);
       }
     }
-    int kept = MAX_REVIEW_PAGES * REVIEWS_PER_PAGE;
     return new ArrayList<>(all.subList(Math.max(0, all.size() - kept), all.size()));
   }
 
