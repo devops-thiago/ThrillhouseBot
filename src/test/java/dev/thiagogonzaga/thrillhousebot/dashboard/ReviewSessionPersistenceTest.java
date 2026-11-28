@@ -130,11 +130,13 @@ class ReviewSessionPersistenceTest extends ReviewSessionTestSupport {
 
   @Test
   void shouldReturnEachPriorRoundsHeadAlignedWithItsResponse() throws Exception {
-    persistSessionWith("owner/repo", 3, ReviewSession.STATUS_COMPLETED, "{\"v\":1}", "sha-one");
+    var first =
+        persistSessionWith("owner/repo", 3, ReviewSession.STATUS_COMPLETED, "{\"v\":1}", "sha-one");
     persistSessionWith("owner/repo", 3, ReviewSession.STATUS_FAILED, "{\"v\":2}", "sha-failed");
     persistSessionWith("owner/repo", 3, ReviewSession.STATUS_COMPLETED, null, "sha-no-response");
     persistSessionWith("owner/repo", 4, ReviewSession.STATUS_COMPLETED, "{\"v\":3}", "sha-other");
-    persistSessionWith("owner/repo", 3, ReviewSession.STATUS_COMPLETED, "{\"v\":4}", "sha-two");
+    var second =
+        persistSessionWith("owner/repo", 3, ReviewSession.STATUS_COMPLETED, "{\"v\":4}", "sha-two");
     var current =
         persistSessionWith("owner/repo", 3, ReviewSession.STATUS_IN_PROGRESS, null, "sha-now");
 
@@ -144,6 +146,15 @@ class ReviewSessionPersistenceTest extends ReviewSessionTestSupport {
     assertEquals(
         java.util.List.of("sha-two", "sha-one"),
         persistence.findAllPriorCommitShas(TestScopes.scope("owner/repo"), 3, current.id));
+    assertEquals(
+        java.util.List.of(startedAt(second), startedAt(first)),
+        persistence.findAllPriorStartTimes(TestScopes.scope("owner/repo"), 3, current.id));
+  }
+
+  /** The start time as the database holds it, which may be coarser than the one set. */
+  private static java.time.Instant startedAt(ReviewSession session) {
+    ReviewSession stored = ReviewSession.findById(session.id);
+    return stored.getTimestamp();
   }
 
   @Test

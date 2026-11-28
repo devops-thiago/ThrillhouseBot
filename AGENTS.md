@@ -344,6 +344,11 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   effective round, see #1316 below), and `FollowUpAnalyzer.withoutOpenThreadDuplicates` drops a restatement
   that gets through anyway, in `FindingPipeline.finish` so every lane and retry is covered.
   `SecurityScan.merge` applies the same rule to scan detections.
+- **A finding cleared from the PR conversation is not raised again while its code is unchanged**
+  (#1430). `FollowUpAnalyzer.withoutConversationCleared` needs the earlier finding's file, and
+  every other changed file its text names (`NamedFiles`, #1316), unchanged since the round that
+  raised it. A directive counts only for rounds that started before it was written, so a finding
+  raised again after a change needs its own clear. A missing round or comment time drops nothing.
 - **The still-open set is one entry per open finding, by identity** (#917, #934).
   `FollowUpAnalyzer.stillOpenFindings` is the distinct in-range `unresolved` ids plus the backstop's
   holds; the two cannot overlap because the backstop skips ids the round reported. The summary's
