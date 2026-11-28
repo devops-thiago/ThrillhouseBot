@@ -1111,6 +1111,15 @@ class RepoSettingsResolverTest {
         RepoSettings.EMPTY, RepoSettingsParser.parse(yaml, "key.yml"));
   }
 
+  /** A set of plain values has only scalar keys, so the rest of the file is still read. */
+  @Test
+  void readsAFileThatHoldsASetOfScalars() {
+    var settings =
+        RepoSettingsParser.parse("s: !!set {a, b}\nreview:\n  ignored-files: [x]", "set.yml");
+
+    org.junit.jupiter.api.Assertions.assertEquals(List.of("x"), settings.ignoredFiles());
+  }
+
   /**
    * #481 review. The alias ceiling counts uses, and a ladder of lists that each name the rung below
    * twice stays under it while expanding to millions of nodes. The cycle walk that only tracked the
