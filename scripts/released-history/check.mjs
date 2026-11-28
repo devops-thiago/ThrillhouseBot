@@ -26,8 +26,9 @@ export function releasedVersions(tags) {
 
 // A line ending is a line feed, a carriage return, or both.
 const LINE_END = /\r\n|\n|\r/;
-// What opens a block quote or a list item: `>`, a bullet or a number, each up to three spaces in.
-const CONTAINER = /^ {0,3}(?:>[ \t]?|(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|$))/;
+// What opens a block quote or a list item: `>`, or a bullet or a number with a space, a tab or
+// the end of the line after it, each up to three spaces in.
+const CONTAINER = /^ {0,3}(?:(>)[ \t]?|(?:[-*+]|\d{1,9}[.)])(?=[ \t]|$))/;
 // A code fence opens up to three spaces in with three or more backticks or tildes. A backtick
 // fence has no backtick in the rest of its line; such a line is a paragraph with inline code.
 const FENCE_OPEN = /^ {0,3}(?:(`{3,})[^`]*|(~{3,})[^]*)$/;
@@ -49,10 +50,25 @@ const INDENTED = /^(?: {4}| {0,3}\t)/;
 // list item with text (numbered from 1), or a thematic break.
 const PARAGRAPH_END = /^ {0,3}(?:#{1,6}(?:[ \t]|$)|>|[-*+][ \t]+\S|1[.)][ \t]+\S|([*_])(?:[ \t]*\1){2,}[ \t]*$)/;
 
-/** {@code line} without the block quote and list markers it starts with, however many are nested. */
+/**
+ * {@code line} without the block quote and list markers it starts with, however many are nested.
+ * A list marker takes the spaces and tabs after it when they are one to four columns wide. With
+ * five or more the item's text starts one column after the marker and the rest of the line is an
+ * indented code block, so it is returned with that indentation and reads as no heading or fence.
+ */
 export function withoutContainers(line) {
   let text = line;
-  for (let match = CONTAINER.exec(text); match; match = CONTAINER.exec(text)) text = text.slice(match[0].length);
+  let column = 0;
+  for (let match = CONTAINER.exec(text); match; match = CONTAINER.exec(text)) {
+    column += indentOf(match[0], column) + match[0].trimStart().length;
+    text = text.slice(match[0].length);
+    if (match[1]) continue;
+    const rest = text.replace(/^[ \t]*/, '');
+    const gap = indentOf(text, column);
+    if (rest !== '' && gap >= 5) return ' '.repeat(gap - 1) + rest;
+    column += gap;
+    text = rest;
+  }
   return text;
 }
 
@@ -63,15 +79,18 @@ function withoutQuotes(line) {
   return text;
 }
 
-/** The column the text of {@code line} starts in, a tab reaching the next multiple of four. */
-function indentOf(line) {
-  let column = 0;
+/**
+ * How many columns the spaces and tabs at the start of {@code line} take when the line starts in
+ * column {@code from}, a tab reaching the next multiple of four.
+ */
+function indentOf(line, from = 0) {
+  let column = from;
   for (const character of line) {
     if (character === ' ') column += 1;
     else if (character === '\t') column += 4 - (column % 4);
     else break;
   }
-  return column;
+  return column - from;
 }
 
 /** The run of backticks or tildes {@code line} opens a code fence with, or undefined. */
@@ -90,8 +109,8 @@ function closesFence(line, opener) {
  * The code fence {@code line} opens, or null. A fence that opens a block quote or a list item
  * belongs to it: {@code leftBy} tells whether a later line is outside the quote or the item, which
  * ends the fence with no closing line, and {@code within} gives a later line as the quote or the
- * item holds it. A fence behind both kinds of marker, or behind a marker followed by a tab or by
- * five spaces (an indented code block), is not read as a fence, so nothing after it is hidden.
+ * item holds it. A fence behind both kinds of marker, or behind a marker followed by a tab, is not
+ * read as a fence, so nothing after it is hidden.
  */
 function fenceAt(line) {
   const text = withoutContainers(line);
@@ -100,7 +119,7 @@ function fenceAt(line) {
   const prefix = line.slice(0, line.length - text.length);
   if (prefix === '') return { run, leftBy: () => false, within: (next) => next };
   if (/^[ >]*$/.test(prefix)) return { run, leftBy: (next) => !QUOTE.test(next), within: withoutQuotes };
-  if (/[>\t]| {5}$/.test(prefix)) return null;
+  if (/[>\t]/.test(prefix)) return null;
   const width = prefix.length;
   return {
     run,
@@ -203,7 +222,9 @@ function sectionsOf(lines, honourFences) {
       if (heading !== undefined) { close(); name = heading; body = []; }
       // A line of dashes or, under paragraph text, of equals signs ends the paragraph it follows.
       const underline = UNDERLINE.test(line) || (paragraph && TITLE_UNDERLINE.test(line));
-      paragraph = !BLANK.test(text) && !endsParagraph(text) && !underline && (paragraph || starts || text !== line);
+      // The text after a marker starts a paragraph unless it is an indented code block.
+      const begins = text === line ? paragraph || starts : !INDENTED.test(text);
+      paragraph = !BLANK.test(text) && !endsParagraph(text) && !underline && begins;
     }
     if (name !== null) body.push(line);
   }

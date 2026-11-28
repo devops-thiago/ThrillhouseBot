@@ -263,6 +263,11 @@ test('a changelog heading counts inside a block quote or a list item', () => {
   assert.deepEqual(repeatedIn(subheadingsOf(section)), ['Fixed', 'Security']);
 });
 
+test('a changelog heading five columns after a list marker is code, not a heading', () => {
+  const section = ['### Fixed', '-     ### Fixed', '1.     ### Fixed', '- \t\t### Fixed', '> -     ### Fixed', '-    ### Security', '-\t### Security'].join('\n');
+  assert.deepEqual(subheadingsOf(section), ['Fixed', 'Security', 'Security']);
+});
+
 test('a fence that opens a list item or a block quote hides the headings inside it', () => {
   const section = ['### Fixed', '- ```md', '  ### Fixed', '  ```', '> ~~~', '> ### Security', '> ~~~', '### Security'].join('\n');
   assert.deepEqual(subheadingsOf(section), ['Fixed', 'Security']);

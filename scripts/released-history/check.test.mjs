@@ -132,6 +132,13 @@ test('a second released section is found in every form Markdown reads as a level
     ['[1.0.0]', 'of 2026-01-01', '----  '],
     // An indented code block ends at the paragraph that follows it.
     ['    code', '[1.0.0] - 2026-01-01', '---'],
+    // Up to four columns after a list marker belong to the marker, and a tab is at most four.
+    ['-    ## [1.0.0] - 2026-01-01'],
+    ['-\t## [1.0.0] - 2026-01-01'],
+    ['1.\t## [1.0.0] - 2026-01-01'],
+    ['> -  ## [1.0.0] - 2026-01-01'],
+    // A list item that holds only a code block has no paragraph for the next line to continue.
+    ['-     code', '[1.0.0] - 2026-01-01', '---'],
     // A line of equals signs makes the paragraph above it a title and ends it.
     ['Title', '===', '[1.0.0] - 2026-01-01', '---'],
   ];
@@ -160,6 +167,12 @@ test('a line Markdown does not read as a level-two heading is no section', () =>
     ['    ## [1.0.0] - 2026-01-01'],
     ['\t## [1.0.0] - 2026-01-01'],
     ['    [1.0.0] - 2026-01-01', '    ---'],
+    // Five or more columns after a list marker make the rest an indented code block in the item.
+    ['-     ## [1.0.0] - 2026-01-01'],
+    ['1.     ## [1.0.0] - 2026-01-01'],
+    ['- \t\t## [1.0.0] - 2026-01-01'],
+    ['> -     ## [1.0.0] - 2026-01-01'],
+    ['- -      ## [1.0.0] - 2026-01-01'],
     ['##[1.0.0] - 2026-01-01'],
     ['# [1.0.0] - 2026-01-01'],
     ['### [1.0.0] - 2026-01-01'],
