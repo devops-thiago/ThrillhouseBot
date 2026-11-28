@@ -158,6 +158,11 @@ cannot resolve its review threads.
   an option given without a value was dropped without a word, so `--host` given last wrote the
   `<your-host>` placeholder. The script now stops with a message and writes no `.env`. `--host=...`
   is accepted too.
+- **Label writes are repeated with a fresh token (#1551)**: adding or creating a label sent the
+  token the review read at its start and was not repeated after a 401, so a review that outlived its
+  token skipped its labels with only a warning. Label writes, check-run creation, reactions and the
+  read of an installation's repository are now repeated once with the replacement token, as the
+  other calls are. Label writes also take their turn with the bot's other writes, one second apart.
 
 ### Security
 
