@@ -27,7 +27,7 @@ void main(String[] args) throws Exception {
       githubUrl = args[i + 1].strip().replaceAll("/+$", "");
     }
   }
-  var refused = githubUrl == null || githubUrl.isEmpty() ? null : githubUrlProblem(githubUrl);
+  var refused = githubUrlProblem(githubUrl);
   if (refused != null) {
     System.err.println(
         "❌ --github-url must be an https address, like https://github.example.com: found "
@@ -115,9 +115,13 @@ void main(String[] args) throws Exception {
   IO.println("👉 Still needed: AI_API_KEY, DB_PASSWORD");
 }
 
-/// What keeps the bot from starting on this GITHUB_URL, or null when it would accept it.
+/// What keeps the bot from starting on this GITHUB_URL, or null when it would accept it
+/// or none was given.
 /// The value is never repeated, since it can hold a password.
 String githubUrlProblem(String value) {
+  if (value == null || value.isEmpty()) {
+    return null;
+  }
   java.net.URI uri;
   try {
     uri = new java.net.URI(value);
