@@ -5,7 +5,6 @@ import { pathToFileURL } from 'node:url';
 // docs are a record of what shipped: a correction goes into a later release (an Errata entry),
 // never into the released text.
 const RELEASE_TAG = /^v(\d+\.\d+\.\d+)$/;
-const SECTION = /^## \[([^\]]+)\]/;
 const ARCHIVE_PATHS = [
   /^website\/src\/content\/docs\/(\d+\.\d+\.\d+)\//,
   /^website\/src\/assets\/(\d+\.\d+\.\d+)\//,
@@ -20,14 +19,130 @@ export function releasedVersions(tags) {
   return new Set(tags.map((tag) => RELEASE_TAG.exec(tag)?.[1]).filter(Boolean));
 }
 
-const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+// The changelog is read line by line with CommonMark's own rules for the blocks that matter here,
+// so a line GitHub shows as a heading is one here too, and a line it shows as text is not taken
+// for a code fence. The policy test (scripts/workflows/policy.test.mjs) reads the unreleased
+// section's `###` headings with the same helpers.
+
+// A line ending is a line feed, a carriage return, or both.
+const LINE_END = /\r\n|\n|\r/;
+// What opens a block quote or a list item: `>`, a bullet or a number, each up to three spaces in.
+const CONTAINER = /^ {0,3}(?:>[ \t]?|(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|$))/;
+// A code fence opens up to three spaces in with three or more backticks or tildes. A backtick
+// fence has no backtick in the rest of its line; such a line is a paragraph with inline code.
+const FENCE_OPEN = /^ {0,3}(?:(`{3,})[^`]*|(~{3,})[^]*)$/;
+// A closing fence has nothing after it but spaces and tabs.
+const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
+// A level-two heading written with hashes: up to three spaces, `##`, spaces or tabs, the name.
+// A closing run of hashes comes after the name, so it needs no rule here.
+const SECTION = /^ {0,3}##[ \t]+\[([^\]]+)\]/;
+// A level-two heading written as a paragraph with a line of dashes under it. A `[name]:` line is
+// a link definition, not a paragraph.
+const UNDERLINED_SECTION = /^ {0,3}\[([^\]]+)\](?!:)/;
+const UNDERLINE = /^ {0,3}-+[ \t]*$/;
+// The same with equals signs makes a level-one heading.
+const TITLE_UNDERLINE = /^ {0,3}=+[ \t]*$/;
+const BLANK = /^[ \t]*$/;
+const QUOTE = /^ {0,3}>[ \t]?/;
+const INDENTED = /^(?: {4}| {0,3}\t)/;
+// What ends a paragraph without a blank line, besides a code fence: a heading, a block quote, a
+// list item with text (numbered from 1), or a thematic break.
+const PARAGRAPH_END = /^ {0,3}(?:#{1,6}(?:[ \t]|$)|>|[-*+][ \t]+\S|1[.)][ \t]+\S|([*_])(?:[ \t]*\1){2,}[ \t]*$)/;
+
+/** {@code line} without the block quote and list markers it starts with, however many are nested. */
+export function withoutContainers(line) {
+  let text = line;
+  for (let match = CONTAINER.exec(text); match; match = CONTAINER.exec(text)) text = text.slice(match[0].length);
+  return text;
+}
+
+/** {@code line} without the block quote markers it starts with. */
+function withoutQuotes(line) {
+  let text = line;
+  for (let match = QUOTE.exec(text); match; match = QUOTE.exec(text)) text = text.slice(match[0].length);
+  return text;
+}
+
+/** The column the text of {@code line} starts in, a tab reaching the next multiple of four. */
+function indentOf(line) {
+  let column = 0;
+  for (const character of line) {
+    if (character === ' ') column += 1;
+    else if (character === '\t') column += 4 - (column % 4);
+    else break;
+  }
+  return column;
+}
+
+/** The run of backticks or tildes {@code line} opens a code fence with, or undefined. */
+function fenceOpener(line) {
+  const match = FENCE_OPEN.exec(line);
+  return match ? match[1] ?? match[2] : undefined;
+}
+
+/** Whether {@code line} closes the fence {@code opener} opened: the same character, at least as long. */
+function closesFence(line, opener) {
+  const run = FENCE_CLOSE.exec(line)?.[1];
+  return run !== undefined && run[0] === opener[0] && run.length >= opener.length;
+}
 
 /**
- * Each `## [name]` section of a changelog, keyed by name, with trailing blank lines dropped. A
- * `## [name]` line inside a fenced code block is text of the section around it, not a heading. A
- * fence that is never closed hides nothing: every heading then counts, so a stray fence cannot
- * take the released sections after it out of the check. A name that heads more than one section
- * keeps the text of all of them, in file order, so no copy stands in for another.
+ * The code fence {@code line} opens, or null. A fence that opens a block quote or a list item
+ * belongs to it: {@code leftBy} tells whether a later line is outside the quote or the item, which
+ * ends the fence with no closing line, and {@code within} gives a later line as the quote or the
+ * item holds it. A fence behind both kinds of marker, or behind a marker followed by a tab or by
+ * five spaces (an indented code block), is not read as a fence, so nothing after it is hidden.
+ */
+function fenceAt(line) {
+  const text = withoutContainers(line);
+  const run = fenceOpener(text);
+  if (run === undefined) return null;
+  const prefix = line.slice(0, line.length - text.length);
+  if (prefix === '') return { run, leftBy: () => false, within: (next) => next };
+  if (/^[ >]*$/.test(prefix)) return { run, leftBy: (next) => !QUOTE.test(next), within: withoutQuotes };
+  if (/[>\t]| {5}$/.test(prefix)) return null;
+  const width = prefix.length;
+  return {
+    run,
+    leftBy: (next) => indentOf(next) < width,
+    within: (next) => ' '.repeat(Math.max(0, indentOf(next) - width)) + next.replace(/^[ \t]*/, ''),
+  };
+}
+
+/**
+ * Tells, for the lines of a Markdown text given in order, which belong to a fenced code block.
+ * A fence opens and closes by the CommonMark rules: up to three spaces in, a backtick fence with
+ * no backtick in its info string, a closing run of the same character at least as long with only
+ * spaces and tabs after it. A fence opened inside a block quote or a list item also ends where
+ * the quote or the item does.
+ */
+export function fenceReader() {
+  let fence = null;
+  return {
+    /** Whether {@code line} opens, is inside or closes a fenced code block. */
+    inFence(line) {
+      if (fence !== null && !BLANK.test(line) && fence.leftBy(line)) fence = null;
+      if (fence === null) {
+        fence = fenceAt(line);
+        return fence !== null;
+      }
+      if (closesFence(fence.within(line), fence.run)) fence = null;
+      return true;
+    },
+    /** Whether a fence is open after the last line read. */
+    isOpen: () => fence !== null,
+  };
+}
+
+/**
+ * Each level-two `[name]` section of a changelog, keyed by name, with trailing blank lines
+ * dropped. The heading may be written any way Markdown reads as one: `## [name]` up to three
+ * spaces in, with spaces or tabs after the hashes, at the start of a block quote or a list item,
+ * or a paragraph starting `[name]` with a line of dashes under it. A heading inside a fenced code
+ * block is text of the section around it, not a heading. A fence that is never closed hides
+ * nothing: every heading then counts, so a stray fence cannot take the released sections after it
+ * out of the check. A name that heads more than one section keeps the text of all of them, in
+ * file order, so no copy stands in for another.
  */
 export function changelogSections(text) {
   return parse(text).sections;
@@ -39,8 +154,27 @@ export function repeatedSections(text) {
 }
 
 function parse(text) {
-  const lines = text.split(/\r?\n/);
+  const lines = text.split(LINE_END);
   return sectionsOf(lines, true) ?? sectionsOf(lines, false);
+}
+
+/** Whether {@code line} starts a block of its own, so it cannot continue a paragraph. */
+function endsParagraph(line) {
+  return PARAGRAPH_END.test(line) || fenceOpener(line) !== undefined;
+}
+
+/**
+ * The name of the section a paragraph starting at {@code lines[start]} heads, or undefined. The
+ * paragraph is a heading when a line of dashes follows its last line.
+ */
+function underlinedSection(lines, start) {
+  const name = UNDERLINED_SECTION.exec(lines[start])?.[1];
+  if (name === undefined) return undefined;
+  for (let index = start + 1; index < lines.length; index++) {
+    if (UNDERLINE.test(lines[index])) return name;
+    if (BLANK.test(lines[index]) || TITLE_UNDERLINE.test(lines[index]) || endsParagraph(lines[index])) return undefined;
+  }
+  return undefined;
 }
 
 /** The sections of {@code lines}, or null when fences are honoured and one is left open. */
@@ -49,25 +183,31 @@ function sectionsOf(lines, honourFences) {
   const repeated = new Set();
   let name = null;
   let body = [];
-  let fence = null;
+  const fences = honourFences ? fenceReader() : null;
+  // Whether the line before is paragraph text, which the next line then continues. The text of a
+  // list item or a block quote is continued by an unmarked line too.
+  let paragraph = false;
   const close = () => {
     if (name === null) return;
     const text = body.join('\n').trimEnd();
     if (sections.has(name)) repeated.add(name);
     sections.set(name, sections.has(name) ? `${sections.get(name)}\n\n${text}` : text);
   };
-  for (const line of lines) {
-    const marker = honourFences ? FENCE.exec(line)?.[1] : undefined;
-    if (fence === null) {
-      const match = SECTION.exec(line);
-      if (match) { close(); name = match[1]; body = []; }
-      if (marker) fence = marker;
-    } else if (marker && marker[0] === fence[0] && marker.length >= fence.length && line.trim() === marker) {
-      fence = null;
+  for (const [index, line] of lines.entries()) {
+    if (fences?.inFence(line)) {
+      paragraph = false;
+    } else {
+      const text = withoutContainers(line);
+      const starts = !paragraph && !INDENTED.test(line);
+      const heading = SECTION.exec(text)?.[1] ?? (starts ? underlinedSection(lines, index) : undefined);
+      if (heading !== undefined) { close(); name = heading; body = []; }
+      // A line of dashes or, under paragraph text, of equals signs ends the paragraph it follows.
+      const underline = UNDERLINE.test(line) || (paragraph && TITLE_UNDERLINE.test(line));
+      paragraph = !BLANK.test(text) && !endsParagraph(text) && !underline && (paragraph || starts || text !== line);
     }
     if (name !== null) body.push(line);
   }
-  if (fence !== null) return null;
+  if (fences?.isOpen()) return null;
   close();
   return { sections, repeated };
 }

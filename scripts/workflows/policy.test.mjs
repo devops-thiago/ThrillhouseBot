@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { changelogSections, repeatedSections } from '../released-history/check.mjs';
+import { changelogSections, fenceReader, repeatedSections, withoutContainers } from '../released-history/check.mjs';
 
 // Rules the workflows and the files around them are held to. They are read as text, the way a
 // reviewer reads them, so a rule that stops holding fails here with the file and the line.
@@ -182,25 +182,17 @@ test('the released-history check reads the test merge of the head it was started
   assert.match(job, /run: BASE_SHA="\$MERGE_BASE_SHA" HEAD_SHA="\$MERGE_SHA" node scripts\/released-history\/check\.mjs$/m);
 });
 
-const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 // An ATX heading of level three: up to three spaces, `###`, then its text or the end of the line.
 const SUBHEADING = /^ {0,3}###(?:[ \t]+(.*))?$/;
-// What opens a block quote or a list item: `>`, a bullet or a number, each up to three spaces in.
-const CONTAINER = /^ {0,3}(?:>[ \t]?|(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|$))/;
-
-/** {@code line} without the block quote and list markers it starts with, however many are nested. */
-function withoutContainers(line) {
-  let text = line;
-  for (let match = CONTAINER.exec(text); match; match = CONTAINER.exec(text)) text = text.slice(match[0].length);
-  return text;
-}
 
 /**
  * The level-three headings of a changelog section, leaving out the ones inside a fenced code
  * block. A heading may start up to three spaces in and may end with a closing run of `#`. A
  * heading or a fence that opens a block quote or a list item is read as one, since GitHub shows
  * a heading there too. A fence that is never closed hides nothing: every heading then counts,
- * so a stray fence cannot take the headings after it out of the check.
+ * so a stray fence cannot take the headings after it out of the check. Fences and the block quote
+ * and list markers are read by the released-history check's own helpers, so both read a changelog
+ * the same way.
  */
 function subheadingsOf(section) {
   const lines = section.split('\n');
@@ -210,18 +202,11 @@ function subheadingsOf(section) {
 /** The headings of {@code lines}, or null when fences are honoured and one is left open. */
 function subheadingsIn(lines, honourFences) {
   const headings = [];
-  let fence = null;
+  const fences = honourFences ? fenceReader() : null;
   for (const line of lines) {
-    const text = withoutContainers(line);
-    const marker = honourFences ? FENCE.exec(text)?.[1] : undefined;
-    if (fence === null) {
-      if (marker) fence = marker;
-      else headings.push(...subheadingOf(text));
-    } else if (marker && marker[0] === fence[0] && marker.length >= fence.length && text.trim() === marker) {
-      fence = null;
-    }
+    if (!fences?.inFence(line)) headings.push(...subheadingOf(withoutContainers(line)));
   }
-  return fence === null ? headings : null;
+  return fences?.isOpen() ? null : headings;
 }
 
 /** The heading text of {@code line} in a list of one, or an empty list when it is no heading. */
@@ -252,6 +237,17 @@ test('an unclosed fence hides no changelog heading', () => {
   assert.deepEqual(repeatedIn(subheadingsOf(section)), ['Security']);
   // A fence that is closed after all still hides what is inside it.
   assert.deepEqual(subheadingsOf(`${section}\n\`\`\``), ['Security']);
+});
+
+test('a line that only looks like a code fence hides no changelog heading', () => {
+  // A backtick fence has no backtick in its info string, and only spaces or tabs follow a closing
+  // fence: the same rules the released-history check reads a changelog by.
+  assert.deepEqual(subheadingsOf(['### Fixed', '``` a`b', '### Fixed', '```', '``` a`b', '```'].join('\n')), ['Fixed', 'Fixed']);
+  assert.deepEqual(subheadingsOf(['```', '```\u00a0', '### Fixed', '```', '### Security'].join('\n')), ['Security']);
+  assert.deepEqual(subheadingsOf(['~~~ a`b', '### Fixed', '~~~\t', '### Security'].join('\n')), ['Security']);
+  // A fence in a list item ends with the item, and a marked line closes no fence outside one.
+  assert.deepEqual(subheadingsOf(['- ```', '### Fixed', '```', '```', '### Fixed'].join('\n')), ['Fixed', 'Fixed']);
+  assert.deepEqual(subheadingsOf(['```', '- ```', '### Fixed', '```', '### Security'].join('\n')), ['Security']);
 });
 
 test('a changelog heading counts with up to three spaces before it', () => {
