@@ -182,20 +182,41 @@ test('the released-history check reads the test merge of the head it was started
   assert.match(job, /run: BASE_SHA="\$MERGE_BASE_SHA" HEAD_SHA="\$MERGE_SHA" node scripts\/released-history\/check\.mjs$/m);
 });
 
-/** The `### ` headings of a changelog section, leaving out the ones inside a fenced code block. */
+const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+// An ATX heading of level three: up to three spaces, `###`, then its text or the end of the line.
+const SUBHEADING = /^ {0,3}###(?:[ \t]+(.*))?$/;
+
+/**
+ * The level-three headings of a changelog section, leaving out the ones inside a fenced code
+ * block. A heading may start up to three spaces in and may end with a closing run of `#`. A
+ * fence that is never closed hides nothing: every heading then counts, so a stray fence cannot
+ * take the headings after it out of the check.
+ */
 function subheadingsOf(section) {
+  const lines = section.split('\n');
+  return subheadingsIn(lines, true) ?? subheadingsIn(lines, false);
+}
+
+/** The headings of {@code lines}, or null when fences are honoured and one is left open. */
+function subheadingsIn(lines, honourFences) {
   const headings = [];
   let fence = null;
-  for (const line of section.split('\n')) {
-    const marker = line.match(/^ {0,3}(`{3,}|~{3,})/)?.[1];
+  for (const line of lines) {
+    const marker = honourFences ? FENCE.exec(line)?.[1] : undefined;
     if (fence === null) {
       if (marker) fence = marker;
-      else if (line.startsWith('### ')) headings.push(line.slice(4).trim());
+      else headings.push(...subheadingOf(line));
     } else if (marker && marker[0] === fence[0] && marker.length >= fence.length && line.trim() === marker) {
       fence = null;
     }
   }
-  return headings;
+  return fence === null ? headings : null;
+}
+
+/** The heading text of {@code line} in a list of one, or an empty list when it is no heading. */
+function subheadingOf(line) {
+  const match = SUBHEADING.exec(line.trimEnd());
+  return match ? [(match[1] ?? '').replace(/(?:^|[ \t]+)#+$/, '').trim()] : [];
 }
 
 const repeatedIn = (values) => [...new Set(values.filter((value, index) => values.indexOf(value) !== index))];
@@ -211,6 +232,22 @@ test('a repeated changelog heading is found outside fenced examples only', () =>
   const section = ['## [Unreleased]', '', '### Fixed', '- a', '', '```md', '### Fixed', '```', '', '~~~', '```', '### Security', '~~~', '', '### Security', '- b', '', '### Fixed', '- c'].join('\n');
   assert.deepEqual(subheadingsOf(section), ['Fixed', 'Security', 'Fixed']);
   assert.deepEqual(repeatedIn(subheadingsOf(section)), ['Fixed']);
+});
+
+test('an unclosed fence hides no changelog heading', () => {
+  const heading = '### Security';
+  const section = ['## [Unreleased]', '', heading, '- a', '', '```', '', heading, '- b'].join('\n');
+  assert.deepEqual(subheadingsOf(section), ['Security', 'Security']);
+  assert.deepEqual(repeatedIn(subheadingsOf(section)), ['Security']);
+  // A fence that is closed after all still hides what is inside it.
+  assert.deepEqual(subheadingsOf(`${section}\n\`\`\``), ['Security']);
+});
+
+test('a changelog heading counts with up to three spaces before it', () => {
+  const section = ['### Fixed', ' ### Fixed', '  ### Added', '   ### Security', '    ### Changed', '\t### Changed', '#### Removed', '###Removed',
+    '  #1318): wrapped text', '###\tSecurity', '### Added ###', '### Fixed\r', '###'].join('\n');
+  assert.deepEqual(subheadingsOf(section), ['Fixed', 'Fixed', 'Added', 'Security', 'Security', 'Added', 'Fixed', '']);
+  assert.deepEqual(repeatedIn(subheadingsOf(section)), ['Fixed', 'Security', 'Added']);
 });
 
 test('the Maven wrapper checks the distribution it downloads', () => {

@@ -43,20 +43,27 @@ class GenEnvScriptTest {
        "webhook_secret": "hook", "pem": "-----BEGIN KEY-----\\nline\\n-----END KEY-----\\n"}
       """;
 
+  private static final String HOST = "--host";
+  private static final String BOT_HOST = "bot.example.com";
+  private static final String GITHUB_URL = "--github-url";
+  private static final String NO_ENV = "no .env is written";
+  private static final String GITHUB_URL_LINE = "\nGITHUB_URL=https://github.example.com\n";
+  private static final String DASHBOARD_URL_LINE = "\nDASHBOARD_URL=https://bot.example.com\n";
+
   @TempDir Path workDir;
 
   @Test
   void writesTheGitHubAddressTheAppWasRegisteredOn() throws Exception {
-    var env = generate("--host", "bot.example.com", "--github-url", "https://github.example.com/");
+    var env = generate(HOST, BOT_HOST, GITHUB_URL, "https://github.example.com/");
 
-    assertTrue(env.contains("\nGITHUB_URL=https://github.example.com\n"), env);
+    assertTrue(env.contains(GITHUB_URL_LINE), env);
     assertTrue(env.contains("\nGITHUB_APP_ID=4242\n"), env);
-    assertTrue(env.contains("\nDASHBOARD_URL=https://bot.example.com\n"), env);
+    assertTrue(env.contains(DASHBOARD_URL_LINE), env);
   }
 
   @Test
   void writesNoGitHubAddressForAnAppOnGitHubDotCom() throws Exception {
-    var env = generate("--host", "bot.example.com");
+    var env = generate(HOST, BOT_HOST);
 
     assertFalse(env.contains("GITHUB_URL"), env);
     assertTrue(env.contains("\nGITHUB_APP_ID=4242\n"), env);
@@ -71,16 +78,63 @@ class GenEnvScriptTest {
     "ftp://github.example.com, a scheme other than https",
     "https:///organizations, no valid host name",
     "https://user:secret@github.example.com, a user name or password in the address",
-    "https://github example.com, text that is not a URL"
+    "https://github example.com, text that is not a URL",
+    "///, no scheme"
   })
   void refusesAGitHubAddressTheBotWouldNotStartOn(String address, String found) throws Exception {
-    var run = run("--host", "bot.example.com", "--github-url", address);
+    var run = run(HOST, BOT_HOST, GITHUB_URL, address);
 
     assertEquals(1, run.exitCode(), run.output());
     assertTrue(run.output().contains("--github-url must be an https address"), run.output());
     assertTrue(run.output().contains("found " + found), run.output());
     assertFalse(run.output().contains("secret"), run.output());
-    assertFalse(Files.exists(workDir.resolve(".env")), "no .env is written");
+    assertFalse(Files.exists(workDir.resolve(".env")), NO_ENV);
+  }
+
+  @Test
+  void readsAnOptionGivenLastOrWithAnEqualsSign() throws Exception {
+    var env = generate("--github-url=https://github.example.com/", HOST, BOT_HOST);
+
+    assertTrue(env.contains(GITHUB_URL_LINE), env);
+    assertTrue(env.contains(DASHBOARD_URL_LINE), env);
+
+    env = generate("--host=bot.example.com", GITHUB_URL, " https://github.example.com ");
+
+    assertTrue(env.contains(GITHUB_URL_LINE), env);
+    assertTrue(env.contains(DASHBOARD_URL_LINE), env);
+  }
+
+  // #1526 review: an option the loop did not bind was dropped without a word, so a forgotten or
+  // mistyped --github-url wrote a .env that has the bot call github.com and reported success.
+  @ParameterizedTest
+  @CsvSource(
+      delimiter = '|',
+      value = {
+        "--host bot.example.com --github-url | --github-url needs a value, like --github-url https://github.example.com",
+        "--github-url --host bot.example.com | --github-url needs a value, like --github-url https://github.example.com",
+        "--host bot.example.com --github-url= | --github-url needs a value, like --github-url https://github.example.com",
+        "--github-url https://github.example.com --host | --host needs a value, like --host thrillhousebot.example.com",
+        "--host bot.example.com --github-ulr https://user:secret@github.example.com | Unknown option --github-ulr: the options are --host and --github-url",
+        "--host bot.example.com --githuburl=https://user:secret@github.example.com | Unknown option --githuburl: the options are --host and --github-url",
+        "--host bot.example.com https://user:secret@github.example.com | Unexpected argument: the options are --host and --github-url",
+        "--host bot.example.com --https://user:secret@github.example.com | Unexpected argument: the options are --host and --github-url"
+      })
+  void refusesArgumentsItCannotRead(String arguments, String message) throws Exception {
+    var run = run(arguments.split(" "));
+
+    assertEquals(1, run.exitCode(), run.output());
+    assertTrue(run.output().contains(message + ". No .env was written."), run.output());
+    assertFalse(run.output().contains("secret"), run.output());
+    assertFalse(Files.exists(workDir.resolve(".env")), NO_ENV);
+  }
+
+  @Test
+  void refusesABlankGitHubAddress() throws Exception {
+    var run = run(HOST, BOT_HOST, GITHUB_URL, " ");
+
+    assertEquals(1, run.exitCode(), run.output());
+    assertTrue(run.output().contains("--github-url needs a value"), run.output());
+    assertFalse(Files.exists(workDir.resolve(".env")), NO_ENV);
   }
 
   private String generate(String... args) throws IOException, InterruptedException {
