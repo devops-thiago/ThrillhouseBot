@@ -111,11 +111,12 @@ public class DeferredReviewRelease {
   }
 
   /**
-   * Hands every due request back to the dispatcher. One that could not be handed back waits again,
-   * and is counted as skipped once {@link DeferredReviews} refuses to keep it any longer. Whatever
-   * one request throws, the rest of the due requests are still handed back: {@link
-   * DeferredReviews#takeDue} hands each out once, so a request this pass left behind would wait
-   * until it is given up.
+   * Hands every due request back to the dispatcher. One for a pull request paused since, or one the
+   * dispatcher's executor refuses, is dropped and counted as skipped at once. One whose hand-back
+   * threw waits again, unless a newer head an event kept since waits in its place, and is counted
+   * as skipped once {@link DeferredReviews} refuses to keep it any longer. Whatever one request
+   * throws, the rest of the due requests are still handed back: {@link DeferredReviews#takeDue}
+   * hands each out once, so a request this pass left behind would wait until it is given up.
    */
   void release() {
     for (var request : deferred.takeDue()) {

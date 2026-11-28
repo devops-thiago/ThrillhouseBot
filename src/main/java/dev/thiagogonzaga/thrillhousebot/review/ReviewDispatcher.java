@@ -47,10 +47,16 @@ import org.slf4j.LoggerFactory;
  * waits on its worker for one while as many run as may, so the pull requests of one repository are
  * reviewed a few at a time. A manual review takes no slot and never waits.
  *
- * <p>An automatic review the rate window or a full repository queue holds back is not dropped when
- * its head is one the last automatic review did not cover: it is kept in {@link DeferredReviews},
- * one per pull request, and dispatched again when the window closes or after {@link
- * #QUEUE_FULL_RETRY}. Only an event for the head already reviewed is skipped for good.
+ * <p>An automatic review the rate window holds back for a head the last automatic review did not
+ * cover, or a full repository queue turns away, is kept in {@link DeferredReviews}, one per pull
+ * request for its latest head, and dispatched again when the window closes or after {@link
+ * #QUEUE_FULL_RETRY}. It is skipped instead of kept when the window holds back the head already
+ * reviewed, and when the store refuses it: as many pull requests have a review kept as {@link
+ * DeferredReviews#MAX_PENDING} allows, or the same head has been coming back for {@link
+ * DeferredReviews#GIVE_UP_AFTER}. A kept review is not certain to run either: it is held in memory,
+ * so a restart forgets it, a request that comes back gives way to a newer head an event kept since,
+ * and {@link DeferredReviewRelease} drops it when the pull request was paused or the executor
+ * refuses it.
  *
  * <p>A manual {@code /review} that arrives while a review is running reads the pull request's head
  * first (#1152). When it is the head under review, the running review already covers it: the
@@ -153,7 +159,10 @@ public final class ReviewDispatcher {
   public enum RateWindowHold {
     /** The window is not open: the review goes ahead. */
     NOT_HELD,
-    /** The window holds the review back, and it is kept to run when the window closes. */
+    /**
+     * The window holds the review back, and a review is kept to run when the window closes: this
+     * one, or, for a request that came back on its worker, the newer head an event kept since.
+     */
     KEPT,
     /**
      * The window holds the review back and nothing was kept, so the caller records the skip: the
@@ -164,13 +173,17 @@ public final class ReviewDispatcher {
 
   /**
    * Asks the rate window about an automatic review, once, and keeps the review to run when the
-   * window closes if the window holds back a head its last automatic review did not cover.
+   * window closes if the window holds back a head its last automatic review did not cover and
+   * {@link DeferredReviews} takes it; {@link RateWindowHold#NOT_KEPT} says it did not.
    */
   public RateWindowHold holdForRateWindow(ReviewOrchestrator.ReviewRequest req) {
     return holdForRateWindow(req, deferredReviews::defer);
   }
 
-  /** How a review the rate window holds back is kept: {@code false} when it was not. */
+  /**
+   * How a review the rate window holds back is kept: {@code false} when the pull request is left
+   * with no review kept.
+   */
   private interface Keeper {
     boolean keep(ReviewOrchestrator.ReviewRequest req, long dueAt);
   }
@@ -480,7 +493,10 @@ public final class ReviewDispatcher {
     return true;
   }
 
-  /** Keeps a review the full repository queue turned away, or records the skip when it cannot. */
+  /**
+   * Keeps a review the full repository queue turned away, unless a newer head an event kept since
+   * waits in its place, and records the skip when {@link DeferredReviews} refuses it.
+   */
   private void deferQueueFull(ReviewOrchestrator.ReviewRequest req) {
     if (deferredReviews.requeueFor(req, QUEUE_FULL_RETRY)) {
       return;
