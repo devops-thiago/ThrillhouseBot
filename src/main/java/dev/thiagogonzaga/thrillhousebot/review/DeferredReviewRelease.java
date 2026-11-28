@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.config.ReviewExecutor;
 import dev.thiagogonzaga.thrillhousebot.webhook.PrPauseService;
+import dev.thiagogonzaga.thrillhousebot.webhook.ReviewTriggerFilter;
 import io.quarkus.logging.Log;
 import io.quarkus.runtime.ShutdownEvent;
 import io.quarkus.runtime.StartupEvent;
@@ -38,9 +39,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * so a pull request still gets at most one automatic review per window.
  *
  * <p>The request passed the pause, draft, branch and label filters when its event arrived. A pull
- * request paused since then is not reviewed; the labels and the head are read again by the review
- * itself before its first write, and an event the filters reject drops the deferred request when it
- * arrives.
+ * request paused since then is not reviewed, and neither is one that is a draft when drafts are
+ * skipped, read once for a head when it is handed back ({@link HeldReviewDraftCheck}); the labels
+ * and the head are read again by the review itself before its first write, and an event the filters
+ * reject drops the deferred request when it arrives.
  */
 @ApplicationScoped
 public class DeferredReviewRelease {
@@ -54,6 +56,7 @@ public class DeferredReviewRelease {
   private final DeferredReviews deferred;
   private final ReviewDispatcher dispatcher;
   private final PrPauseService pauses;
+  private final HeldReviewDraftCheck draftCheck;
   private final ReviewSkipEmitter skipEmitter;
   private final Vertx vertx;
   private final ExecutorService executor;
@@ -65,12 +68,14 @@ public class DeferredReviewRelease {
       DeferredReviews deferred,
       ReviewDispatcher dispatcher,
       PrPauseService pauses,
+      HeldReviewDraftCheck draftCheck,
       ReviewSkipEmitter skipEmitter,
       Vertx vertx,
       @ReviewExecutor ExecutorService executor) {
     this.deferred = deferred;
     this.dispatcher = dispatcher;
     this.pauses = pauses;
+    this.draftCheck = draftCheck;
     this.skipEmitter = skipEmitter;
     this.vertx = vertx;
     this.executor = executor;
@@ -114,16 +119,18 @@ public class DeferredReviewRelease {
   /**
    * Hands every due request back to the dispatcher, unless an event replaced or removed its entry
    * since it was taken: such a request gives way and is neither handed back nor counted. One for a
-   * pull request paused since, or one the dispatcher's executor refuses, is dropped and counted as
-   * skipped at once. One whose hand-back threw waits again, and is counted as skipped once it has
-   * been failing for {@link DeferredReviews#GIVE_UP_AFTER}. Whatever one request throws, the rest
-   * of the due requests are still handed back: {@link DeferredReviews#takeDue} hands each out once,
-   * so a request this pass left behind would wait until it is given up.
+   * pull request paused since or converted to a draft that is skipped, or one the dispatcher's
+   * executor refuses, is dropped and counted as skipped at once. One whose hand-back threw waits
+   * again, and is counted as skipped once it has been failing for {@link
+   * DeferredReviews#GIVE_UP_AFTER}. Whatever one request throws, the rest of the due requests are
+   * still handed back: {@link DeferredReviews#takeDue} hands each out once, so a request this pass
+   * left behind would wait until it is given up.
    */
   void release() {
-    for (var request : deferred.takeDue()) {
+    for (var handOut : deferred.takeDueHandOuts()) {
+      var request = handOut.request();
       try {
-        handBackOrWaitAgain(request);
+        handBackOrWaitAgain(handOut);
       } catch (RuntimeException e) {
         Log.errorf(
             "Could not record what became of the deferred review of %s/%s #%d: %s",
@@ -135,10 +142,11 @@ public class DeferredReviewRelease {
   /** A request this pass dropped, to be counted as skipped. */
   private record Dropped(ReviewSkipReason reason, String detail) {}
 
-  private void handBackOrWaitAgain(ReviewOrchestrator.ReviewRequest request) {
+  private void handBackOrWaitAgain(DeferredReviews.HandOut handOut) {
+    var request = handOut.request();
     Optional<Dropped> dropped;
     try {
-      dropped = handBack(request);
+      dropped = handBack(handOut);
     } catch (RuntimeException e) {
       dropped = waitAgain(request, e);
     }
@@ -185,15 +193,50 @@ public class DeferredReviewRelease {
     };
   }
 
-  private Optional<Dropped> handBack(ReviewOrchestrator.ReviewRequest request) {
+  /**
+   * Drops a request the pull request's state now rules out. A head an event kept since is left to
+   * its own hand-back, which reads that state again.
+   */
+  private Optional<Dropped> drop(
+      ReviewOrchestrator.ReviewRequest request, ReviewSkipReason reason, String detail) {
+    return deferred.dropHandedOut(request) == DeferredReviews.HandedOut.DROPPED
+        ? Optional.of(new Dropped(reason, detail))
+        : Optional.empty();
+  }
+
+  /**
+   * Reads whether the pull request is a draft that is skipped, once for a head: one a full queue
+   * keeps turning away comes back every 30 seconds, and a read each time would cost its
+   * installation more calls than the review itself. The read counts once it has returned, so a
+   * hand-back that failed before it (the pause lookup threw) reads on its retry. One that could not
+   * be made counts too: {@link HeldReviewDraftCheck} answers it with no skip, and repeating it on
+   * every retry while GitHub is unreachable is the cost this avoids.
+   */
+  private Optional<ReviewTriggerFilter.Skip> draftSkip(DeferredReviews.HandOut handOut) {
+    if (handOut.draftRead()) {
+      return Optional.empty();
+    }
+    var skip = draftCheck.skipFor(handOut.request());
+    if (skip.isEmpty()) {
+      deferred.draftWasRead(handOut.request());
+    }
+    return skip;
+  }
+
+  private Optional<Dropped> handBack(DeferredReviews.HandOut handOut) {
+    var request = handOut.request();
     if (pauses.isPaused(request.scope(), request.owner(), request.repo(), request.prNumber())) {
-      // A head an event kept since is left to its own hand-back, which reads the pause again.
-      return deferred.dropHandedOut(request) == DeferredReviews.HandedOut.DROPPED
-          ? Optional.of(
-              new Dropped(
-                  ReviewSkipReason.PAUSED,
-                  "PR was paused via /pause while its review waited for a limit"))
-          : Optional.empty();
+      return drop(
+          request,
+          ReviewSkipReason.PAUSED,
+          "PR was paused via /pause while its review waited for a limit");
+    }
+    var draft = draftSkip(handOut);
+    if (draft.isPresent()) {
+      return drop(
+          request,
+          draft.get().reason(),
+          draft.get().detail() + "; the review a limit held back for it is dropped");
     }
     // The review executor starts one virtual thread per task and has no size limit, so it refuses
     // work only once it shuts down. The request is then dropped, not deferred again: a shutdown

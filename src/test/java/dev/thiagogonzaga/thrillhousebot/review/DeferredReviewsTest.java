@@ -34,6 +34,8 @@ class DeferredReviewsTest {
   private static final RepoScope SCOPE =
       new RepoScope(TestScopes.INSTALLATION_ID, TestScopes.REPOSITORY_ID);
   private static final long GIVE_UP_MS = DeferredReviews.GIVE_UP_AFTER.toMillis();
+  private static final long OTHER_REPOSITORY = TestScopes.REPOSITORY_ID + 1;
+  private static final long OTHER_INSTALLATION = TestScopes.INSTALLATION_ID + 1;
 
   private final AtomicLong now = new AtomicLong(0);
   private final DeferredReviews deferred = new DeferredReviews(3, now::get);
@@ -101,6 +103,61 @@ class DeferredReviewsTest {
   }
 
   @Test
+  void oneRepositoryCannotTakeThePlacesOfTheOthers() {
+    var store = new DeferredReviews(10, 2, now::get);
+    assertTrue(store.defer(request(1, "sha-a"), 10));
+    assertTrue(store.defer(request(2, "sha-b"), 10));
+
+    // The repository has as many reviews kept as one repository may.
+    assertFalse(store.defer(request(3, "sha-c"), 10));
+    assertFalse(store.requeue(request(3, "sha-c"), 10));
+    // A pull request that has one kept still gets its newer head.
+    assertTrue(store.defer(request(2, "sha-d"), 10));
+    // Another repository is not affected, and neither is the same id under another installation.
+    assertTrue(store.defer(request(OTHER_REPOSITORY, 1, "sha-e"), 10));
+    assertTrue(store.defer(request(OTHER_INSTALLATION, SCOPE.repositoryId(), 1, "sha-f"), 10));
+
+    assertEquals(4, store.pending.size());
+    now.set(10);
+    assertTrue(store.takeDue().contains(request(2, "sha-d")));
+  }
+
+  @Test
+  void aPlaceARepositoryGivesUpGoesToItsNextPullRequest() {
+    var store = new DeferredReviews(10, 2, now::get);
+    store.defer(request(1, "sha-a"), 10);
+    store.defer(request(2, "sha-b"), 10);
+    assertFalse(store.defer(request(3, "sha-c"), 10));
+
+    store.forget(SCOPE, 1);
+
+    assertTrue(store.defer(request(3, "sha-c"), 10));
+  }
+
+  @Test
+  void theLimitOnEveryRepositoryStillHoldsBelowTheLimitOfEachOne() {
+    var store = new DeferredReviews(2, 2, now::get);
+    assertTrue(store.defer(request(1, "sha-a"), 10));
+    assertTrue(store.defer(request(OTHER_REPOSITORY, 1, "sha-b"), 10));
+
+    assertFalse(store.defer(request(OTHER_REPOSITORY, 2, "sha-c"), 10));
+    assertFalse(new DeferredReviews(2, 0, now::get).defer(request(1, "sha-a"), 10));
+  }
+
+  @Test
+  void theInjectedStoreKeepsNoMoreForOneRepositoryThanItsShare() {
+    var store = new DeferredReviews();
+    for (int pr = 1; pr <= DeferredReviews.MAX_PENDING_PER_REPOSITORY; pr++) {
+      assertTrue(store.defer(request(pr, "sha"), Long.MAX_VALUE));
+    }
+
+    assertFalse(
+        store.defer(
+            request(DeferredReviews.MAX_PENDING_PER_REPOSITORY + 1, "sha"), Long.MAX_VALUE));
+    assertTrue(store.defer(request(OTHER_REPOSITORY, 1, "sha"), Long.MAX_VALUE));
+  }
+
+  @Test
   void aHeadThatKeepsComingBackIsRefusedAfterTheGiveUpTime() {
     deferred.defer(request(1, "sha-a"), 0);
     assertEquals(1, deferred.takeDue().size());
@@ -113,6 +170,50 @@ class DeferredReviewsTest {
     now.set(GIVE_UP_MS);
     assertFalse(deferred.defer(request(1, "sha-a"), now.get()));
     assertTrue(deferred.isEmpty());
+  }
+
+  @Test
+  void aHandOutSaysWhetherThePullRequestWasReadForItsHead() {
+    deferred.defer(request(1, "sha-a"), 0);
+    assertEquals(
+        List.of(new DeferredReviews.HandOut(request(1, "sha-a"), false)),
+        deferred.takeDueHandOuts());
+
+    // Handed out again with no read in between: it is still to be read.
+    deferred.waitAgain(request(1, "sha-a"), Duration.ZERO);
+    assertEquals(
+        List.of(new DeferredReviews.HandOut(request(1, "sha-a"), false)),
+        deferred.takeDueHandOuts());
+
+    deferred.draftWasRead(request(1, "sha-a"));
+    deferred.waitAgain(request(1, "sha-a"), Duration.ZERO);
+    assertEquals(
+        List.of(new DeferredReviews.HandOut(request(1, "sha-a"), true)),
+        deferred.takeDueHandOuts());
+    deferred.requeue(request(1, "sha-a"), 0);
+    assertEquals(
+        List.of(new DeferredReviews.HandOut(request(1, "sha-a"), true)),
+        deferred.takeDueHandOuts());
+
+    deferred.defer(request(1, "sha-b"), 0);
+    assertEquals(
+        List.of(new DeferredReviews.HandOut(request(1, "sha-b"), false)),
+        deferred.takeDueHandOuts());
+  }
+
+  @Test
+  void aReadIsNotRecordedForAnEntryThatIsNoLongerTheOneHandedOut() {
+    deferred.draftWasRead(request(1, "sha-a"));
+    assertTrue(deferred.isEmpty());
+
+    deferred.defer(request(1, "sha-a"), 0);
+    deferred.takeDue();
+    deferred.defer(request(1, "sha-b"), 0);
+    deferred.draftWasRead(request(1, "sha-a"));
+
+    assertEquals(
+        List.of(new DeferredReviews.HandOut(request(1, "sha-b"), false)),
+        deferred.takeDueHandOuts());
   }
 
   @Test
@@ -392,6 +493,16 @@ class DeferredReviewsTest {
   }
 
   private static ReviewOrchestrator.ReviewRequest request(int prNumber, String sha) {
+    return request(TestScopes.REPOSITORY_ID, prNumber, sha);
+  }
+
+  private static ReviewOrchestrator.ReviewRequest request(
+      long repositoryId, int prNumber, String sha) {
+    return request(TestScopes.INSTALLATION_ID, repositoryId, prNumber, sha);
+  }
+
+  private static ReviewOrchestrator.ReviewRequest request(
+      long installationId, long repositoryId, int prNumber, String sha) {
     return new ReviewOrchestrator.ReviewRequest(
         "owner",
         "repo",
@@ -401,8 +512,8 @@ class DeferredReviewsTest {
         "",
         "base",
         "main",
-        TestScopes.INSTALLATION_ID,
-        TestScopes.REPOSITORY_ID,
+        installationId,
+        repositoryId,
         false);
   }
 }

@@ -107,6 +107,23 @@ public class ReviewTriggerFilter {
     return skipReason(pr, () -> labelNames(pr));
   }
 
+  /** Whether a draft is not reviewed ({@code webhook.triggers.skip-drafts}). */
+  public boolean skipsDrafts() {
+    return skipDrafts;
+  }
+
+  /**
+   * The draft filter alone, for a caller that knows only whether the pull request is a draft now.
+   *
+   * @return the skip when {@code draft} and drafts are not reviewed
+   */
+  public Optional<Skip> draftSkipReason(boolean draft) {
+    return skipDrafts && draft
+        ? Optional.of(
+            new Skip(ReviewSkipReason.DRAFT, "PR is a draft (webhook.triggers.skip-drafts=true)"))
+        : Optional.empty();
+  }
+
   /**
    * Like {@link #skipReason(WebhookPayload.PullRequest)}, with the labels the gates read supplied
    * by the caller. The supplier is called only when the draft and branch checks pass and a label
@@ -119,9 +136,9 @@ public class ReviewTriggerFilter {
       return Optional.empty();
     }
 
-    if (skipDrafts && pr.draft()) {
-      return Optional.of(
-          new Skip(ReviewSkipReason.DRAFT, "PR is a draft (webhook.triggers.skip-drafts=true)"));
+    var draftSkip = draftSkipReason(pr.draft());
+    if (draftSkip.isPresent()) {
+      return draftSkip;
     }
 
     var author = pr.user() != null ? pr.user().login() : null;

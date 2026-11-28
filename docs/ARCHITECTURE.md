@@ -621,9 +621,9 @@ virtual-thread executor with no size limit. Load is bounded by per-PR serializat
 `ReviewDispatcher`, the per-repository slots for automatic reviews (`AutoReviewSlots`: a review past
 the running limit waits on its worker, one past the queue limit is set aside), the model call cap and
 GitHub write pacing. A review the rate window or a full queue holds back is kept in `DeferredReviews`,
-one per pull request and at most 10,000, and one timer (`DeferredReviewRelease`, every 5 seconds)
+one per pull request, at most 10,000 and at most 1,000 of one repository, and one timer (`DeferredReviewRelease`, every 5 seconds)
 dispatches it again once it is due. The store is in memory, so a restart empties it; a review it
-refuses (at the 10,000 limit, or for a head still coming back an hour after its first hand-out) is
+refuses (at either limit, or for a head still coming back an hour after its first hand-out) is
 skipped and counted.
 
 | Limit | Setting | Default |

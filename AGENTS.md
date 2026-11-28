@@ -692,7 +692,9 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   reads the clock and the window once, so a caller never asks twice about one event), and
   records a skip for the head already reviewed and when the store refuses, which includes a
   hand-back that failed for an hour (`DeferredReviewRelease.release`). The store holds one
-  request per pull request (the latest wins), at most 10,000, and gives up on a head that keeps
+  request per pull request (the latest wins), at most 10,000 and at most 1,000 of one repository
+  (a full repository queue sends the rest of a burst here, so one repository could otherwise take
+  every place), and gives up on a head that keeps
   coming back for an hour. "Latest" is decided by where the request comes from: an event's request
   goes in through `defer` and replaces the entry, while a request the dispatcher's worker puts
   back goes in through `requeue`, which leaves a different head an event
@@ -708,7 +710,9 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   an event for the head already reviewed, on an event the
   pause or trigger filters reject, on `converted_to_draft` when drafts are skipped (a recorded skip when the review
   still waited), on a hand-back
-  that finds the pull request paused or that the executor refuses (both recorded skips), and at
+  that finds the pull request paused, that finds it a draft while drafts are skipped
+  (`HeldReviewDraftCheck` reads the pull request once for a head, on the first hand-back that reaches the read, in case the
+  delivery was missed, and not on each retry of a full queue; a failed read hands the review back) or that the executor refuses (all recorded skips), and at
   shutdown; a restart loses them all. Handing an entry out does not remove it: unless one of those
   removes it, it stays, counted towards the 10,000, for an hour after its first hand-out. A new drop path for automatic reviews must defer the same way.
 - **Nothing is written for a commenter before the write-access check.** `WebhookEvents`
@@ -725,7 +729,10 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   `WebhookPayload` and route exactly as the former hand-rolled controller did. Every listener
   method declares event/action qualifiers and takes only the raw event, so a delivery builds no
   hub4j payload and no installation client on the ack path; `WebhookEventsObserversTest` pins the
-  wiring (a lost qualifier silently drops deliveries), and the dedupe, the dispatch-rejected
+  wiring (a lost qualifier silently drops deliveries). An action the extension has no qualifier
+  for is named with `@RawEvent(event, action)` on an observer of its own, as `converted_to_draft`
+  is; `WebhookDraftConversionDeliveryTest` posts that delivery to the route, because a test that
+  calls the observer method passes whether or not the action is delivered. The dedupe, the dispatch-rejected
   rollback and the duplicate-skip recording lived with the routing. HTTP corner cases come from
   the extension's `Routes`: missing mandatory headers `400`, signature mismatch `400`, signed
   non-JSON body `500`, accepted delivery `200` with an empty body (`NativeImageIT` pins these).
