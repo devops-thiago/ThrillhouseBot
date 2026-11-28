@@ -29,11 +29,11 @@ import java.util.Optional;
  * a draft now. A {@code converted_to_draft} delivery drops the held review, but a delivery can be
  * missed, so the pull request is read again here.
  *
- * <p>{@link DeferredReviewRelease} asks once for a head, the first time it is handed back, not each
- * time a full repository queue turns it away again. Nothing is read when drafts are reviewed
- * ({@code webhook.triggers.skip-drafts} off, the default). A read that fails lets the review go
- * ahead: the webhook is what normally drops it, and a review is not lost to a read that could not
- * be made.
+ * <p>{@link DeferredReviewRelease} asks once for a head, on the first hand-back that gets as far as
+ * asking, not each time a full repository queue turns it away again. Nothing is read when drafts
+ * are reviewed ({@code webhook.triggers.skip-drafts} off, the default). A read that fails lets the
+ * review go ahead: the webhook is what normally drops it, and a review is not lost to a read that
+ * could not be made.
  */
 @ApplicationScoped
 public class HeldReviewDraftCheck {

@@ -211,6 +211,50 @@ class DeferredReviewReleaseTest {
   }
 
   @Test
+  void aHandBackThatFailedBeforeTheDraftReadStillReadsOnItsRetry() {
+    when(pauses.isPaused(any(), any(), any(), eq(1)))
+        .thenThrow(new IllegalStateException(DATABASE_DOWN))
+        .thenReturn(false);
+    when(draftCheck.skipFor(request(1, SHA_A))).thenReturn(Optional.of(DRAFT_SKIP));
+    deferred.defer(request(1, SHA_A), 0);
+
+    // The pause lookup fails, so the review waits again without the pull request being read.
+    release.release();
+    verifyNoInteractions(draftCheck);
+
+    now.set(DeferredReviewRelease.RETRY.toMillis());
+    release.release();
+
+    verify(draftCheck, times(1)).skipFor(request(1, SHA_A));
+    verify(dispatcher, never()).dispatchDeferred(any());
+    verify(skipEmitter)
+        .recordSkip(
+            eq(ReviewSkipReason.DRAFT),
+            eq(TestScopes.INSTALLATION_ID),
+            eq("owner"),
+            eq("repo"),
+            eq(1),
+            anyString());
+    assertTrue(deferred.isEmpty());
+  }
+
+  @Test
+  void aDraftReadThatAnsweredNothingIsNotRepeatedWhenTheHandBackFails() {
+    // The read is done, and then the dispatcher throws: the retry does not read again.
+    when(dispatcher.dispatchDeferred(any()))
+        .thenThrow(new IllegalStateException("boom"))
+        .thenReturn(true);
+    deferred.defer(request(1, SHA_A), 0);
+
+    release.release();
+    now.set(DeferredReviewRelease.RETRY.toMillis());
+    release.release();
+
+    verify(dispatcher, times(2)).dispatchDeferred(request(1, SHA_A));
+    verify(draftCheck, times(1)).skipFor(request(1, SHA_A));
+  }
+
+  @Test
   void aPausedPullRequestIsNotReadToSeeWhetherItIsADraft() {
     when(pauses.isPaused(any(), eq("owner"), eq("repo"), eq(1))).thenReturn(true);
     deferred.defer(request(1, SHA_A), 0);

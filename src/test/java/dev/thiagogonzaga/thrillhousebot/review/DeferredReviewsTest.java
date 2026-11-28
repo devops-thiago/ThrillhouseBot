@@ -173,20 +173,46 @@ class DeferredReviewsTest {
   }
 
   @Test
-  void aHandOutSaysWhetherItsHeadIsHandedOutForTheFirstTime() {
+  void aHandOutSaysWhetherThePullRequestWasReadForItsHead() {
     deferred.defer(request(1, "sha-a"), 0);
-    assertEquals(
-        List.of(new DeferredReviews.HandOut(request(1, "sha-a"), true)),
-        deferred.takeDueHandOuts());
-
-    deferred.requeue(request(1, "sha-a"), 0);
     assertEquals(
         List.of(new DeferredReviews.HandOut(request(1, "sha-a"), false)),
         deferred.takeDueHandOuts());
 
+    // Handed out again with no read in between: it is still to be read.
+    deferred.waitAgain(request(1, "sha-a"), Duration.ZERO);
+    assertEquals(
+        List.of(new DeferredReviews.HandOut(request(1, "sha-a"), false)),
+        deferred.takeDueHandOuts());
+
+    deferred.draftWasRead(request(1, "sha-a"));
+    deferred.waitAgain(request(1, "sha-a"), Duration.ZERO);
+    assertEquals(
+        List.of(new DeferredReviews.HandOut(request(1, "sha-a"), true)),
+        deferred.takeDueHandOuts());
+    deferred.requeue(request(1, "sha-a"), 0);
+    assertEquals(
+        List.of(new DeferredReviews.HandOut(request(1, "sha-a"), true)),
+        deferred.takeDueHandOuts());
+
     deferred.defer(request(1, "sha-b"), 0);
     assertEquals(
-        List.of(new DeferredReviews.HandOut(request(1, "sha-b"), true)),
+        List.of(new DeferredReviews.HandOut(request(1, "sha-b"), false)),
+        deferred.takeDueHandOuts());
+  }
+
+  @Test
+  void aReadIsNotRecordedForAnEntryThatIsNoLongerTheOneHandedOut() {
+    deferred.draftWasRead(request(1, "sha-a"));
+    assertTrue(deferred.isEmpty());
+
+    deferred.defer(request(1, "sha-a"), 0);
+    deferred.takeDue();
+    deferred.defer(request(1, "sha-b"), 0);
+    deferred.draftWasRead(request(1, "sha-a"));
+
+    assertEquals(
+        List.of(new DeferredReviews.HandOut(request(1, "sha-b"), false)),
         deferred.takeDueHandOuts());
   }
 

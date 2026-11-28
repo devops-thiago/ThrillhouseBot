@@ -40,9 +40,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *
  * <p>The request passed the pause, draft, branch and label filters when its event arrived. A pull
  * request paused since then is not reviewed, and neither is one that is a draft when drafts are
- * skipped and its head is first handed back ({@link HeldReviewDraftCheck}); the labels and the head
- * are read again by the review itself before its first write, and an event the filters reject drops
- * the deferred request when it arrives.
+ * skipped, read once for a head when it is handed back ({@link HeldReviewDraftCheck}); the labels
+ * and the head are read again by the review itself before its first write, and an event the filters
+ * reject drops the deferred request when it arrives.
  */
 @ApplicationScoped
 public class DeferredReviewRelease {
@@ -204,6 +204,25 @@ public class DeferredReviewRelease {
         : Optional.empty();
   }
 
+  /**
+   * Reads whether the pull request is a draft that is skipped, once for a head: one a full queue
+   * keeps turning away comes back every 30 seconds, and a read each time would cost its
+   * installation more calls than the review itself. The read counts once it has returned, so a
+   * hand-back that failed before it (the pause lookup threw) reads on its retry. One that could not
+   * be made counts too: {@link HeldReviewDraftCheck} answers it with no skip, and repeating it on
+   * every retry while GitHub is unreachable is the cost this avoids.
+   */
+  private Optional<ReviewTriggerFilter.Skip> draftSkip(DeferredReviews.HandOut handOut) {
+    if (handOut.draftRead()) {
+      return Optional.empty();
+    }
+    var skip = draftCheck.skipFor(handOut.request());
+    if (skip.isEmpty()) {
+      deferred.draftWasRead(handOut.request());
+    }
+    return skip;
+  }
+
   private Optional<Dropped> handBack(DeferredReviews.HandOut handOut) {
     var request = handOut.request();
     if (pauses.isPaused(request.scope(), request.owner(), request.repo(), request.prNumber())) {
@@ -212,10 +231,7 @@ public class DeferredReviewRelease {
           ReviewSkipReason.PAUSED,
           "PR was paused via /pause while its review waited for a limit");
     }
-    // Read once for a head: one a full queue keeps turning away comes back every 30 seconds, and
-    // a read each time would cost its installation more calls than the review itself.
-    var draft =
-        handOut.first() ? draftCheck.skipFor(request) : Optional.<ReviewTriggerFilter.Skip>empty();
+    var draft = draftSkip(handOut);
     if (draft.isPresent()) {
       return drop(
           request,

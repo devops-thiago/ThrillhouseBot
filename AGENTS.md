@@ -711,7 +711,7 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   pause or trigger filters reject, on `converted_to_draft` when drafts are skipped (a recorded skip when the review
   still waited), on a hand-back
   that finds the pull request paused, that finds it a draft while drafts are skipped
-  (`HeldReviewDraftCheck` reads the pull request the first time a head is handed back, in case the
+  (`HeldReviewDraftCheck` reads the pull request once for a head, on the first hand-back that reaches the read, in case the
   delivery was missed, and not on each retry of a full queue; a failed read hands the review back) or that the executor refuses (all recorded skips), and at
   shutdown; a restart loses them all. Handing an entry out does not remove it: unless one of those
   removes it, it stays, counted towards the 10,000, for an hour after its first hand-out. A new drop path for automatic reviews must defer the same way.

@@ -89,22 +89,26 @@ public class DeferredReviews {
    * @param released whether it was handed out and has not come back
    * @param firstReleasedAt epoch millis this head was first handed out, or {@link #NEVER}
    * @param fromEvent whether an event put this head here, rather than a request coming back
+   * @param draftRead whether the pull request was read for this head when it was handed back, to
+   *     see whether it is a draft now ({@link #draftWasRead})
    */
   record Pending(
       ReviewOrchestrator.ReviewRequest request,
       long dueAt,
       boolean released,
       long firstReleasedAt,
-      boolean fromEvent) {}
+      boolean fromEvent,
+      boolean draftRead) {}
 
   /**
    * A request handed out.
    *
    * @param request the review to hand back to the dispatcher
-   * @param first whether this head is handed out for the first time; {@code false} for one a limit
-   *     turned away again since, which comes back every time it is due
+   * @param draftRead whether the pull request was already read for this head on an earlier
+   *     hand-back; a head a limit keeps turning away comes back every time it is due, and is read
+   *     for once
    */
-  public record HandOut(ReviewOrchestrator.ReviewRequest request, boolean first) {}
+  public record HandOut(ReviewOrchestrator.ReviewRequest request, boolean draftRead) {}
 
   /** What became of a request {@link #takeDue} handed out, when it came back to its entry. */
   public enum HandedOut {
@@ -214,7 +218,8 @@ public class DeferredReviews {
               dueAt,
               false,
               retryingSince,
-              fromEvent || (sameHead && previous.fromEvent()));
+              fromEvent || (sameHead && previous.fromEvent()),
+              sameHead && previous.draftRead());
         });
     logOutcome(outcome[0], request, dueAt - now);
     return outcome[0];
@@ -288,7 +293,10 @@ public class DeferredReviews {
     return takeDueHandOuts().stream().map(HandOut::request).toList();
   }
 
-  /** Like {@link #takeDue}, saying for each request whether its head is handed out again. */
+  /**
+   * Like {@link #takeDue}, saying for each request whether the pull request was already read for
+   * its head.
+   */
   public List<HandOut> takeDueHandOuts() {
     long now = clock.getAsLong();
     var due = new ArrayList<HandOut>();
@@ -306,14 +314,35 @@ public class DeferredReviews {
     if (entry.dueAt() > now) {
       return entry;
     }
-    boolean first = entry.firstReleasedAt() == NEVER;
-    due.add(new HandOut(entry.request(), first));
+    due.add(new HandOut(entry.request(), entry.draftRead()));
     return new Pending(
         entry.request(),
         entry.dueAt(),
         true,
-        first ? now : entry.firstReleasedAt(),
-        entry.fromEvent());
+        entry.firstReleasedAt() == NEVER ? now : entry.firstReleasedAt(),
+        entry.fromEvent(),
+        entry.draftRead());
+  }
+
+  /**
+   * Records that the pull request of {@code request} was read for this head, if its entry is still
+   * the one {@link #takeDue} left, so later hand-outs of the head say so. Recorded once the read
+   * has returned, not when the head is first handed out: a hand-back that fails before the read
+   * leaves it to the next one.
+   */
+  public void draftWasRead(ReviewOrchestrator.ReviewRequest request) {
+    pending.computeIfPresent(
+        key(request),
+        (_, entry) ->
+            handedOut(entry, request)
+                ? new Pending(
+                    entry.request(),
+                    entry.dueAt(),
+                    true,
+                    entry.firstReleasedAt(),
+                    entry.fromEvent(),
+                    true)
+                : entry);
   }
 
   /**
@@ -387,7 +416,12 @@ public class DeferredReviews {
           }
           fate[0] = HandedOut.WAITS_AGAIN;
           return new Pending(
-              request, now + delay.toMillis(), false, entry.firstReleasedAt(), entry.fromEvent());
+              request,
+              now + delay.toMillis(),
+              false,
+              entry.firstReleasedAt(),
+              entry.fromEvent(),
+              entry.draftRead());
         });
     return fate[0];
   }
