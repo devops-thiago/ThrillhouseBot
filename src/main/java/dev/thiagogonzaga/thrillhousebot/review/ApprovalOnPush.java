@@ -69,7 +69,7 @@ public class ApprovalOnPush {
   public ApprovalOnPush(
       GitHubAuthClient authClient,
       @RestClient GitHubReviewClient reviewClient,
-      @RestClient GitHubPullRequestClient prClient,
+      GitHubPullRequestClient prClient,
       ReviewPublisher reviewPublisher,
       AutoReviewRateLimiter autoReviewRateLimiter) {
     this.authClient = authClient;
