@@ -231,7 +231,17 @@ public interface GitHubCommentClient {
       long id,
       String body,
       GitHubReviewClient.ReviewResponse.User user,
-      @JsonProperty("author_association") String authorAssociation) {
+      @JsonProperty("author_association") String authorAssociation,
+      @JsonProperty("created_at") String createdAt) {
+
+    /** Back-compat convenience for callers/tests that carry no creation time. */
+    public IssueComment(
+        long id,
+        String body,
+        GitHubReviewClient.ReviewResponse.User user,
+        String authorAssociation) {
+      this(id, body, user, authorAssociation, null);
+    }
 
     /**
      * Back-compat convenience for callers/tests that carry no author association. Defaults it to

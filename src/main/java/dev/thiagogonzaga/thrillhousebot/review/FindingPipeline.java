@@ -567,6 +567,15 @@ public class FindingPipeline {
             botIdentity,
             ctx.verifiedWriters(),
             lineResolver);
+    refined =
+        FollowUpAnalyzer.withoutConversationCleared(
+            refined,
+            ctx.priorAiResponses(),
+            ctx.priorRoundStarts(),
+            ctx.conversationComments(),
+            lineResolver,
+            botIdentity,
+            ctx.verifiedWriters());
     // #726: a novel lower-confidence hypothesis on an anchor the maintainer has already
     // dispositioned twice is a re-roll of the dice, not a finding to disposition again.
     refined =
@@ -1803,6 +1812,15 @@ public class FindingPipeline {
             botIdentity,
             ctx.verifiedWriters(),
             lineResolver);
+    aiResponse =
+        FollowUpAnalyzer.withoutConversationCleared(
+            aiResponse,
+            ctx.priorAiResponses(),
+            ctx.priorRoundStarts(),
+            ctx.conversationComments(),
+            lineResolver,
+            botIdentity,
+            ctx.verifiedWriters());
     // #726: a novel lower-confidence hypothesis on an anchor the maintainer has already
     // dispositioned twice is a re-roll of the dice, not a finding to disposition again.
     aiResponse =

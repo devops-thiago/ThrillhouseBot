@@ -31,6 +31,8 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.List;
@@ -160,7 +162,8 @@ public class ReviewContextLoader {
       SupersededFindingsCarryover.Carried carried,
       String coverageArtifactRefusal,
       boolean previousRoundHeadUnchanged,
-      VerifiedWriters verifiedWriters) {
+      VerifiedWriters verifiedWriters,
+      List<Instant> priorRoundStarts) {
     public ReviewContext {
       files = List.copyOf(files);
       priorReviews = List.copyOf(priorReviews);
@@ -171,6 +174,73 @@ public class ReviewContextLoader {
       reviewableFiles = List.copyOf(reviewableFiles);
       conversationComments = List.copyOf(conversationComments);
       unmatchedIgnoreGlobs = List.copyOf(unmatchedIgnoreGlobs);
+      priorRoundStarts = Collections.unmodifiableList(new ArrayList<>(priorRoundStarts));
+    }
+
+    /**
+     * Back-compat constructor for callers that do not know when the prior rounds started. With no
+     * start time, no conversation directive drops a re-raised finding (#1430).
+     */
+    @SuppressWarnings("java:S107")
+    public ReviewContext(
+        List<GitHubPullRequestClient.FileDiff> files,
+        String diff,
+        String baseComparison,
+        int omittedFiles,
+        List<GitHubReviewClient.ReviewResponse> priorReviews,
+        List<String> priorAiResponseJsons,
+        List<ReviewResponse> priorAiResponses,
+        boolean isFirstVisibleReview,
+        boolean hasContext,
+        String previousAiResponseJson,
+        List<GitHubReviewClient.PullRequestComment> inlineComments,
+        String previousFindings,
+        InstructionsResolver.ResolvedInstructions instructions,
+        PathScopedInstructions pathInstructions,
+        List<GitHubLabelClient.Label> repoLabels,
+        String projectStack,
+        String linkedIssuesContext,
+        String configKeyContext,
+        String patchCoverage,
+        List<GitHubPullRequestClient.FileDiff> reviewableFiles,
+        Supplier<DiffLineResolver> lineResolverSupplier,
+        PrTotals prTotals,
+        List<GitHubCommentClient.IssueComment> conversationComments,
+        List<String> unmatchedIgnoreGlobs,
+        SupersededFindingsCarryover.Carried carried,
+        String coverageArtifactRefusal,
+        boolean previousRoundHeadUnchanged,
+        VerifiedWriters verifiedWriters) {
+      this(
+          files,
+          diff,
+          baseComparison,
+          omittedFiles,
+          priorReviews,
+          priorAiResponseJsons,
+          priorAiResponses,
+          isFirstVisibleReview,
+          hasContext,
+          previousAiResponseJson,
+          inlineComments,
+          previousFindings,
+          instructions,
+          pathInstructions,
+          repoLabels,
+          projectStack,
+          linkedIssuesContext,
+          configKeyContext,
+          patchCoverage,
+          reviewableFiles,
+          lineResolverSupplier,
+          prTotals,
+          conversationComments,
+          unmatchedIgnoreGlobs,
+          carried,
+          coverageArtifactRefusal,
+          previousRoundHeadUnchanged,
+          verifiedWriters,
+          List.of());
     }
 
     /** This context with {@code writers} as the comment authors confirmed to hold write access. */
@@ -203,7 +273,8 @@ public class ReviewContextLoader {
           carried,
           coverageArtifactRefusal,
           previousRoundHeadUnchanged,
-          writers);
+          writers,
+          priorRoundStarts);
     }
 
     /**
@@ -601,6 +672,8 @@ public class ReviewContextLoader {
     // head is known; the supersede guard needs the head of the round this review reports on (#932).
     List<String> priorCommitShas =
         sessionPersistence.findAllPriorCommitShas(req.scope(), req.prNumber(), session.id);
+    var priorRoundStarts =
+        sessionPersistence.findAllPriorStartTimes(req.scope(), req.prNumber(), session.id);
     var isFirstVisibleReview =
         priorReviews.stream()
                 .noneMatch(r -> r.user() != null && botIdentity.matches(r.user().login()))
@@ -767,7 +840,8 @@ public class ReviewContextLoader {
                 previousRoundHeadSha(
                     priorCommitShas, priorAiResponseJsons.size(), previousRoundIndex, carried),
                 req.commitSha()),
-            verifiedWriters));
+            verifiedWriters,
+            priorRoundStarts));
   }
 
   /**
