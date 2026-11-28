@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
+import dev.thiagogonzaga.thrillhousebot.config.RsaPrivateKeyParser;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
@@ -255,8 +256,11 @@ public class SecurityScan {
 
   private static final String MAC_ALGORITHM = "HmacSHA256";
 
-  /** Domain label the fingerprint key is derived under, so it is no other use's key (#985). */
-  private static final String FINGERPRINT_KEY_LABEL = "thrillhousebot:scan-content-key";
+  /** Domain label the fingerprint key is derived under, so it is no other use's key. */
+  private static final String FINGERPRINT_KEY_LABEL = "thrillhousebot:scan-content-key:v2";
+
+  /** Domain label of the key markers were made under while it came from the webhook secret. */
+  private static final String WEBHOOK_KEY_LABEL = "thrillhousebot:scan-content-key";
 
   private static final String STATUS_UNRESOLVED = "unresolved";
   private static final String STATUS_RESOLVED = "resolved";
@@ -273,8 +277,11 @@ public class SecurityScan {
   private final double entropyThreshold;
   private final ReviewDiffFormatter.IgnoreGlobs skippedFiles;
 
-  /** The secret the content fingerprint is keyed from ({@link #fingerprintKey}). */
-  private final String serverSecret;
+  /** What the posted content fingerprint is keyed from ({@link #fingerprintKey(byte[])}). */
+  private final byte[] keyMaterial;
+
+  /** What markers were keyed from before, compared and never posted ({@link #webhookKey}). */
+  private final String webhookSecret;
 
   /** What {@link #scanOnce} has read, held weakly by the file list it was read from. */
   private final Map<List<GitHubPullRequestClient.FileDiff>, Result> scans =
@@ -287,10 +294,11 @@ public class SecurityScan {
         config.review().securityScan().iacEnabled(),
         config.review().securityScan().entropyThreshold(),
         config.review().securityScan().skippedFiles(),
+        appKeyMaterial(config.github().privateKey()),
         config.github().webhookSecret());
   }
 
-  /** A scan keyed with a blank server secret, for tests that do not care about the key. */
+  /** A scan keyed with blank key material, for tests that do not care about the key. */
   SecurityScan(
       boolean secretsEnabled,
       boolean iacEnabled,
@@ -299,21 +307,43 @@ public class SecurityScan {
     this(secretsEnabled, iacEnabled, entropyThreshold, skippedFiles, "");
   }
 
+  /** A scan keyed from the text {@code keyMaterial} and a blank webhook secret, for tests. */
+  SecurityScan(
+      boolean secretsEnabled,
+      boolean iacEnabled,
+      double entropyThreshold,
+      List<String> skippedFiles,
+      String keyMaterial) {
+    this(
+        secretsEnabled,
+        iacEnabled,
+        entropyThreshold,
+        skippedFiles,
+        (keyMaterial == null ? "" : keyMaterial).getBytes(StandardCharsets.UTF_8),
+        "");
+  }
+
   /**
-   * As the injected constructor, with {@code serverSecret} the per-installation secret the content
-   * fingerprint is keyed from (the webhook secret in production, #985).
+   * As the injected constructor.
+   *
+   * @param keyMaterial the secret the posted fingerprint is keyed from: the App private key in
+   *     production ({@link #appKeyMaterial})
+   * @param webhookSecret the secret markers were keyed from before, read only to keep matching a
+   *     decline recorded under one of them
    */
   SecurityScan(
       boolean secretsEnabled,
       boolean iacEnabled,
       double entropyThreshold,
       List<String> skippedFiles,
-      String serverSecret) {
+      byte[] keyMaterial,
+      String webhookSecret) {
     this.secretsEnabled = secretsEnabled;
     this.iacEnabled = iacEnabled;
     this.entropyThreshold = entropyThreshold;
     this.skippedFiles = ReviewDiffFormatter.IgnoreGlobs.compile(skippedFiles);
-    this.serverSecret = serverSecret;
+    this.keyMaterial = keyMaterial.clone();
+    this.webhookSecret = webhookSecret;
   }
 
   /** A scan with both halves off, for callers that construct the pipeline without configuration. */
@@ -328,9 +358,11 @@ public class SecurityScan {
   /**
    * One scan finding and the rule that raised it.
    *
-   * @param legacyFingerprint for a secret finding, the unkeyed fingerprint a marker posted before
-   *     #985 would carry for the same content ({@link #legacyContentFingerprint}), kept in memory
-   *     only to match a decline recorded under it; {@code null} for an IaC finding
+   * @param earlierFingerprints for a secret finding, what a marker posted by an earlier version
+   *     would carry for the same content: the unkeyed fingerprint from before #985 ({@link
+   *     #legacyContentFingerprint}) and the one keyed from the webhook secret ({@link
+   *     #webhookKey}). Kept in memory only to match a decline recorded under one of them; empty for
+   *     an IaC finding
    * @param identifier for a generic secret, the name its literal is assigned to when that name is
    *     distinctive enough to stand for the secret in a model's text ({@link #identifierOf}), so a
    *     model finding about it away from its line collapses into this one (#1072); otherwise {@code
@@ -342,15 +374,16 @@ public class SecurityScan {
   record Detection(
       SecurityRule rule,
       ReviewResponse.Finding finding,
-      String legacyFingerprint,
+      Set<String> earlierFingerprints,
       String identifier,
       Set<String> aliases) {
     Detection {
+      earlierFingerprints = Set.copyOf(earlierFingerprints);
       aliases = Set.copyOf(aliases);
     }
 
     Detection(SecurityRule rule, ReviewResponse.Finding finding) {
-      this(rule, finding, null, null, Set.of());
+      this(rule, finding, Set.of(), null, Set.of());
     }
   }
 
@@ -763,7 +796,11 @@ public class SecurityScan {
             hit.rule(),
             secretFinding(
                 filename, lines.get(index).number(), hit, contentFingerprint(hit.rule(), flagged)),
-            legacyContentFingerprint(hit.rule(), flagged),
+            Set.copyOf(
+                List.of(
+                    legacyContentFingerprint(hit.rule(), flagged),
+                    contentFingerprint(
+                        MAC_ALGORITHM, webhookKey(webhookSecret), hit.rule(), flagged))),
             identifierOf(hit),
             Set.of()));
     if (hit.rule() == SecurityRule.PRIVATE_KEY) {
@@ -1054,16 +1091,16 @@ public class SecurityScan {
   /**
    * Whether a declined finding the identity index paired with a detection (same file, title and
    * anchor) covers its content. A fingerprint on the declined finding must equal the detection's
-   * keyed fingerprint, or, for a marker posted before the fingerprint was keyed (#985), the
-   * detection's {@link Detection#legacyFingerprint}, so a decline recorded before an upgrade keeps
-   * matching rather than lapsing.
+   * keyed fingerprint, or, for a marker an earlier version posted, one of the detection's {@link
+   * Detection#earlierFingerprints}, so a decline recorded before an upgrade keeps matching rather
+   * than lapsing.
    */
   private static boolean sameContent(ReviewResponse.Finding prior, Detection detection) {
     IDENTITY_COMPARISONS.incrementAndGet();
     var priorFingerprint = fingerprintOf(prior.description());
     return priorFingerprint == null
         || priorFingerprint.equals(fingerprintOf(detection.finding().description()))
-        || priorFingerprint.equals(detection.legacyFingerprint());
+        || detection.earlierFingerprints().contains(priorFingerprint);
   }
 
   /** The content fingerprint a scan finding's description carries, or {@code null}. */
@@ -1078,13 +1115,13 @@ public class SecurityScan {
   /**
    * A short fingerprint of the content a secret finding flagged, the rule's name included: the
    * first {@value #FINGERPRINT_HEX} hex digits of its HMAC-SHA-256 under this server's {@linkplain
-   * #fingerprintKey key} (#985). It tells one value from another without holding either, and
-   * because the marker is posted on the pull request, the key is what stops a reader from testing a
-   * guessed value against it offline: the redacted title already gives the value's first characters
-   * and length, which leave a short password few candidates.
+   * #fingerprintKey(byte[]) key} (#985). It tells one value from another without holding either,
+   * and because the marker is posted on the pull request, the key is what stops a reader from
+   * testing a guessed value against it offline: the redacted title already gives the value's first
+   * characters and length, which leave a short password few candidates.
    */
   String contentFingerprint(SecurityRule rule, String content) {
-    return contentFingerprint(MAC_ALGORITHM, fingerprintKey(serverSecret), rule, content);
+    return contentFingerprint(MAC_ALGORITHM, fingerprintKey(keyMaterial), rule, content);
   }
 
   /**
@@ -1093,27 +1130,65 @@ public class SecurityScan {
    */
   static String contentFingerprint(
       String algorithm, byte[] key, SecurityRule rule, String content) {
+    var mac = mac(algorithm, key);
+    mac.update(rule.name().getBytes(StandardCharsets.UTF_8));
+    mac.update((byte) 0);
+    var hash = mac.doFinal(content.getBytes(StandardCharsets.UTF_8));
+    return HexFormat.of().formatHex(hash).substring(0, FINGERPRINT_HEX);
+  }
+
+  /** A MAC of {@code algorithm} ready to read its message under {@code key}. */
+  private static Mac mac(String algorithm, byte[] key) {
     try {
       var mac = Mac.getInstance(algorithm);
       mac.init(new SecretKeySpec(key, algorithm));
-      mac.update(rule.name().getBytes(StandardCharsets.UTF_8));
-      mac.update((byte) 0);
-      var hash = mac.doFinal(content.getBytes(StandardCharsets.UTF_8));
-      return HexFormat.of().formatHex(hash).substring(0, FINGERPRINT_HEX);
+      return mac;
     } catch (GeneralSecurityException e) {
       throw new IllegalStateException(algorithm + " is not available", e);
     }
   }
 
   /**
-   * The fingerprint key for a server secret: a SHA-256 of a fixed label and the secret, so the
-   * webhook secret is never used as a key for a second purpose as is, and a blank secret (a scan
-   * built without configuration) still gives a valid key. The same secret gives the same key on
+   * The key of the posted fingerprint: an HMAC-SHA-256 of the key material under a fixed label, so
+   * the material is never used as a key for a second purpose as is, and blank material (a scan
+   * built without configuration) still gives a valid key. The same material gives the same key on
    * every start, which keeps markers stable across rounds and restarts.
+   *
+   * <p>The marker is public and its input can be chosen by a pull request's author, so anyone can
+   * test guesses of the key material against it offline. That is why the material is the App
+   * private key, which cannot be guessed, and not the webhook secret, which an operator chooses.
    */
-  static byte[] fingerprintKey(String serverSecret) {
+  static byte[] fingerprintKey(byte[] keyMaterial) {
+    return mac(MAC_ALGORITHM, FINGERPRINT_KEY_LABEL.getBytes(StandardCharsets.UTF_8))
+        .doFinal(keyMaterial);
+  }
+
+  /**
+   * The key material of an App private key: its modulus and private exponent, which are the same
+   * however the PEM is spelled (real line breaks, or {@code \n} escapes on one line). Empty for a
+   * key that does not parse, which {@code StartupConfigValidator} refuses to start with.
+   */
+  static byte[] appKeyMaterial(String privateKey) {
+    try {
+      var key = RsaPrivateKeyParser.parse(privateKey);
+      var modulus = key.getModulus().toByteArray();
+      var exponent = key.getPrivateExponent().toByteArray();
+      var material = Arrays.copyOf(modulus, modulus.length + exponent.length);
+      System.arraycopy(exponent, 0, material, modulus.length, exponent.length);
+      return material;
+    } catch (IllegalArgumentException _) {
+      return new byte[0];
+    }
+  }
+
+  /**
+   * The key markers were posted under while it came from the webhook secret: a SHA-256 of a fixed
+   * label and the secret. Used only to compare with a decline recorded under such a marker, so the
+   * decline keeps covering its line after the upgrade; nothing made with it is posted.
+   */
+  static byte[] webhookKey(String webhookSecret) {
     return digest(
-        FINGERPRINT_ALGORITHM, FINGERPRINT_KEY_LABEL, serverSecret == null ? "" : serverSecret);
+        FINGERPRINT_ALGORITHM, WEBHOOK_KEY_LABEL, webhookSecret == null ? "" : webhookSecret);
   }
 
   /**
@@ -1461,7 +1536,7 @@ public class SecurityScan {
                 : new Detection(
                     detection.rule(),
                     detection.finding(),
-                    detection.legacyFingerprint(),
+                    detection.earlierFingerprints(),
                     detection.identifier(),
                     aliases(
                         detection,

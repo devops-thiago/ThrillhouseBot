@@ -38,6 +38,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class StartupConfigValidatorTest {
 
@@ -700,6 +701,22 @@ class StartupConfigValidatorTest {
   void bootsWithTheAutomaticReviewLimitsOffOrOn() {
     new ConfigBuilder().autoReviewLimits(0, 0).build().validate();
     new ConfigBuilder().autoReviewLimits(4, 50).build().validate();
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"s3cret", "fifteen-chars-x", "  padded-short   "})
+  void warnsWhenTheWebhookSecretIsShort(String secret) {
+    var warning = StartupConfigValidator.shortWebhookSecretWarning(secret).orElseThrow();
+
+    assertTrue(warning.contains("GITHUB_WEBHOOK_SECRET is shorter than 16 characters"), warning);
+    assertFalse(warning.contains(secret.strip()), "the secret is never repeated");
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {"sixteen-chars-xx", "0123456789abcdef0123456789abcdef", "a-longer-webhook-secret"})
+  void doesNotWarnWhenTheWebhookSecretIsLongEnough(String secret) {
+    assertTrue(StartupConfigValidator.shortWebhookSecretWarning(secret).isEmpty());
   }
 
   @Test
