@@ -23,7 +23,9 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * Withdraws the bot's approval when commits are pushed after it, or when a pull request is reopened
@@ -47,7 +49,9 @@ import java.util.Optional;
  * A review of the new head that approves posts a new approval as usual. A dismissal also makes the
  * rate limiter forget the head its last review covered ({@link
  * AutoReviewRateLimiter#forgetCoveredHead}), so a head that returns to the commit whose approval
- * was just withdrawn is reviewed when the window closes, not skipped as already reviewed.
+ * was just withdrawn is reviewed when the window closes, not skipped as already reviewed. The same
+ * is done when the listing shows that head's approval already dismissed, which is what GitHub's own
+ * "Dismiss stale pull request approvals" setting leaves for this to find.
  */
 @ApplicationScoped
 public class ApprovalOnPush {
@@ -86,7 +90,9 @@ public class ApprovalOnPush {
   @ActivateRequestContext
   public void withdraw(Push push) {
     var auth = authClient.getAuthHeader(push.installationId(), push.repo());
-    var approvals = standingApprovals(auth, push);
+    var reviews = listedReviews(auth, push);
+    var approvals = reviews.stream().filter(reviewPublisher::isStandingBotApproval).toList();
+    forgetCoveredHeadDismissedElsewhere(push, reviews, approvals);
     if (approvals.isEmpty() || approves(approvals, push.headSha())) {
       return;
     }
@@ -106,10 +112,40 @@ public class ApprovalOnPush {
   }
 
   /**
-   * The bot's approvals GitHub still counts, oldest first; empty when the listing failed. They come
-   * from {@link ReviewListing}, which also reads the ones older than the listing's limit.
+   * Makes the rate limiter forget the head its last review covered when the bot's approval of that
+   * head was dismissed by someone else and none stands for it now. With "Dismiss stale pull request
+   * approvals" on, GitHub dismisses the approval at the push, before this runs, so there is nothing
+   * left here to dismiss; without this the head would stay covered, and a force-push back to it
+   * inside the window would be skipped as reviewed with no approval left. A covered head whose
+   * approval still stands, or that has no dismissed review of the bot's, stays covered. One the bot
+   * reviewed again without approving after such a dismissal is forgotten as well: telling the two
+   * apart would need the order of its reviews, and one more review is the cheaper mistake.
    */
-  private List<GitHubReviewClient.ReviewResponse> standingApprovals(String auth, Push push) {
+  private void forgetCoveredHeadDismissedElsewhere(
+      Push push,
+      List<GitHubReviewClient.ReviewResponse> reviews,
+      List<GitHubReviewClient.ReviewResponse> approvals) {
+    var dismissed =
+        reviews.stream()
+            .filter(reviewPublisher::isDismissedBotReview)
+            .map(GitHubReviewClient.ReviewResponse::commitId)
+            .filter(sha -> sha != null && !approves(approvals, sha))
+            .map(sha -> sha.toLowerCase(Locale.ROOT))
+            .collect(Collectors.toSet());
+    if (!dismissed.isEmpty()) {
+      autoReviewRateLimiter.forgetCoveredHead(
+          push.owner(),
+          push.repo(),
+          push.prNumber(),
+          covered -> dismissed.contains(covered.toLowerCase(Locale.ROOT)));
+    }
+  }
+
+  /**
+   * The pull request's reviews, oldest first; empty when the listing failed. They come from {@link
+   * ReviewListing}, which also reads the bot's approvals older than the listing's limit.
+   */
+  private List<GitHubReviewClient.ReviewResponse> listedReviews(String auth, Push push) {
     List<GitHubReviewClient.ReviewResponse> reviews;
     try {
       reviews = reviewListing.list(auth, push.owner(), push.repo(), push.prNumber());
@@ -125,7 +161,7 @@ public class ApprovalOnPush {
           push.headSha());
       return List.of();
     }
-    return reviews.stream().filter(reviewPublisher::isStandingBotApproval).toList();
+    return reviews;
   }
 
   private static boolean approves(List<GitHubReviewClient.ReviewResponse> approvals, String head) {

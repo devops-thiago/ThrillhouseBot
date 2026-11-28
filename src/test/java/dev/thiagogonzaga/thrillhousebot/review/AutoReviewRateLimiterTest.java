@@ -255,6 +255,31 @@ class AutoReviewRateLimiterTest {
   }
 
   @Test
+  void forgettingTheCoveredHeadOnlyWhenItIsOneOfTheNamedHeads() {
+    var clock = new MutableClock(1_000);
+    var limiter = new AutoReviewRateLimiter(INTERVAL_MS, BIG_THRESHOLD, clock);
+    limiter.recordCompletion("owner", "repo", 1, "sha-a");
+
+    limiter.forgetCoveredHead("owner", "repo", 1, "sha-b"::equals);
+    assertEquals(AutoReviewRateLimiter.Hold.SKIP, limiter.hold("owner", "repo", 1, "sha-a"));
+
+    limiter.forgetCoveredHead("owner", "repo", 1, "sha-a"::equals);
+    assertEquals(
+        OptionalLong.of(1_000 + INTERVAL_MS),
+        limiter.hold("owner", "repo", 1, "sha-a").reviewDueAt());
+
+    // Nothing is covered any more, so there is no head left to ask about.
+    limiter.forgetCoveredHead(
+        "owner",
+        "repo",
+        1,
+        sha -> {
+          throw new AssertionError("asked about " + sha);
+        });
+    assertTrue(limiter.hold("owner", "repo", 1, "sha-a").throttled());
+  }
+
+  @Test
   void forgettingTheCoveredHeadOfAPullRequestWithNoWindowOpensNone() {
     var limiter = new AutoReviewRateLimiter(INTERVAL_MS, BIG_THRESHOLD, new MutableClock(0));
 

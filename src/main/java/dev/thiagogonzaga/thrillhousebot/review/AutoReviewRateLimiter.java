@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.OptionalLong;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.LongSupplier;
+import java.util.function.Predicate;
 
 /**
  * Throttles automatic (webhook-triggered) reviews per PR: while the last automatic review of a PR
@@ -156,8 +157,22 @@ public class AutoReviewRateLimiter {
    * approved, again. The heads a ready-for-review lifted the window for are not touched.
    */
   public void forgetCoveredHead(String owner, String repo, int prNumber) {
+    forgetCoveredHead(owner, repo, prNumber, covered -> true);
+  }
+
+  /**
+   * {@link #forgetCoveredHead(String, String, int)}, only when {@code lostItsApproval} says so of
+   * the head the PR's last automatic review covered. For a caller that knows which heads have no
+   * approval left but not which one the window covers.
+   */
+  public void forgetCoveredHead(
+      String owner, String repo, int prNumber, Predicate<String> lostItsApproval) {
     deadlines.computeIfPresent(
-        key(owner, repo, prNumber), (ignored, window) -> new Window(window.deadline(), null));
+        key(owner, repo, prNumber),
+        (ignored, window) ->
+            window.sha() != null && lostItsApproval.test(window.sha())
+                ? new Window(window.deadline(), null)
+                : window);
   }
 
   /**

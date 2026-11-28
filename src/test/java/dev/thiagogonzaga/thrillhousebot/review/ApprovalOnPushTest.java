@@ -175,6 +175,69 @@ class ApprovalOnPushTest {
   }
 
   @Test
+  void approvalAlreadyDismissedForTheCoveredHeadMakesTheRateWindowForgetIt() {
+    limiter.recordCompletion("o", "r", 1, "sha1");
+    // What "Dismiss stale pull request approvals" leaves behind: GitHub dismissed it on the push.
+    reviewsAre(review(1L, "DISMISSED", "SHA1", BOT));
+
+    approvalOnPush.withdraw(PUSH);
+
+    verifyNothingDismissed();
+    var hold = limiter.hold("o", "r", 1, "sha1");
+    assertTrue(hold.throttled(), "the window itself stays");
+    assertEquals(
+        OptionalLong.of(1_000 + WINDOW_MS),
+        hold.reviewDueAt(),
+        "a return to sha1 is reviewed when the window closes");
+  }
+
+  @Test
+  void dismissedApprovalOfAnotherHeadLeavesTheCoveredHeadCovered() {
+    limiter.recordCompletion("o", "r", 1, "sha1");
+    reviewsAre(
+        review(1L, "DISMISSED", "sha0", BOT),
+        review(2L, "DISMISSED", null, BOT),
+        review(3L, "COMMENTED", "sha1", BOT));
+
+    approvalOnPush.withdraw(PUSH);
+
+    assertEquals(AutoReviewRateLimiter.Hold.SKIP, limiter.hold("o", "r", 1, "sha1"));
+  }
+
+  @Test
+  void coveredHeadReviewedAgainWithoutApprovingAfterADismissalIsForgottenToo() {
+    limiter.recordCompletion("o", "r", 1, "sha1");
+    reviewsAre(review(1L, "DISMISSED", "sha1", BOT), review(2L, "COMMENTED", "sha1", BOT));
+
+    approvalOnPush.withdraw(PUSH);
+
+    // One review more than needed is accepted over a head left with no approval and no review.
+    assertEquals(
+        OptionalLong.of(1_000 + WINDOW_MS), limiter.hold("o", "r", 1, "sha1").reviewDueAt());
+  }
+
+  @Test
+  void dismissedReviewBySomeoneElseLeavesTheCoveredHeadCovered() {
+    limiter.recordCompletion("o", "r", 1, "sha1");
+    reviewsAre(review(1L, "DISMISSED", "sha1", "maintainer"));
+
+    approvalOnPush.withdraw(PUSH);
+
+    assertEquals(AutoReviewRateLimiter.Hold.SKIP, limiter.hold("o", "r", 1, "sha1"));
+  }
+
+  @Test
+  void coveredHeadApprovedAgainAfterADismissalStaysCovered() {
+    limiter.recordCompletion("o", "r", 1, "sha1");
+    reviewsAre(review(1L, "DISMISSED", "sha1", BOT), review(2L, "APPROVED", "sha1", BOT));
+
+    approvalOnPush.withdraw(new ApprovalOnPush.Push("o", "r", 1, "sha1", 77L));
+
+    verifyNothingDismissed();
+    assertEquals(AutoReviewRateLimiter.Hold.SKIP, limiter.hold("o", "r", 1, "sha1"));
+  }
+
+  @Test
   void headForcedBackToTheApprovedCommitInsideTheWindowIsReviewedWhenTheWindowCloses()
       throws InterruptedException {
     var orchestrator = mock(ReviewOrchestrator.class);

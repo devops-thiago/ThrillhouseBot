@@ -384,7 +384,14 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   before it runs loses it. When at least one approval was dismissed, `ApprovalOnPush` calls
   `AutoReviewRateLimiter.forgetCoveredHead`: the window stays, but the head its review covered is
   forgotten, so a force-push back to that commit inside the window is deferred to the window's
-  end (`AutoReviewRateLimiter.hold`) and reviewed, not skipped as covered with no approval left. The
+  end (`AutoReviewRateLimiter.hold`) and reviewed, not skipped as covered with no approval left. It
+  does the same when the listing shows the covered head's approval already `DISMISSED` with none
+  standing for it (`forgetCoveredHeadDismissedElsewhere`, through the overload that takes a test
+  of the covered head): with GitHub's "Dismiss stale pull request approvals" on, GitHub dismisses
+  the approval at the push and the bot finds nothing to dismiss. A covered head whose approval
+  still stands (a dismissal that failed) or that has no dismissed review of the bot's stays
+  covered. A covered head with both an old dismissed approval and a later comment-only review
+  is forgotten too, since one more review is the cheaper mistake. The
   ready-for-review lift memory is separate; leave it alone there.
 - **A round that does not approve withdraws the bot's standing approvals.** GitHub keeps counting
   an `APPROVED` review after its author posts a `COMMENT` one, so `ReviewPublisher.publishReview`

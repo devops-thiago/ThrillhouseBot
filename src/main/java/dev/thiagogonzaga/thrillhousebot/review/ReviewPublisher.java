@@ -962,6 +962,11 @@ public class ReviewPublisher {
     return approvalWithdrawals.isStandingBotApproval(review);
   }
 
+  /** {@link ApprovalWithdrawals#isDismissedBotReview}. */
+  boolean isDismissedBotReview(GitHubReviewClient.ReviewResponse review) {
+    return approvalWithdrawals.isDismissedBotReview(review);
+  }
+
   /** One coverage notice for the outcome, including verification-only delta disclosures. */
   private static void appendReviewNotice(
       List<String> bodyParts, ReviewResult result, PostReviewRequest post) {
