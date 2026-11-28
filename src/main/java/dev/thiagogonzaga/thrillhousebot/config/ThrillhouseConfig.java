@@ -706,6 +706,10 @@ public interface ThrillhouseConfig {
     @WithName("agent-next-steps")
     AgentNextStepsConfig agentNextSteps();
 
+    /** Folding of the long sections of the PR summary comment (#1445). */
+    @WithName("summary-collapse")
+    SummaryCollapseConfig summaryCollapse();
+
     @WithName("large-pr-nudge")
     LargePrNudgeConfig largePrNudge();
 
@@ -1074,6 +1078,19 @@ public interface ThrillhouseConfig {
      * closed.
      */
     @WithDefault("false")
+    boolean enabled();
+  }
+
+  /**
+   * Progressive disclosure in the summary comment (#1445). On by default: the content stays in the
+   * comment, one click away.
+   */
+  interface SummaryCollapseConfig {
+    /**
+     * Fold the change totals, the changed-files table and the previous-findings counts, and the
+     * risk table when there is no critical or high finding.
+     */
+    @WithDefault("true")
     boolean enabled();
   }
 
