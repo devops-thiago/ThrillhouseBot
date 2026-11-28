@@ -101,7 +101,7 @@ same diff.
 
 | Stage | Where |
 |---|---|
-| Dispatch, per-PR serialization, coalescing, the per-PR window and the per-repository slots for automatic reviews | `review/ReviewDispatcher` (with `AutoReviewRateLimiter`, `AutoReviewSlots`) |
+| Dispatch, per-PR serialization, coalescing, the per-PR window and the per-repository slots for automatic reviews, and the reviews those limits hold back | `review/ReviewDispatcher` (with `AutoReviewRateLimiter`, `AutoReviewSlots`, `DeferredReviews`, `DeferredReviewRelease`) |
 | Top-level run: check run, context, plan, pipeline, verdict, publish | `review/ReviewOrchestrator` |
 | Stand down before the first write: a chain of `review/PrePublishGuard`s run in order, first stand-down wins, shared consequences (skip counted, check run skipped) applied once. Order: head moved (#704, with the #806 carry-over), then a rejecting label gate (#1021). A new guard is added to the coordinator's list, not to the orchestrator. A head that moved while the context loaded (`ReviewContextLoader.StaleReviewException.headMoved`) gets the same consequences without the carry-over and is not a failure: no failure notice, failed-outcome metric or failure notification (#1412); an unreadable head stays a failure | `review/ReviewStandDown.beforeFirstWrite` over `HeadMovedGuard` (with `SupersededFindingsCarryover`), `LabelGateGuard` (with `PullRequestLabelGate`); `ReviewStandDown.supersededWhileLoading` from `ReviewOrchestrator.closeSupersededWhileLoading` |
 | Load diff, every earlier round (from the stored `ReviewSession.aiResponseJson`), threads and conversation, instructions, labels, project stack, config-key and patch-coverage context | `review/ReviewContextLoader` (with `PatchCoverageResolver`, `ConfigKeyContextResolver`, `BugFixContextResolver`, `SupersededFindingsCarryover`) |
@@ -590,14 +590,42 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   `AUTO_REVIEW_MAX_QUEUED_PER_REPO`, `REVIEW_MAX_TOKENS_PER_REVIEW` and `AI_MAX_CONCURRENT_CALLS`
   all default to a non-zero value, declared on `ThrillhouseConfig` and in `application.properties`
   alike (`CostLimitDefaultsTest`); `0` stays the operator's way to turn one off. `ready_for_review`
-  lifts the window once per head (`AutoReviewRateLimiter.clearForReadyHead`). An automatic review
+  lifts the window once per head (`AutoReviewRateLimiter.clearForReadyHead`, which remembers the
+  last eight heads of a pull request). An automatic review
   takes its repository's slot in `ReviewDispatcher.reviewWithinRepositoryLimit` and returns it
   however the review ends; it waits on its own worker, so a queued review is never dropped, and
   the rate window is read again once the slot is held. A manual review takes no slot, and a
   newer request for a pull request whose review is waiting replaces it (`recheckWaiters`), so a
   `/review` is never held behind the queue. A throttled
-  or queue-full review is a recorded skip and `dispatch` still returns `true`: `false` is only for
+  or queue-full review is a decision and `dispatch` still returns `true`: `false` is only for
   a rejected executor, because it rolls the delivery's dedupe slot back.
+- **A limit delays the review of a new head instead of dropping it, within the store's bounds.** A
+  bot approval of the previous head would otherwise stay on code nobody read. Every place the rate window or the queue limit
+  turns an automatic review away (`WebhookEvents.heldByRateWindow`,
+  `ReviewDispatcher.skippedAsThrottled`, `deferQueueFull`) keeps it in `DeferredReviews` when its
+  head is not the one the last automatic review covered (`AutoReviewRateLimiter.hold`, which
+  reads the clock and the window once, so a caller never asks twice about one event), and
+  records a skip for the head already reviewed and when the store refuses, which includes a
+  hand-back that failed for an hour (`DeferredReviewRelease.release`). The store holds one
+  request per pull request (the latest wins), at most 10,000, and gives up on a head that keeps
+  coming back for an hour. "Latest" is decided by where the request comes from: an event's request
+  goes in through `defer` and replaces the entry, while a request the dispatcher's worker puts
+  back goes in through `requeue`, which leaves a different head an event
+  deferred in place, because that request can be older than the push that arrived while it waited. `DeferredReviewRelease` runs one timer for all of them and hands a due
+  request to `dispatchDeferred`, so it is serialized, takes a slot and has the window read again
+  like any other. Between `takeDue` and the hand-back an event can replace or remove the entry, so
+  the release never calls `forget` or `requeue`: it goes through `DeferredReviews.handBack`,
+  `dropHandedOut` and `waitAgain`, which act only while the entry is still the one handed out and
+  otherwise leave the request superseded, with nothing put back, removed or counted. `handBack`
+  calls `dispatchDeferred` inside the store's update of that entry, and `dispatch` forgets the
+  entry before it queues, so a request handed back late cannot replace a newer push already queued
+  for the pull request's worker. An entry goes on close or merge, on a newer automatic dispatch, on
+  an event for the head already reviewed, on an event the
+  pause or trigger filters reject, on `converted_to_draft` when drafts are skipped (a recorded skip when the review
+  still waited), on a hand-back
+  that finds the pull request paused or that the executor refuses (both recorded skips), and at
+  shutdown; a restart loses them all. Handing an entry out does not remove it: unless one of those
+  removes it, it stays, counted towards the 10,000, for an hour after its first hand-out. A new drop path for automatic reviews must defer the same way.
 - **Nothing is written for a commenter before the write-access check.** `WebhookEvents`
   authorizes a command (`ManualReviewAuthorizer`) before the 👀 reaction and before the paused or
   closed notice, and drops a refused command without calling `CommentCommandService`, whose

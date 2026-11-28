@@ -47,7 +47,15 @@ security limits. To report a vulnerability, see
   dismissed when the review of the new head finishes without approving, and it
   stays if that review never runs or fails, if the bot could not read the pull
   request's reviews, or if a branch protection rule stops the App from
-  dismissing reviews (the bot logs a warning). If the bot's
+  dismissing reviews (the bot logs a warning). A push inside
+  `AUTO_REVIEW_MIN_INTERVAL` or past a full repository queue is kept and
+  reviewed late instead of skipped, so timing a push to land inside the window
+  does not by itself avoid the review. That later review is held in memory. It
+  does not run if the bot restarts while it waits, if 10,000 pull requests
+  already have one kept, if the repository's queue stays full for an hour, if
+  the review cannot be started (the executor refuses it, or starting it fails
+  for an hour), or if the pull request is paused meanwhile, or converted to a
+  draft while drafts are skipped. If the bot's
   approval counts towards a required review, turn on "Dismiss stale pull
   request approvals when new commits are pushed" for the branch.
 - Only the latest release gets security fixes.
@@ -139,8 +147,10 @@ most `AUTO_REVIEW_MAX_CONCURRENT_PER_REPO` automatic reviews at once (default 4)
 with at most `AUTO_REVIEW_MAX_QUEUED_PER_REPO` waiting (default 50), and the
 process sends at most `AI_MAX_CONCURRENT_CALLS` model calls at once (default
 16). A pull request is not reviewed again within `AUTO_REVIEW_MIN_INTERVAL` of
-its last automatic review (default one minute), which covers a push, a reopen
-of an unchanged head and a repeated ready-for-review of the same head. These
+its last automatic review (default one minute). A reopen of an unchanged head
+and a repeated ready-for-review of the head just reviewed are skipped; a push
+is kept, the latest head only, for a review when the window closes, so pushes
+cost at most one review per window. These
 bound how fast spend can accrue, not its total: an author who keeps pushing new
 commits to several pull requests keeps the repository's four slots busy. Use
 `WEBHOOK_EXCLUDED_AUTHORS`, the label gates or `GITHUB_ALLOWED_ACCOUNTS`, and a

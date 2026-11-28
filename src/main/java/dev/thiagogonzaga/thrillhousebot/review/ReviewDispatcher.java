@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.config.ReviewExecutor;
+import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.Span;
@@ -24,6 +25,7 @@ import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
@@ -41,6 +43,18 @@ import org.slf4j.LoggerFactory;
  * <p>An automatic review also takes one of its repository's slots ({@link AutoReviewSlots}) and
  * waits on its worker for one while as many run as may, so the pull requests of one repository are
  * reviewed a few at a time. A manual review takes no slot and never waits.
+ *
+ * <p>An automatic review the rate window holds back for a head the last automatic review did not
+ * cover, or a full repository queue turns away, is kept in {@link DeferredReviews}, one per pull
+ * request for its latest head, and dispatched again when the window closes or after {@link
+ * #QUEUE_FULL_RETRY}. It is skipped instead of kept when the window holds back the head already
+ * reviewed, and when the store refuses it: as many pull requests have a review kept as {@link
+ * DeferredReviews#MAX_PENDING} allows, or the same head has been coming back for {@link
+ * DeferredReviews#GIVE_UP_AFTER}. A kept review is not certain to run either: it is held in memory,
+ * so a restart forgets it, a later event for the pull request replaces or drops it (a newer head,
+ * the head already reviewed, a close, a pause or a filter), a request that comes back gives way to
+ * a newer head an event kept since, and {@link DeferredReviewRelease} drops it when the pull
+ * request was paused or the executor refuses it.
  *
  * <p>A manual {@code /review} that arrives while a review is running reads the pull request's head
  * first (#1152). When it is the head under review, the running review already covers it: the
@@ -70,6 +84,9 @@ public final class ReviewDispatcher {
    */
   static final AttributeKey<Long> REQUESTS = AttributeKey.longKey("thrillhouse.review.requests");
 
+  /** How long a review a full repository queue turned away waits before it asks again. */
+  static final Duration QUEUE_FULL_RETRY = Duration.ofSeconds(30);
+
   static final String REVIEW_SPAN = "review";
   static final String CI_RECHECK_SPAN = "review.ci-recheck";
 
@@ -77,6 +94,7 @@ public final class ReviewDispatcher {
   private final ReviewOrchestrator orchestrator;
   private final AutoReviewRateLimiter autoReviewRateLimiter;
   private final AutoReviewSlots autoReviewSlots;
+  private final DeferredReviews deferredReviews;
   private final ReviewSkipEmitter skipEmitter;
   private final CiHoldRevisit ciHoldRevisit;
   private final RunningReviewCoverage coverage;
@@ -90,6 +108,7 @@ public final class ReviewDispatcher {
       ReviewOrchestrator orchestrator,
       AutoReviewRateLimiter autoReviewRateLimiter,
       AutoReviewSlots autoReviewSlots,
+      DeferredReviews deferredReviews,
       ReviewSkipEmitter skipEmitter,
       CiHoldRevisit ciHoldRevisit,
       RunningReviewCoverage coverage,
@@ -98,6 +117,7 @@ public final class ReviewDispatcher {
     this.orchestrator = orchestrator;
     this.autoReviewRateLimiter = autoReviewRateLimiter;
     this.autoReviewSlots = autoReviewSlots;
+    this.deferredReviews = deferredReviews;
     this.skipEmitter = skipEmitter;
     this.ciHoldRevisit = ciHoldRevisit;
     this.coverage = coverage;
@@ -109,11 +129,108 @@ public final class ReviewDispatcher {
    * manual {@code /review} for the head a running review covers is answered instead (#1152).
    *
    * @return {@code true} if the review was queued, coalesced into a running worker, or covered by
-   *     the running review; {@code false} if the executor rejected the task (e.g. it is saturated
-   *     or shutting down) so no review will run. Callers use this to roll back webhook dedup state
-   *     so a redelivery can retry.
+   *     the running review; {@code false} if the executor rejected the task (it is shutting down)
+   *     so no review will run. Callers use this to roll back webhook dedup state so a redelivery
+   *     can retry.
    */
   public boolean dispatch(ReviewOrchestrator.ReviewRequest req) {
+    if (!req.isManualTrigger()) {
+      // A newer automatic event replaces whatever a limit held back for the pull request, and it
+      // does so before it is queued, so a review handed back late cannot be queued over it. When
+      // the executor then refuses the event, the kept review is not restored: the caller counts
+      // DISPATCH_REJECTED once, for this event, which carries the pull request's newest head, and
+      // the executor refuses only once it is shut down, when the store is emptied anyway.
+      deferredReviews.forget(req);
+    }
+    return enqueue(req);
+  }
+
+  /**
+   * Queues a review {@link DeferredReviews} handed back, like {@link #dispatch}. Its entry there is
+   * left alone, so a request a limit turns away again is counted as the same one.
+   *
+   * <p>{@link DeferredReviews#handBack} calls this while it updates that entry, so that a newer
+   * event cannot be queued in between. Nothing on this path may call into {@link DeferredReviews},
+   * and the review must start on another thread, as the executor's tasks do.
+   */
+  public boolean dispatchDeferred(ReviewOrchestrator.ReviewRequest req) {
+    return enqueue(req);
+  }
+
+  /** What the rate window did with an automatic review. */
+  public enum RateWindowHold {
+    /** The window is not open: the review goes ahead. */
+    NOT_HELD,
+    /**
+     * The window holds the review back, and a review is kept to run when the window closes: this
+     * one, or, for a request that came back on its worker, the newer head an event kept since.
+     */
+    KEPT,
+    /**
+     * The window holds the review back and nothing is kept, so the caller records the skip: the
+     * last automatic review covered this head, or {@link DeferredReviews} refused it.
+     */
+    NOT_KEPT
+  }
+
+  /**
+   * Asks the rate window about the automatic review of an event that just arrived, once, and keeps
+   * the review to run when the window closes if the window holds back a head its last automatic
+   * review did not cover and {@link DeferredReviews} takes it; {@link RateWindowHold#NOT_KEPT} says
+   * it did not. An event for the head that review covered needs no review, and says the pull
+   * request is back on that head, so a review kept for another head is dropped.
+   */
+  public RateWindowHold holdForRateWindow(ReviewOrchestrator.ReviewRequest req) {
+    var hold = windowHold(req);
+    if (hold.throttled() && hold.reviewDueAt().isEmpty() && hasHead(req)) {
+      deferredReviews.forget(req);
+    }
+    return held(req, hold, deferredReviews::defer);
+  }
+
+  private static boolean hasHead(ReviewOrchestrator.ReviewRequest req) {
+    return req.commitSha() != null && !req.commitSha().isBlank();
+  }
+
+  private AutoReviewRateLimiter.Hold windowHold(ReviewOrchestrator.ReviewRequest req) {
+    return autoReviewRateLimiter.hold(req.owner(), req.repo(), req.prNumber(), req.commitSha());
+  }
+
+  /**
+   * How a review the rate window holds back is kept: {@code false} when the pull request is left
+   * with no review kept.
+   */
+  private interface Keeper {
+    boolean keep(ReviewOrchestrator.ReviewRequest req, long dueAt);
+  }
+
+  private static RateWindowHold held(
+      ReviewOrchestrator.ReviewRequest req, AutoReviewRateLimiter.Hold hold, Keeper keeper) {
+    if (!hold.throttled()) {
+      return RateWindowHold.NOT_HELD;
+    }
+    var dueAt = hold.reviewDueAt();
+    return dueAt.isPresent() && keeper.keep(req, dueAt.getAsLong())
+        ? RateWindowHold.KEPT
+        : RateWindowHold.NOT_KEPT;
+  }
+
+  /** Drops the review a limit held back for the pull request; a newer event ruled it out. */
+  public void forgetDeferred(RepoScope scope, int prNumber) {
+    deferredReviews.forget(scope, prNumber);
+  }
+
+  /**
+   * Drops the review a limit held back for the pull request, like {@link #forgetDeferred}, for an
+   * event that records no skip of its own.
+   *
+   * @return whether a review that still waited for the limit was dropped, so the caller counts it
+   */
+  public boolean dropDeferred(RepoScope scope, int prNumber) {
+    return deferredReviews.forgetWaiting(scope, prNumber);
+  }
+
+  private boolean enqueue(ReviewOrchestrator.ReviewRequest req) {
     var key = new PrKey(req.owner(), req.repo(), req.prNumber());
     var trigger = Span.current().getSpanContext();
     var coveredHead = req.isManualTrigger() ? headUnderReview(key, req) : null;
@@ -215,10 +332,10 @@ public final class ReviewDispatcher {
    * Queues a CI re-evaluation for the pull request's held verdict (#825), serialized with its
    * reviews: the worker runs every queued review first and the re-evaluation after them. It is
    * never dropped for a queued review, because a queued review is not guaranteed to read the CI
-   * gate — the rate-limit re-check in {@link #runReviewBatch} can skip it, and a review can fail
-   * before its gate read — and a re-evaluation that finds the review already released or replaced
-   * the hold is a cheap no-op. Repeated completions for the same pull request collapse into one
-   * pending re-evaluation.
+   * gate — the rate-limit re-check in {@link #runReviewBatch} can skip or defer it, and a review
+   * can fail before its gate read — and a re-evaluation that finds the review already released or
+   * replaced the hold is a cheap no-op. Repeated completions for the same pull request collapse
+   * into one pending re-evaluation.
    *
    * @return {@code true} if the re-evaluation was queued or coalesced; {@code false} if the
    *     executor rejected the task, so the caller can roll back the webhook dedup state and a
@@ -349,17 +466,41 @@ public final class ReviewDispatcher {
   }
 
   private boolean skippedAsThrottled(ReviewOrchestrator.ReviewRequest req) {
-    if (!autoReviewRateLimiter.isThrottled(req.owner(), req.repo(), req.prNumber())) {
+    // On the worker the request can be older than the head an event deferred while it waited for
+    // its turn, so it is put back without displacing that head.
+    var hold = held(req, windowHold(req), deferredReviews::requeue);
+    if (hold == RateWindowHold.NOT_HELD) {
       return false;
     }
+    if (hold == RateWindowHold.NOT_KEPT) {
+      skipEmitter.recordSkip(
+          ReviewSkipReason.RATE_LIMITED,
+          req.installationId(),
+          req.owner(),
+          req.repo(),
+          req.prNumber(),
+          "within the auto-review rate window after dispatch (manual /review bypasses)");
+    }
+    return true;
+  }
+
+  /**
+   * Keeps a review the full repository queue turned away, unless a newer head an event kept since
+   * waits in its place, and records the skip when {@link DeferredReviews} refuses it.
+   */
+  private void deferQueueFull(ReviewOrchestrator.ReviewRequest req) {
+    if (deferredReviews.requeueFor(req, QUEUE_FULL_RETRY)) {
+      return;
+    }
     skipEmitter.recordSkip(
-        ReviewSkipReason.RATE_LIMITED,
+        ReviewSkipReason.REPOSITORY_QUEUE_FULL,
         req.installationId(),
         req.owner(),
         req.repo(),
         req.prNumber(),
-        "within the auto-review rate window after dispatch (manual /review bypasses)");
-    return true;
+        "as many automatic reviews of the repository wait as AUTO_REVIEW_MAX_QUEUED_PER_REPO"
+            + " allows, and the review could not be kept for later (a later push or a manual"
+            + " /review reviews it)");
   }
 
   /**
@@ -376,15 +517,7 @@ public final class ReviewDispatcher {
         autoReviewSlots.acquire(req.installationId(), req.repositoryId(), state::hasQueuedReview);
     switch (outcome) {
       case ACQUIRED -> reviewHoldingSlot(state, batch, served);
-      case QUEUE_FULL ->
-          skipEmitter.recordSkip(
-              ReviewSkipReason.REPOSITORY_QUEUE_FULL,
-              req.installationId(),
-              req.owner(),
-              req.repo(),
-              req.prNumber(),
-              "as many automatic reviews of the repository wait as AUTO_REVIEW_MAX_QUEUED_PER_REPO"
-                  + " allows (a later push or a manual /review reviews it)");
+      case QUEUE_FULL -> deferQueueFull(req);
       // Replaced by a newer request for the pull request, which the worker takes next, or
       // interrupted by a shutdown.
       default ->
@@ -429,7 +562,10 @@ public final class ReviewDispatcher {
       var surfaced = orchestrator.review(batch.request());
       if (surfaced && !batch.request().isManualTrigger()) {
         autoReviewRateLimiter.recordCompletion(
-            batch.request().owner(), batch.request().repo(), batch.request().prNumber());
+            batch.request().owner(),
+            batch.request().repo(),
+            batch.request().prNumber(),
+            batch.request().commitSha());
       }
     } catch (RuntimeException e) {
       recordFailure(e);

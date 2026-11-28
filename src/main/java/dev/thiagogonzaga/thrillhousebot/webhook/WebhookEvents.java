@@ -66,6 +66,7 @@ public class WebhookEvents {
   private static final String ACTION_READY_FOR_REVIEW = "ready_for_review";
   private static final String ACTION_SYNCHRONIZE = "synchronize";
   private static final String ACTION_REOPENED = "reopened";
+  private static final String ACTION_CONVERTED_TO_DRAFT = "converted_to_draft";
 
   /** pull_request actions that trigger an automatic review. */
   private static final Set<String> AUTO_REVIEW_ACTIONS =
@@ -322,6 +323,7 @@ public class WebhookEvents {
               repo.name(),
               pr.number(),
               "PR is paused via /pause");
+          reviewDispatcher.forgetDeferred(scope(payload), pr.number());
           yield true;
         }
 
@@ -334,45 +336,31 @@ public class WebhookEvents {
               repo.name(),
               pr.number(),
               skipReason.get().detail());
+          // The pull request is not to be reviewed now, so neither is a head a limit held back.
+          reviewDispatcher.forgetDeferred(scope(payload), pr.number());
           yield true;
         }
 
-        // A draft marked ready is reviewed inside the window once per head; a second
-        // ready_for_review of the same head is throttled like any other event.
-        boolean liftedForReady =
-            ACTION_READY_FOR_REVIEW.equals(action)
-                && autoReviewRateLimiter.clearForReadyHead(
-                    repo.owner().login(), repo.name(), pr.number(), pr.head().sha());
-        if (!liftedForReady
-            && autoReviewRateLimiter.isThrottled(repo.owner().login(), repo.name(), pr.number())) {
-          skipEmitter.recordSkip(
-              ReviewSkipReason.RATE_LIMITED,
-              installationOf(payload),
-              repo.owner().login(),
-              repo.name(),
-              pr.number(),
-              "last automatic review completed less than "
-                  + config.review().autoReviewMinInterval()
-                  + " ago (manual /review bypasses)");
+        var request =
+            new ReviewOrchestrator.ReviewRequest(
+                repo.owner().login(),
+                repo.name(),
+                pr.number(),
+                pr.head().sha(),
+                pr.title(),
+                pr.body() != null ? pr.body() : "",
+                pr.base().sha(),
+                repo.defaultBranch(),
+                payload.installation().id(),
+                repo.id(),
+                false,
+                pr.base().ref());
+        if (heldByRateWindow(action, request)) {
           yield true;
         }
 
         log.info("Dispatching review for PR #{} in {}", pr.number(), repo.fullName());
-        boolean queued =
-            reviewDispatcher.dispatch(
-                new ReviewOrchestrator.ReviewRequest(
-                    repo.owner().login(),
-                    repo.name(),
-                    pr.number(),
-                    pr.head().sha(),
-                    pr.title(),
-                    pr.body() != null ? pr.body() : "",
-                    pr.base().sha(),
-                    repo.defaultBranch(),
-                    payload.installation().id(),
-                    repo.id(),
-                    false,
-                    pr.base().ref()));
+        boolean queued = reviewDispatcher.dispatch(request);
         if (!queued) {
           skipEmitter.recordSkip(
               ReviewSkipReason.DISPATCH_REJECTED,
@@ -384,11 +372,72 @@ public class WebhookEvents {
         }
         yield queued;
       }
+      case ACTION_CONVERTED_TO_DRAFT -> {
+        forgetDeferredOfFilteredPullRequest(payload);
+        yield true;
+      }
       default -> {
         log.debug("Ignoring pull_request action: {}", action);
         yield true;
       }
     };
+  }
+
+  /**
+   * Whether the rate window holds the event back. A head the last automatic review did not cover is
+   * kept to be reviewed when the window closes. An event for the head it covered is a recorded
+   * skip, and so is one for another head that could not be kept ({@link
+   * ReviewDispatcher.RateWindowHold#NOT_KEPT}).
+   */
+  private boolean heldByRateWindow(String action, ReviewOrchestrator.ReviewRequest request) {
+    // A draft marked ready is reviewed inside the window once per head; a second
+    // ready_for_review of the same head is throttled like any other event.
+    boolean liftedForReady =
+        ACTION_READY_FOR_REVIEW.equals(action)
+            && autoReviewRateLimiter.clearForReadyHead(
+                request.owner(), request.repo(), request.prNumber(), request.commitSha());
+    if (liftedForReady) {
+      return false;
+    }
+    var hold = reviewDispatcher.holdForRateWindow(request);
+    if (hold == ReviewDispatcher.RateWindowHold.NOT_HELD) {
+      return false;
+    }
+    if (hold == ReviewDispatcher.RateWindowHold.NOT_KEPT) {
+      skipEmitter.recordSkip(
+          ReviewSkipReason.RATE_LIMITED,
+          request.installationId(),
+          request.owner(),
+          request.repo(),
+          request.prNumber(),
+          "last automatic review completed less than "
+              + config.review().autoReviewMinInterval()
+              + " ago (manual /review bypasses)");
+    }
+    return true;
+  }
+
+  /**
+   * A pull request converted to draft starts no review, and when drafts are skipped the head a
+   * limit held back for it must not be reviewed either once the limit allows. That review is
+   * counted as skipped when it still waited; marking the pull request ready reviews its head.
+   */
+  private void forgetDeferredOfFilteredPullRequest(WebhookPayload payload) {
+    var pr = payload.pullRequest();
+    if (pr == null || unscoped(payload)) {
+      return;
+    }
+    var skip = triggerFilter.skipReason(pr);
+    if (skip.isPresent() && reviewDispatcher.dropDeferred(scope(payload), pr.number())) {
+      var repo = payload.repository();
+      skipEmitter.recordSkip(
+          skip.get().reason(),
+          installationOf(payload),
+          repo.owner().login(),
+          repo.name(),
+          pr.number(),
+          skip.get().detail() + "; the review a limit held back for it is dropped");
+    }
   }
 
   private List<String> gatedLabels(WebhookPayload payload) {

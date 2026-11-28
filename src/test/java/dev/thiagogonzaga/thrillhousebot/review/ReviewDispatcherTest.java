@@ -34,19 +34,24 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
+import dev.thiagogonzaga.thrillhousebot.webhook.PrPauseService;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanContext;
+import io.vertx.core.Vertx;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -64,12 +69,19 @@ class ReviewDispatcherTest {
   /** The shipped per-repository limits; the tests of the limit build their own. */
   private final AutoReviewSlots slots = new AutoReviewSlots(4, 50);
 
+  private static final long WINDOW_MS = 60_000;
+
+  private final AtomicLong now = new AtomicLong(1_000);
+  private final DeferredReviews deferred = new DeferredReviews(100, now::get);
+
   private ExecutorService reviewExecutor;
   private ReviewDispatcher dispatcher;
 
   @BeforeEach
   void setUp() {
     MockitoAnnotations.openMocks(this);
+    when(rateLimiter.hold(anyString(), anyString(), anyInt(), any()))
+        .thenReturn(AutoReviewRateLimiter.Hold.NONE);
     reviewExecutor = Executors.newSingleThreadExecutor();
     dispatcher =
         new ReviewDispatcher(
@@ -77,6 +89,7 @@ class ReviewDispatcherTest {
             orchestrator,
             rateLimiter,
             slots,
+            deferred,
             skipEmitter,
             ciHoldRevisit,
             coverage,
@@ -179,7 +192,8 @@ class ReviewDispatcherTest {
     dispatcher.dispatch(reviewRequest("owner", "repo", 42, "sha1"));
     started.await(2, TimeUnit.SECONDS);
     // The window closes while the first review runs, so the queued review is skipped at drain.
-    when(rateLimiter.isThrottled("owner", "repo", 42)).thenReturn(true);
+    when(rateLimiter.hold(eq("owner"), eq("repo"), eq(42), any()))
+        .thenReturn(AutoReviewRateLimiter.Hold.SKIP);
     dispatcher.dispatch(reviewRequest("owner", "repo", 42, "sha2"));
     assertTrue(dispatcher.dispatchCiRecheck(task));
 
@@ -237,6 +251,7 @@ class ReviewDispatcherTest {
             orchestrator,
             rateLimiter,
             slots,
+            deferred,
             skipEmitter,
             ciHoldRevisit,
             coverage,
@@ -386,6 +401,7 @@ class ReviewDispatcherTest {
             orchestrator,
             rateLimiter,
             slots,
+            deferred,
             skipEmitter,
             ciHoldRevisit,
             coverage,
@@ -500,6 +516,14 @@ class ReviewDispatcherTest {
     }
   }
 
+  private static void awaitStateCount(ReviewDispatcher dispatcher, int expected) {
+    var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    while (dispatcher.stateCount() != expected && System.nanoTime() < deadline) {
+      Thread.onSpinWait();
+    }
+    assertEquals(expected, dispatcher.stateCount());
+  }
+
   private static void awaitEmptyDispatcherState(
       ReviewDispatcher dispatcher, long timeout, TimeUnit unit) {
     var deadline = System.nanoTime() + unit.toNanos(timeout);
@@ -522,6 +546,7 @@ class ReviewDispatcherTest {
             orchestrator,
             rateLimiter,
             slots,
+            deferred,
             skipEmitter,
             ciHoldRevisit,
             coverage,
@@ -555,6 +580,7 @@ class ReviewDispatcherTest {
             orchestrator,
             rateLimiter,
             slots,
+            deferred,
             skipEmitter,
             ciHoldRevisit,
             coverage,
@@ -590,9 +616,10 @@ class ReviewDispatcherTest {
 
     dispatcher.dispatch(req);
 
-    // The throttle window starts when the automatic review finishes, keyed by the PR.
+    // The throttle window starts when the automatic review finishes, keyed by the PR, and
+    // remembers the head the review covered.
     verify(orchestrator, timeout(2000)).review(req);
-    verify(rateLimiter, timeout(2000)).recordCompletion("owner", "repo", 13);
+    verify(rateLimiter, timeout(2000)).recordCompletion("owner", "repo", 13, "sha1");
   }
 
   @Test
@@ -616,22 +643,27 @@ class ReviewDispatcherTest {
 
     // A manual /review must not shift the automatic throttle window.
     verify(orchestrator, timeout(2000)).review(req);
-    verify(rateLimiter, after(500).never()).recordCompletion(anyString(), anyString(), anyInt());
+    verify(rateLimiter, after(500).never())
+        .recordCompletion(anyString(), anyString(), anyInt(), any());
   }
 
   @Test
   void shouldSkipCoalescedAutomaticReviewWithinWindow() throws InterruptedException {
     // Simulate the real limiter: throttled from the moment a completion is recorded.
     var throttled = new java.util.concurrent.atomic.AtomicBoolean(false);
-    when(rateLimiter.isThrottled(anyString(), anyString(), anyInt()))
-        .thenAnswer(invocation -> throttled.get());
+    when(rateLimiter.hold(anyString(), anyString(), anyInt(), any()))
+        .thenAnswer(
+            invocation ->
+                throttled.get()
+                    ? AutoReviewRateLimiter.Hold.SKIP
+                    : AutoReviewRateLimiter.Hold.NONE);
     doAnswer(
             invocation -> {
               throttled.set(true);
               return null;
             })
         .when(rateLimiter)
-        .recordCompletion(anyString(), anyString(), anyInt());
+        .recordCompletion(anyString(), anyString(), anyInt(), any());
 
     var started = new CountDownLatch(1);
     var release = new CountDownLatch(1);
@@ -654,20 +686,21 @@ class ReviewDispatcherTest {
 
     // ...but the drain loop re-checks, so only the first review runs and only one window starts.
     verify(orchestrator, times(1)).review(any(ReviewOrchestrator.ReviewRequest.class));
-    verify(rateLimiter, times(1)).recordCompletion("owner", "repo", 17);
+    verify(rateLimiter, times(1)).recordCompletion(eq("owner"), eq("repo"), eq(17), any());
   }
 
   @Test
   void shouldSkipAutomaticReviewWhenWindowClosedAfterDispatchGate() {
     // Pins the dispatch race: the controller gate passed before a prior worker recorded its
     // completion, so this fresh worker's very first batch must hit the re-check and skip.
-    when(rateLimiter.isThrottled("owner", "repo", 19)).thenReturn(true);
+    when(rateLimiter.hold(eq("owner"), eq("repo"), eq(19), any()))
+        .thenReturn(AutoReviewRateLimiter.Hold.SKIP);
 
     dispatcher.dispatch(reviewRequest("owner", "repo", 19, "sha1"));
 
     awaitEmptyDispatcherState(dispatcher, 2, TimeUnit.SECONDS);
     verify(orchestrator, never()).review(any(ReviewOrchestrator.ReviewRequest.class));
-    verify(rateLimiter, never()).recordCompletion(anyString(), anyString(), anyInt());
+    verify(rateLimiter, never()).recordCompletion(anyString(), anyString(), anyInt(), any());
     // The async skip still surfaces as a structured event.
     verify(skipEmitter)
         .recordSkip(
@@ -683,7 +716,8 @@ class ReviewDispatcherTest {
   void shouldRunCoalescedManualReviewWithinWindow() throws InterruptedException {
     // Even a closed window must not hold back an explicit /review that coalesced behind an
     // in-flight automatic run.
-    when(rateLimiter.isThrottled(anyString(), anyString(), anyInt())).thenReturn(true);
+    when(rateLimiter.hold(anyString(), anyString(), anyInt(), any()))
+        .thenReturn(AutoReviewRateLimiter.Hold.SKIP);
 
     var started = new CountDownLatch(1);
     var release = new CountDownLatch(1);
@@ -740,7 +774,8 @@ class ReviewDispatcherTest {
     // The orchestrator handled a failure internally and posted nothing, so the throttle window
     // must not start — the next push may retry immediately.
     verify(orchestrator, timeout(2000)).review(req);
-    verify(rateLimiter, after(500).never()).recordCompletion(anyString(), anyString(), anyInt());
+    verify(rateLimiter, after(500).never())
+        .recordCompletion(anyString(), anyString(), anyInt(), any());
   }
 
   @Test
@@ -753,7 +788,8 @@ class ReviewDispatcherTest {
 
     // An unexpected failure means no review was surfaced, so the next event may retry immediately.
     verify(orchestrator, timeout(2000)).review(any(ReviewOrchestrator.ReviewRequest.class));
-    verify(rateLimiter, after(500).never()).recordCompletion(anyString(), anyString(), anyInt());
+    verify(rateLimiter, after(500).never())
+        .recordCompletion(anyString(), anyString(), anyInt(), any());
   }
 
   @Test
@@ -964,6 +1000,36 @@ class ReviewDispatcherTest {
 
   /** A dispatcher on virtual threads, as in production, with the given per-repository limits. */
   private ReviewDispatcher limitedDispatcher(AutoReviewSlots limits) {
+    return limitedDispatcher(limits, deferred);
+  }
+
+  /** A dispatcher whose rate window is the real one, read on the test's clock. */
+  private ReviewDispatcher dispatcherWithRealWindow() {
+    return dispatcherWithRealWindow(deferred);
+  }
+
+  private ReviewDispatcher dispatcherWithRealWindow(DeferredReviews kept) {
+    return new ReviewDispatcher(
+        reviewExecutor,
+        orchestrator,
+        new AutoReviewRateLimiter(WINDOW_MS, 10_000, now::get),
+        slots,
+        kept,
+        skipEmitter,
+        ciHoldRevisit,
+        coverage,
+        OpenTelemetry.noop());
+  }
+
+  private void awaitDeferred(int expected) {
+    var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    while (deferred.pending.size() != expected && System.nanoTime() < deadline) {
+      Thread.onSpinWait();
+    }
+    assertEquals(expected, deferred.pending.size());
+  }
+
+  private ReviewDispatcher limitedDispatcher(AutoReviewSlots limits, DeferredReviews kept) {
     reviewExecutor.shutdownNow();
     reviewExecutor = Executors.newVirtualThreadPerTaskExecutor();
     return new ReviewDispatcher(
@@ -971,6 +1037,7 @@ class ReviewDispatcherTest {
         orchestrator,
         rateLimiter,
         limits,
+        kept,
         skipEmitter,
         ciHoldRevisit,
         coverage,
@@ -1034,7 +1101,7 @@ class ReviewDispatcherTest {
   }
 
   @Test
-  void anAutomaticReviewPastTheQueueLimitIsSkippedAndCounted() throws InterruptedException {
+  void anAutomaticReviewPastTheQueueLimitIsKeptAndReviewedLater() throws InterruptedException {
     var limits = new AutoReviewSlots(1, 1);
     var limited = limitedDispatcher(limits);
     var started = new CountDownLatch(1);
@@ -1046,7 +1113,43 @@ class ReviewDispatcherTest {
     limited.dispatch(reviewRequest("owner", "repo", 2, "sha2"));
     awaitWaiting(limits, 1);
 
-    // The skip is a decision, not a rejected dispatch: the delivery is not rolled back.
+    // Turning the review away is a decision, not a rejected dispatch: the delivery is not rolled
+    // back.
+    assertTrue(limited.dispatch(reviewRequest("owner", "repo", 3, "sha3")));
+    awaitDeferred(1);
+    release.countDown();
+    awaitEmptyDispatcherState(limited, 5, TimeUnit.SECONDS);
+
+    // It is not reviewed while the queue is full, and it is not dropped either.
+    verify(orchestrator, times(2)).review(any(ReviewOrchestrator.ReviewRequest.class));
+    verify(orchestrator, never()).review(reviewRequest("owner", "repo", 3, "sha3"));
+    verify(skipEmitter, never()).recordSkip(any(), anyLong(), any(), any(), anyInt(), any());
+    assertEquals(List.of(), deferred.takeDue());
+
+    now.addAndGet(ReviewDispatcher.QUEUE_FULL_RETRY.toMillis());
+    var due = deferred.takeDue();
+    assertEquals(List.of(reviewRequest("owner", "repo", 3, "sha3")), due);
+    assertTrue(limited.dispatchDeferred(due.getFirst()));
+
+    verify(orchestrator, timeout(5000)).review(reviewRequest("owner", "repo", 3, "sha3"));
+    awaitEmptyDispatcherState(limited, 5, TimeUnit.SECONDS);
+    assertEquals(0, limits.trackedRepositories());
+  }
+
+  @Test
+  void anAutomaticReviewPastTheQueueLimitIsSkippedAndCountedWhenItCannotBeKept()
+      throws InterruptedException {
+    var limits = new AutoReviewSlots(1, 1);
+    var limited = limitedDispatcher(limits, new DeferredReviews(0, now::get));
+    var started = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    blockReviewUntil(started, release);
+
+    limited.dispatch(reviewRequest("owner", "repo", 1, "sha1"));
+    assertTrue(started.await(5, TimeUnit.SECONDS));
+    limited.dispatch(reviewRequest("owner", "repo", 2, "sha2"));
+    awaitWaiting(limits, 1);
+
     assertTrue(limited.dispatch(reviewRequest("owner", "repo", 3, "sha3")));
 
     verify(skipEmitter, timeout(5000))
@@ -1061,8 +1164,309 @@ class ReviewDispatcherTest {
     awaitEmptyDispatcherState(limited, 5, TimeUnit.SECONDS);
     verify(orchestrator, times(2)).review(any(ReviewOrchestrator.ReviewRequest.class));
     verify(orchestrator, never()).review(reviewRequest("owner", "repo", 3, "sha3"));
-    verify(rateLimiter, never()).recordCompletion("owner", "repo", 3);
+    verify(rateLimiter, never()).recordCompletion(eq("owner"), eq("repo"), eq(3), any());
     assertEquals(0, limits.trackedRepositories());
+  }
+
+  @Test
+  void aPushCoalescedBehindAReviewIsReviewedWhenTheWindowCloses() throws InterruptedException {
+    var windowed = dispatcherWithRealWindow();
+    var started = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    blockReviewUntil(started, release);
+
+    windowed.dispatch(reviewRequest("owner", "repo", 42, "sha1"));
+    assertTrue(started.await(2, TimeUnit.SECONDS));
+    // The push lands while the review of the previous head is being published.
+    windowed.dispatch(reviewRequest("owner", "repo", 42, "sha2"));
+    release.countDown();
+    awaitEmptyDispatcherState(windowed, 5, TimeUnit.SECONDS);
+
+    // Inside the window the new head is not reviewed, and it is not dropped either.
+    verify(orchestrator, times(1)).review(any(ReviewOrchestrator.ReviewRequest.class));
+    verify(skipEmitter, never()).recordSkip(any(), anyLong(), any(), any(), anyInt(), any());
+    assertEquals(List.of(), deferred.takeDue());
+
+    now.addAndGet(WINDOW_MS);
+    var due = deferred.takeDue();
+    assertEquals(List.of(reviewRequest("owner", "repo", 42, "sha2")), due);
+    assertTrue(windowed.dispatchDeferred(due.getFirst()));
+
+    verify(orchestrator, timeout(5000)).review(reviewRequest("owner", "repo", 42, "sha2"));
+    awaitEmptyDispatcherState(windowed, 5, TimeUnit.SECONDS);
+  }
+
+  @Test
+  void aDeferredReviewHandedBackInsideANewWindowWaitsForThatWindow() {
+    var windowed = dispatcherWithRealWindow();
+    when(orchestrator.review(any(ReviewOrchestrator.ReviewRequest.class))).thenReturn(true);
+    windowed.dispatch(reviewRequest("owner", "repo", 42, "sha1"));
+    awaitEmptyDispatcherState(windowed, 5, TimeUnit.SECONDS);
+
+    // Handed back while the window of the review that just ran is open.
+    assertTrue(windowed.dispatchDeferred(reviewRequest("owner", "repo", 42, "sha2")));
+    awaitEmptyDispatcherState(windowed, 5, TimeUnit.SECONDS);
+
+    // One automatic review per window: the second head waits for the window to close.
+    verify(orchestrator, times(1)).review(any(ReviewOrchestrator.ReviewRequest.class));
+    now.addAndGet(WINDOW_MS - 1);
+    assertEquals(List.of(), deferred.takeDue());
+    now.addAndGet(1);
+    assertEquals(List.of(reviewRequest("owner", "repo", 42, "sha2")), deferred.takeDue());
+  }
+
+  @Test
+  void aPushThatArrivesAsTheWindowClosesIsKeptAndNotSkipped() {
+    // The clock passes the end of the window right after the first time it is read.
+    var readings = new AtomicLong(WINDOW_MS - 1);
+    var limiter = new AutoReviewRateLimiter(WINDOW_MS, 10_000, readings::getAndIncrement);
+    limiter.deadlines.put("owner/repo#42", new AutoReviewRateLimiter.Window(WINDOW_MS, "sha1"));
+    var atTheBoundary =
+        new ReviewDispatcher(
+            reviewExecutor,
+            orchestrator,
+            limiter,
+            slots,
+            deferred,
+            skipEmitter,
+            ciHoldRevisit,
+            coverage,
+            OpenTelemetry.noop());
+    var push = reviewRequest("owner", "repo", 42, "sha2");
+
+    assertEquals(ReviewDispatcher.RateWindowHold.KEPT, atTheBoundary.holdForRateWindow(push));
+
+    // The head the last review did not cover is reviewed when the window closes.
+    now.set(WINDOW_MS);
+    assertEquals(List.of(push), deferred.takeDue());
+    // The next event finds the window closed and is reviewed at once.
+    assertEquals(
+        ReviewDispatcher.RateWindowHold.NOT_HELD,
+        atTheBoundary.holdForRateWindow(reviewRequest("owner", "repo", 42, "sha3")));
+  }
+
+  @Test
+  void anEventForTheHeadJustReviewedIsSkippedAndNotKept() {
+    var windowed = dispatcherWithRealWindow();
+    when(orchestrator.review(any(ReviewOrchestrator.ReviewRequest.class))).thenReturn(true);
+    windowed.dispatch(reviewRequest("owner", "repo", 42, "sha1"));
+    awaitEmptyDispatcherState(windowed, 5, TimeUnit.SECONDS);
+
+    // A reopen of the unchanged head, inside the window.
+    windowed.dispatch(reviewRequest("owner", "repo", 42, "sha1"));
+    awaitEmptyDispatcherState(windowed, 5, TimeUnit.SECONDS);
+
+    verify(orchestrator, times(1)).review(any(ReviewOrchestrator.ReviewRequest.class));
+    verify(skipEmitter)
+        .recordSkip(
+            eq(ReviewSkipReason.RATE_LIMITED), anyLong(), eq("owner"), eq("repo"), eq(42), any());
+    assertTrue(deferred.isEmpty());
+  }
+
+  @Test
+  void anEventForTheHeadJustReviewedDropsTheOlderHeadKeptForLater() {
+    var windowed = dispatcherWithRealWindow();
+    when(orchestrator.review(any(ReviewOrchestrator.ReviewRequest.class))).thenReturn(true);
+    windowed.dispatch(reviewRequest("owner", "repo", 42, "sha1"));
+    awaitEmptyDispatcherState(windowed, 5, TimeUnit.SECONDS);
+    assertEquals(
+        ReviewDispatcher.RateWindowHold.KEPT,
+        windowed.holdForRateWindow(reviewRequest("owner", "repo", 42, "sha2")));
+
+    // The branch is pushed back to the commit the last review covered.
+    assertEquals(
+        ReviewDispatcher.RateWindowHold.NOT_KEPT,
+        windowed.holdForRateWindow(reviewRequest("owner", "repo", 42, "sha1")));
+
+    // The head kept for later is no longer the pull request's, so it is not reviewed.
+    assertTrue(deferred.isEmpty());
+  }
+
+  @Test
+  void anEventWithNoHeadInsideTheWindowLeavesTheHeadKeptForLater() {
+    var windowed = dispatcherWithRealWindow();
+    when(orchestrator.review(any(ReviewOrchestrator.ReviewRequest.class))).thenReturn(true);
+    windowed.dispatch(reviewRequest("owner", "repo", 42, "sha1"));
+    awaitEmptyDispatcherState(windowed, 5, TimeUnit.SECONDS);
+    windowed.holdForRateWindow(reviewRequest("owner", "repo", 42, "sha2"));
+
+    assertEquals(
+        ReviewDispatcher.RateWindowHold.NOT_KEPT,
+        windowed.holdForRateWindow(reviewRequest("owner", "repo", 42, null)));
+    assertEquals(
+        ReviewDispatcher.RateWindowHold.NOT_KEPT,
+        windowed.holdForRateWindow(reviewRequest("owner", "repo", 42, " ")));
+
+    assertFalse(deferred.isEmpty());
+  }
+
+  @Test
+  void aDeferredReviewHandedBackLateDoesNotReplaceTheNewerPushQueuedMeanwhile() {
+    // A review of the pull request is running, so whatever is dispatched waits behind it.
+    var key = new ReviewDispatcher.PrKey("owner", "repo", 42);
+    var busy = new ReviewDispatcher.PerPrState();
+    busy.running = true;
+    dispatcher.seedState(key, busy);
+    var older = reviewRequest("owner", "repo", 42, "sha1");
+    var newer = reviewRequest("owner", "repo", 42, "sha2");
+    deferred.defer(older, 0);
+    // The newer push arrives, with the window closed, after the older one was handed out.
+    var pauses = mock(PrPauseService.class);
+    when(pauses.isPaused(any(), any(), any(), eq(42)))
+        .thenAnswer(
+            invocation -> {
+              dispatcher.dispatch(newer);
+              return false;
+            });
+    var release =
+        new DeferredReviewRelease(
+            deferred, dispatcher, pauses, skipEmitter, mock(Vertx.class), reviewExecutor);
+
+    release.release();
+
+    assertEquals(newer, busy.latestRequest);
+  }
+
+  @Test
+  void aPushTheExecutorRefusesStillReplacesTheKeptReviewAndIsTheOnlyOneToCount() {
+    var rejecting = mock(ExecutorService.class);
+    doThrow(new RejectedExecutionException("shut down")).when(rejecting).execute(any());
+    var refusing =
+        new ReviewDispatcher(
+            rejecting,
+            orchestrator,
+            rateLimiter,
+            slots,
+            deferred,
+            skipEmitter,
+            ciHoldRevisit,
+            coverage,
+            OpenTelemetry.noop());
+    var older = reviewRequest("owner", "repo", 42, "sha1");
+    var newer = reviewRequest("owner", "repo", 42, "sha2");
+    deferred.defer(older, 0);
+    // The kept review is handed out, and the newer push arrives before it is handed back.
+    assertEquals(List.of(older), deferred.takeDue());
+
+    // The caller counts DISPATCH_REJECTED for this event, the pull request's newest head.
+    assertFalse(refusing.dispatch(newer));
+
+    // The older head is not handed back in its place, and nothing else is counted for it.
+    assertEquals(
+        DeferredReviews.HandedOut.SUPERSEDED, deferred.handBack(older, refusing::dispatchDeferred));
+    verify(rejecting, times(1)).execute(any());
+    verify(skipEmitter, never()).recordSkip(any(), anyLong(), any(), any(), anyInt(), any());
+    assertTrue(deferred.isEmpty());
+    assertEquals(0, refusing.stateCount());
+  }
+
+  @Test
+  void aPushDispatchedDuringAHandBackQueuesBehindTheHandedBackReview() throws Exception {
+    var key = new ReviewDispatcher.PrKey("owner", "repo", 42);
+    var busy = new ReviewDispatcher.PerPrState();
+    busy.running = true;
+    dispatcher.seedState(key, busy);
+    var older = reviewRequest("owner", "repo", 42, "sha1");
+    var newer = reviewRequest("owner", "repo", 42, "sha2");
+    deferred.defer(older, 0);
+    deferred.takeDue();
+    var handingBack = new CountDownLatch(1);
+    var pushDispatched = new CountDownLatch(1);
+    try (var threads = Executors.newVirtualThreadPerTaskExecutor()) {
+      var handBack =
+          threads.submit(
+              () ->
+                  deferred.handBack(
+                      older,
+                      request -> {
+                        handingBack.countDown();
+                        // The push cannot be dispatched until the hand-back is done, so this
+                        // wait runs out.
+                        awaitQuietly(pushDispatched, 300);
+                        return dispatcher.dispatchDeferred(request);
+                      }));
+      assertTrue(handingBack.await(5, TimeUnit.SECONDS));
+      var push =
+          threads.submit(
+              () -> {
+                dispatcher.dispatch(newer);
+                pushDispatched.countDown();
+              });
+
+      assertEquals(DeferredReviews.HandedOut.HANDED_BACK, handBack.get(5, TimeUnit.SECONDS));
+      push.get(5, TimeUnit.SECONDS);
+    }
+
+    // The push was queued after the review handed back, so it is the one the worker takes.
+    assertEquals(newer, busy.latestRequest);
+    assertTrue(deferred.isEmpty());
+  }
+
+  private static void awaitQuietly(CountDownLatch latch, long millis) {
+    try {
+      assertFalse(latch.await(millis, TimeUnit.MILLISECONDS));
+    } catch (InterruptedException _) {
+      Thread.currentThread().interrupt();
+    }
+  }
+
+  @Test
+  void aPushInsideTheWindowIsSkippedAndCountedWhenItCannotBeKept() {
+    var windowed = dispatcherWithRealWindow(new DeferredReviews(0, now::get));
+    when(orchestrator.review(any(ReviewOrchestrator.ReviewRequest.class))).thenReturn(true);
+    windowed.dispatch(reviewRequest("owner", "repo", 42, "sha1"));
+    awaitEmptyDispatcherState(windowed, 5, TimeUnit.SECONDS);
+
+    windowed.dispatch(reviewRequest("owner", "repo", 42, "sha2"));
+    awaitEmptyDispatcherState(windowed, 5, TimeUnit.SECONDS);
+
+    verify(orchestrator, times(1)).review(any(ReviewOrchestrator.ReviewRequest.class));
+    verify(skipEmitter)
+        .recordSkip(
+            eq(ReviewSkipReason.RATE_LIMITED), anyLong(), eq("owner"), eq("repo"), eq(42), any());
+  }
+
+  @Test
+  void aNewerAutomaticEventReplacesTheDeferredReviewAndAManualOneLeavesIt() {
+    deferred.defer(reviewRequest("owner", "repo", 7, "sha1"), Long.MAX_VALUE);
+
+    dispatcher.dispatch(
+        new ReviewOrchestrator.ReviewRequest(
+            "owner",
+            "repo",
+            7,
+            "",
+            "(manual)",
+            "",
+            "",
+            "main",
+            1L,
+            TestScopes.REPOSITORY_ID,
+            true));
+    assertFalse(deferred.isEmpty());
+
+    dispatcher.dispatch(reviewRequest("owner", "repo", 7, "sha2"));
+    assertTrue(deferred.isEmpty());
+  }
+
+  @Test
+  void droppingTheDeferredReviewOfAPullRequestSaysWhetherOneStillWaited() {
+    deferred.defer(reviewRequest("owner", "repo", 7, "sha1"), Long.MAX_VALUE);
+
+    assertFalse(dispatcher.dropDeferred(new RepoScope(1L, TestScopes.REPOSITORY_ID), 8));
+    assertTrue(dispatcher.dropDeferred(new RepoScope(1L, TestScopes.REPOSITORY_ID), 7));
+    assertTrue(deferred.isEmpty());
+  }
+
+  @Test
+  void theDeferredReviewOfAPullRequestCanBeDroppedByScope() {
+    deferred.defer(reviewRequest("owner", "repo", 7, "sha1"), Long.MAX_VALUE);
+
+    dispatcher.forgetDeferred(new RepoScope(1L, TestScopes.REPOSITORY_ID), 8);
+    assertFalse(deferred.isEmpty());
+
+    dispatcher.forgetDeferred(new RepoScope(1L, TestScopes.REPOSITORY_ID), 7);
+    assertTrue(deferred.isEmpty());
   }
 
   @Test
@@ -1173,7 +1577,8 @@ class ReviewDispatcherTest {
     limited.dispatch(reviewRequest("owner", "repo", 2, "sha2"));
     awaitWaiting(limits, 1);
     // While it waited, a manual review of the same pull request completed and opened its window.
-    when(rateLimiter.isThrottled("owner", "repo", 2)).thenReturn(true);
+    when(rateLimiter.hold(eq("owner"), eq("repo"), eq(2), any()))
+        .thenReturn(AutoReviewRateLimiter.Hold.SKIP);
 
     release.countDown();
 
@@ -1183,6 +1588,65 @@ class ReviewDispatcherTest {
     awaitEmptyDispatcherState(limited, 5, TimeUnit.SECONDS);
     verify(orchestrator, times(1)).review(any(ReviewOrchestrator.ReviewRequest.class));
     assertEquals(0, limits.trackedRepositories());
+  }
+
+  @Test
+  void aHandedBackReviewHeldAgainAtItsSlotLeavesTheNewerHeadDeferredMeanwhile()
+      throws InterruptedException {
+    var limits = new AutoReviewSlots(1, 1);
+    var limited = limitedDispatcher(limits);
+    var started = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    blockReviewUntil(started, release);
+    limited.dispatch(reviewRequest("owner", "repo", 1, "sha1"));
+    assertTrue(started.await(5, TimeUnit.SECONDS));
+
+    // A deferred review is handed back and waits for a slot of the busy repository.
+    assertTrue(limited.dispatchDeferred(reviewRequest("owner", "repo", 2, "sha-old")));
+    awaitWaiting(limits, 1);
+    // A push arrives inside the rate window meanwhile, and its head is kept.
+    long windowEnd = now.get() + WINDOW_MS;
+    when(rateLimiter.hold(eq("owner"), eq("repo"), eq(2), any()))
+        .thenReturn(new AutoReviewRateLimiter.Hold(true, OptionalLong.of(windowEnd)));
+    assertEquals(
+        ReviewDispatcher.RateWindowHold.KEPT,
+        limited.holdForRateWindow(reviewRequest("owner", "repo", 2, "sha-new")));
+
+    // The older request gets its slot, reads the window again and is held too.
+    release.countDown();
+    awaitEmptyDispatcherState(limited, 5, TimeUnit.SECONDS);
+
+    verify(orchestrator, times(1)).review(any(ReviewOrchestrator.ReviewRequest.class));
+    verify(skipEmitter, never()).recordSkip(any(), anyLong(), any(), any(), anyInt(), any());
+    now.set(windowEnd);
+    assertEquals(List.of(reviewRequest("owner", "repo", 2, "sha-new")), deferred.takeDue());
+  }
+
+  @Test
+  void aHandedBackReviewTurnedAwayByAFullQueueLeavesTheNewerHeadDeferredMeanwhile()
+      throws InterruptedException {
+    var limits = new AutoReviewSlots(1, 1);
+    var limited = limitedDispatcher(limits);
+    var started = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    blockReviewUntil(started, release);
+    limited.dispatch(reviewRequest("owner", "repo", 1, "sha1"));
+    assertTrue(started.await(5, TimeUnit.SECONDS));
+    limited.dispatch(reviewRequest("owner", "repo", 2, "sha2"));
+    awaitWaiting(limits, 1);
+
+    // A newer head of the third pull request is deferred before its older one comes back.
+    deferred.defer(reviewRequest("owner", "repo", 3, "sha-new"), now.get() + WINDOW_MS);
+    assertTrue(limited.dispatchDeferred(reviewRequest("owner", "repo", 3, "sha-old")));
+    // Its worker ends once the full queue has turned it away; the other two are still busy.
+    awaitStateCount(limited, 2);
+    release.countDown();
+    awaitEmptyDispatcherState(limited, 5, TimeUnit.SECONDS);
+
+    verify(orchestrator, never()).review(reviewRequest("owner", "repo", 3, "sha-old"));
+    verify(skipEmitter, never()).recordSkip(any(), anyLong(), any(), any(), anyInt(), any());
+    now.addAndGet(WINDOW_MS);
+    assertEquals(List.of(reviewRequest("owner", "repo", 3, "sha-new")), deferred.takeDue());
   }
 
   @Test
