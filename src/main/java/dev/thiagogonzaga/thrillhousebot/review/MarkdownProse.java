@@ -35,14 +35,18 @@ import java.util.regex.Pattern;
  *       than any backtick run inside it, with each content line as it was written;
  *   <li>a code span that opens and closes on one line and holds no {@code |} is kept as it was
  *       written. In a table row GitHub splits the cells at each {@code |} before it reads any span,
- *       so a span holding one is code in a paragraph and text in a row; it is written as text;
+ *       so a span holding one is code in a paragraph and text in a row; it is written as text. Only
+ *       its opening run is escaped, and the runs after it pair anew from its closing run on, as
+ *       GitHub pairs them then: text written after it can become a span, and a span written after
+ *       it text;
  *   <li>every other backtick becomes {@code &#96;} and every other run of three or more tildes is
  *       escaped, so nothing else can open a span or a fence.
  * </ul>
  *
  * <p>Line endings are the one thing code does not keep: a carriage return, alone or before a line
  * feed, ends a line ({@link #block}) and is written as a line feed, in a fenced block too. A span a
- * carriage return divides does not close on its line, so its backticks are escaped.
+ * carriage return divides does not close on its line: its opening run is escaped, and its closing
+ * run is paired on the line it is on, or escaped when nothing there closes it.
  *
  * <p>Outside code, an {@code @} that could start a mention is followed by a zero-width space
  * ({@code @&#8203;name}, invisible when rendered), and a {@code <} that could open a tag or a
@@ -455,8 +459,11 @@ final class MarkdownProse {
 
   /**
    * A backtick run: a code span when the same run closes it on this line, else literal. A span
-   * holding a {@code |} is literal as well unless the pipes are escaped later ({@link #cell}): its
-   * text is then read as prose like the rest of the line, and its backticks pair with no other.
+   * holding a {@code |} is not one unless the pipes are escaped later ({@link #cell}): its opening
+   * run is escaped and its text is then read as prose like the rest of the line. Its closing run is
+   * read next as a run of its own, so it opens a span when a later run of the same length closes it
+   * with no {@code |} between them. GitHub pairs the two the same way once the opening run is
+   * escaped, in a table row and out of one, and the text between them is code in both.
    */
   private static int backticks(String text, int i, StringBuilder sb, boolean pipesEscaped) {
     int end = runEnd(text, i);
