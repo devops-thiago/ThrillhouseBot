@@ -1514,6 +1514,7 @@ class ReviewDispatcherTest {
             deferred,
             skipEmitter,
             ciHoldRevisit,
+            approvalOnPush,
             coverage,
             OpenTelemetry.noop());
     var older = reviewRequest("owner", "repo", 42, "sha1");
