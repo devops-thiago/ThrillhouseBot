@@ -731,7 +731,9 @@ public class CiFailureContextResolver {
    * removed: ANSI escape sequences, carriage returns (a {@code \r} lets a log line overwrite itself
    * in a terminal, hiding what precedes it), tabs as spaces, and every other control or format
    * character — the latter covers the Unicode bidi overrides that can make text read differently
-   * from its byte order. Newlines are kept.
+   * from its byte order. Newlines are kept. A long run of combining marks is cut ({@link
+   * CombiningMarks}): CI output and issue text are matched with word boundaries after this, and
+   * such a run is no text anybody wrote to be read.
    */
   static String clean(String text) {
     if (text == null || text.isEmpty()) {
@@ -752,7 +754,7 @@ public class CiFailureContextResolver {
                 sb.appendCodePoint(cp);
               }
             });
-    return sb.toString();
+    return CombiningMarks.bounded(sb.toString());
   }
 
   /** {@link #clean} folded onto one line and clipped to {@link #MAX_LINE_CHARS}. */

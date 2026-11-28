@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
@@ -71,5 +72,33 @@ class CombiningMarksTest {
           assertTimeoutPreemptively(Duration.ofSeconds(10), () -> word.matcher(bounded).find()),
           line.replace(marks, "…"));
     }
+  }
+
+  /** Every reader of a review's title and description gets them from its request. */
+  @Test
+  void aReviewRequestHoldsItsTitleAndDescriptionBounded() {
+    var marks = MARK.repeat(5_000);
+
+    var request =
+        new ReviewOrchestrator.ReviewRequest(
+            "o",
+            "r",
+            1,
+            "sha",
+            "fix e" + marks,
+            "Fixes #7 e" + marks + "\nmore",
+            "base",
+            "main",
+            77L,
+            7L,
+            false);
+    var plain =
+        new ReviewOrchestrator.ReviewRequest(
+            "o", "r", 1, "sha", "title", null, "base", "main", 77L, 7L, false);
+
+    assertEquals("fix e" + LONGEST, request.prTitle());
+    assertEquals("Fixes #7 e" + LONGEST + "\nmore", request.prDescription());
+    assertEquals("title", plain.prTitle());
+    assertNull(plain.prDescription());
   }
 }
