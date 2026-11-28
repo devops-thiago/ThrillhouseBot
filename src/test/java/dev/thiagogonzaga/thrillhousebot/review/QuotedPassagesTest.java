@@ -36,6 +36,10 @@ class QuotedPassagesTest {
   private static final Pattern QUOTED =
       Pattern.compile("\"([^\"\n]++)\"|(?<![\\p{L}\\p{N}])'([^\n]+?)'(?![\\p{L}\\p{N}])");
 
+  /** The pattern single-quoted passages alone were read with, double quotes being no bound. */
+  private static final Pattern SINGLE_QUOTED =
+      Pattern.compile("(?<![\\p{L}\\p{N}])'([^\n]+?)'(?![\\p{L}\\p{N}])");
+
   /** A letter and a digit outside the basic plane, and the two halves such a character is of. */
   private static final String WIDE_LETTER = "\uD835\uDC00";
 
@@ -92,6 +96,18 @@ class QuotedPassagesTest {
         QUOTED.matcher(text).replaceAll(" "),
         QuotedPassages.blanked(text),
         () -> "without its passages: " + text);
+    assertEquals(
+        SINGLE_QUOTED.matcher(text).results().map(m -> new Passage(m.start(), m.end())).toList(),
+        QuotedPassages.inSingleQuotes(text),
+        () -> "the single-quoted passages of: " + text);
+  }
+
+  @Test
+  void aSingleQuotedPassageReadAloneMayStartInsideADoubleQuotedOne() {
+    var text = "it \"keeps 'rows\" for. a day' and \"more\"";
+
+    assertEquals(List.of(new Passage(3, 16), new Passage(33, 39)), QuotedPassages.in(text));
+    assertEquals(List.of(new Passage(10, 28)), QuotedPassages.inSingleQuotes(text));
   }
 
   @Test
@@ -217,6 +233,10 @@ class QuotedPassagesTest {
     var passages = assertTimeoutPreemptively(Duration.ofSeconds(10), () -> QuotedPassages.in(text));
 
     assertEquals(held, passages.size());
+    assertEquals(
+        unit.contains("\"") ? 0 : held,
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> QuotedPassages.inSingleQuotes(text))
+            .size());
   }
 
   private static Stream<Arguments> longTextsOfQuotes() {

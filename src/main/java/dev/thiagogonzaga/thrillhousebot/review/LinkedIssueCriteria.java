@@ -29,8 +29,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
-import java.util.regex.MatchResult;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 /**
  * The "Linked issue #N: &lt;criterion&gt;" lines the Description vs. Implementation section always
@@ -294,15 +294,8 @@ final class LinkedIssueCriteria {
           Pattern.compile("(?i)\\b(?:cannot|never|no\\s++longer)\\b"),
           Pattern.compile("(?i)\\b(?:lacks?|fails?\\s++to|refus\\w*+\\s++to|unable\\s++to)\\b"));
 
-  /**
-   * A quoted passage, in double or single quotes (curly quotes folded), one pattern per quote. A
-   * single-quoted passage ends at the first quote no letter or digit follows, so an apostrophe
-   * inside it stays: 'the council's yearly export'.
-   */
-  private static final List<Pattern> QUOTED =
-      List.of(
-          Pattern.compile("\"([^\"\n]++)\""),
-          Pattern.compile("(?<![\\p{L}\\p{N}])'([^\n]+?)'(?![\\p{L}\\p{N}])"));
+  /** A passage in double quotes (curly quotes folded). */
+  private static final Pattern DOUBLE_QUOTED = Pattern.compile("\"([^\"\n]++)\"");
 
   private static final Pattern NON_ALPHANUMERIC = Pattern.compile("[^\\p{L}\\p{N}]+");
 
@@ -598,7 +591,7 @@ final class LinkedIssueCriteria {
     var scopes = new LinkedHashMap<Integer, String>();
     var words = words(clause);
     for (var match : quotes) {
-      var at = quotedCriterion(match, words, criteria);
+      var at = quotedCriterion(match.body(clause), words, criteria);
       if (at < 0 || scopes.containsKey(at)) {
         continue;
       }
@@ -620,11 +613,12 @@ final class LinkedIssueCriteria {
    * up the part when it quotes nothing: the part names a subject ("the 'A' card") and says nothing
    * of it.
    */
-  private static boolean subjectOnly(String clause, int[] part, List<MatchResult> quotes) {
+  private static boolean subjectOnly(
+      String clause, int[] part, List<QuotedPassages.Passage> quotes) {
     var last =
         quotes.stream()
             .filter(q -> q.start() >= part[0] && q.end() <= part[1])
-            .mapToInt(MatchResult::end)
+            .mapToInt(QuotedPassages.Passage::end)
             .max()
             .orElse(part[0]);
     return normalize(clause.substring(last, part[1])).indexOf(' ') < 0;
@@ -632,7 +626,8 @@ final class LinkedIssueCriteria {
 
   /**
    * The clauses of {@code sentence} split at each {@link #OVERVIEW_CLAUSE} separator outside a
-   * {@link #QUOTED} passage, so a quote holding a comma or a dash stays whole in one clause.
+   * quoted passage ({@link #quotes}), so a quote holding a comma or a dash stays whole in one
+   * clause.
    */
   private static List<String> overviewClauses(String sentence) {
     var quotes = quotes(sentence);
@@ -839,12 +834,12 @@ final class LinkedIssueCriteria {
   }
 
   /**
-   * The criterion holding the passage {@code match} quotes, of two words or more, or -1. A phrase
-   * several criteria hold ("the Sign up button") goes to the one the clause's other {@code words}
-   * share most with; with no clear one it names none of them.
+   * The criterion holding a quoted {@code passage} of two words or more, or -1. A phrase several
+   * criteria hold ("the Sign up button") goes to the one the clause's other {@code words} share
+   * most with; with no clear one it names none of them.
    */
-  private static int quotedCriterion(MatchResult match, Set<String> words, List<String> criteria) {
-    var quote = normalize(match.group(1));
+  private static int quotedCriterion(String passage, Set<String> words, List<String> criteria) {
+    var quote = normalize(passage);
     if (quote.indexOf(' ') < 0) {
       return -1;
     }
@@ -925,7 +920,7 @@ final class LinkedIssueCriteria {
 
   /**
    * The sentences of {@code overview}, using {@link SentenceBreaks} for abbreviations and never
-   * ending inside a {@link #QUOTED} passage.
+   * ending inside a quoted passage ({@link #quotes}).
    */
   private static List<String> sentences(String overview) {
     if (overview == null) {
@@ -948,11 +943,20 @@ final class LinkedIssueCriteria {
     return sentences;
   }
 
-  /** The {@link #QUOTED} passages of {@code text}, in the order they start. */
-  private static List<MatchResult> quotes(String text) {
-    return QUOTED.stream()
-        .flatMap(pattern -> pattern.matcher(text).results())
-        .sorted(Comparator.comparingInt(MatchResult::start))
+  /**
+   * The quoted passages of {@code text}, in double or single quotes (curly quotes folded), in the
+   * order they start. The two kinds are read apart, so one may start inside a passage of the other.
+   * A single-quoted passage ends at the first quote no letter or digit follows, so an apostrophe
+   * inside it stays: 'the council's yearly export'.
+   */
+  static List<QuotedPassages.Passage> quotes(String text) {
+    return Stream.concat(
+            DOUBLE_QUOTED
+                .matcher(text)
+                .results()
+                .map(match -> new QuotedPassages.Passage(match.start(), match.end())),
+            QuotedPassages.inSingleQuotes(text).stream())
+        .sorted(Comparator.comparingInt(QuotedPassages.Passage::start))
         .toList();
   }
 
