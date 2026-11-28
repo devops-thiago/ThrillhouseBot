@@ -62,11 +62,13 @@ security limits. To report a vulnerability, see
   to its older ones. The bot reads at most 1,000 reviews per pull request,
   oldest first, and logs a warning when it reaches that limit, since an
   approval past it is not seen. A push inside `AUTO_REVIEW_MIN_INTERVAL` or
-  past a full repository queue is reviewed late, not skipped, so a pull
-  request author cannot time a push to avoid the review. That later review is
-  held in memory: it never runs if the bot restarts while it waits, if 10,000
-  pull requests already have one waiting, or if the repository's queue stays
-  full for an hour. If the bot's
+  past a full repository queue is kept and reviewed late instead of skipped,
+  so timing a push to land inside the window does not by itself avoid the
+  review. That later review is held in memory. It does not run if the bot
+  restarts while it waits, if 10,000 pull requests already have one kept, if
+  the repository's queue stays full for an hour, if the review cannot be
+  started (the executor refuses it, or starting it fails for an hour), or if
+  the pull request is paused meanwhile. If the bot's
   approval counts towards a required review, turn on "Dismiss stale pull
   request approvals when new commits are pushed" for the branch.
 - Only the latest release gets security fixes.
@@ -160,8 +162,8 @@ process sends at most `AI_MAX_CONCURRENT_CALLS` model calls at once (default
 16). A pull request is not reviewed again within `AUTO_REVIEW_MIN_INTERVAL` of
 its last automatic review (default one minute). A reopen of an unchanged head
 and a repeated ready-for-review of the head just reviewed are skipped; a push
-is reviewed when the window closes, the latest head only, so pushes cost at
-most one review per window. These
+is kept, the latest head only, for a review when the window closes, so pushes
+cost at most one review per window. These
 bound how fast spend can accrue, not its total: an author who keeps pushing new
 commits to several pull requests keeps the repository's four slots busy. Use
 `WEBHOOK_EXCLUDED_AUTHORS`, the label gates or `GITHUB_ALLOWED_ACCOUNTS`, and a

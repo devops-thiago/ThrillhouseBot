@@ -468,8 +468,8 @@ public class ReviewDiffFormatter {
 
   /**
    * One-line disclosure for the summary / diff overview. Caps the path sample so bulk package moves
-   * do not dominate the prompt. Each path is a code span: a file's name is the pull request
-   * author's text, and the line is posted in the summary.
+   * do not dominate the prompt. Each path goes through {@link MarkdownSafe#codeSpan}: a file's name
+   * is the pull request author's text, and the line is posted in the summary.
    */
   static String formatPureRenameRollup(List<GitHubPullRequestClient.FileDiff> pureRenames) {
     if (pureRenames == null || pureRenames.isEmpty()) {

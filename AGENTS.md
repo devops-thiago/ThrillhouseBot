@@ -616,13 +616,13 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   `/review` is never held behind the queue. A throttled
   or queue-full review is a decision and `dispatch` still returns `true`: `false` is only for
   a rejected executor, because it rolls the delivery's dedupe slot back.
-- **A limit delays the review of a new head; it never drops it.** A bot approval of the previous
-  head would otherwise stay on code nobody read. Every place the rate window or the queue limit
+- **A limit delays the review of a new head instead of dropping it, within the store's bounds.** A
+  bot approval of the previous head would otherwise stay on code nobody read. Every place the rate window or the queue limit
   turns an automatic review away (`WebhookEvents.heldByRateWindow`,
   `ReviewDispatcher.skippedAsThrottled`, `deferQueueFull`) keeps it in `DeferredReviews` when its
   head is not the one the last automatic review covered (`AutoReviewRateLimiter.hold`, which
   reads the clock and the window once, so a caller never asks twice about one event), and
-  records a skip only for the head already reviewed or when the store refuses, which includes a
+  records a skip for the head already reviewed and when the store refuses, which includes a
   hand-back that failed for an hour (`DeferredReviewRelease.release`). The store holds one
   request per pull request (the latest wins), at most 10,000, and gives up on a head that keeps
   coming back for an hour. "Latest" is decided by where the request comes from: an event's request
@@ -631,9 +631,10 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   deferred in place, because that request can be older than the push that arrived while it waited. `DeferredReviewRelease` runs one timer for all of them and hands a due
   request to `dispatchDeferred`, so it is serialized, takes a slot and has the window read again
   like any other. An entry goes on close or merge, on a newer automatic dispatch, on an event the
-  pause or trigger filters reject, on `converted_to_draft` when drafts are skipped, and at
-  shutdown. Handing an entry out does not remove it: it stays, counted towards the 10,000, for an
-  hour after its first hand-out. A new drop path for automatic reviews must defer the same way.
+  pause or trigger filters reject, on `converted_to_draft` when drafts are skipped, on a hand-back
+  that finds the pull request paused or that the executor refuses (both recorded skips), and at
+  shutdown; a restart loses them all. Handing an entry out does not remove it: unless one of those
+  removes it, it stays, counted towards the 10,000, for an hour after its first hand-out. A new drop path for automatic reviews must defer the same way.
 - **Nothing is written for a commenter before the write-access check.** `WebhookEvents`
   authorizes a command (`ManualReviewAuthorizer`) before the 👀 reaction and before the paused or
   closed notice, and drops a refused command without calling `CommentCommandService`, whose
@@ -866,9 +867,13 @@ live `fence(...)` (#604).
   is code that differs from GitHub's reading posts a mention untouched, so fenced blocks are
   emitted at the top level under a fence longer than their content, code spans count only when
   they close on their own line and hold no `|` (GitHub ends a table cell at a pipe before it reads
-  a span; `proseCell` keeps such a span, since it escapes the pipes), a carriage return ends a line
+  a span; only the opening run of such a span is escaped, so the runs after it on the line pair
+  anew from its closing run on, as GitHub pairs them; `proseCell` keeps such a span, since it
+  escapes the pipes), a carriage return ends a line
   as a line feed does, and every other backtick becomes `&#96;`. A name the bot did not write, a
-  changed file's path above all, is posted as a code span (`MarkdownSafe.codeSpan`) or through
+  changed file's path above all, is posted as a code span (`MarkdownSafe.codeSpan`, which writes a
+  name holding a `|` as text with every punctuation character escaped and no span, so it reads the
+  same in a table cell) or through
   `inline`, never joined in raw. The bot's own text, the
   `@thrillhousebot` hints included, is never passed through these. Text read back from a posted
   comment and compared with a model's (`DescriptionGapCarryover.listedGaps`,
