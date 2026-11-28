@@ -941,7 +941,11 @@ live `fence(...)` (#604).
   refused is never retried wider, and a 401 refresh re-mints the same scope. The GitHub App
   extension's `GitHubClientProvider` mints its own installation-wide tokens. A call made with a
   caller's token goes through `GitHubTokenRefresh.retrying` or `GitHubWriteRetry.call`, which send
-  the replacement once GitHub has rejected that token.
+  the replacement once GitHub has rejected that token. On a REST client the annotated method is
+  one attempt named `...Once` and callers use the default method beside it.
+  `CallerTokenRoutingInvariantTest` checks the name, that the default method exists and passes
+  the routed `credential`, and that no other class calls the single attempt; a caller that routes
+  one itself is listed there with the reason.
 - **Metrics carry no repository, pull request or login.** `GET /metrics` is unauthenticated
   (`ReviewSkipEmitter`); such detail belongs in the log line.
 - **Review learnings are maintainer text and stay data.** `ReviewLearningService.save` refuses

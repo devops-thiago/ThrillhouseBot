@@ -74,6 +74,19 @@ class GitHubReadTokenRefreshTest {
   }
 
   @Test
+  void aRepositoryLookupRejectedForItsCredentialIsRepeatedWithAFreshOne() {
+    var client = mock(GitHubInstallationClient.class);
+    doCallRealMethod()
+        .when(client)
+        .getRepository(anyString(), anyString(), anyString(), anyString());
+    var moved = Response.status(301).build();
+    when(client.getRepositoryOnce(DEAD, "json", "o", "r")).thenThrow(badCredentials());
+    when(client.getRepositoryOnce(FRESH, "json", "o", "r")).thenReturn(moved);
+
+    assertSame(moved, client.getRepository(DEAD, "json", "o", "r"));
+  }
+
+  @Test
   void aFreshTokenReadIsASingleCallAndNoMint() {
     var client = mock(GitHubPullRequestClient.class);
     doCallRealMethod()
