@@ -133,7 +133,7 @@ class WebhookEventsTest {
   /** Drives the observer entry points; assertions below still inspect their business outcomes. */
   private void deliver(String eventType, GitHubEvent event) {
     switch (eventType) {
-      case "pull_request" -> events.onPullRequest(event);
+      case "pull_request" -> deliverPullRequest(event);
       case "issue_comment" -> events.onIssueComment(event);
       case "pull_request_review_comment" -> events.onReviewComment(event);
       case "check_suite" -> events.onCheckSuiteCompleted(event);
@@ -143,6 +143,15 @@ class WebhookEventsTest {
       case "repository" -> events.onRepositoryEvent(event);
       case "ping" -> events.onPing(event);
       default -> events.routeEvent(eventType, event);
+    }
+  }
+
+  /** A conversion to draft has an observer of its own, as the extension delivers it. */
+  private void deliverPullRequest(GitHubEvent event) {
+    if ("converted_to_draft".equals(event.getAction())) {
+      events.onPullRequestConvertedToDraft(event);
+    } else {
+      events.onPullRequest(event);
     }
   }
 

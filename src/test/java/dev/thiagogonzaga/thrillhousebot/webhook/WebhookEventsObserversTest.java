@@ -55,6 +55,9 @@ class WebhookEventsObserversTest {
           List.of("pull_request", "ready_for_review"),
           // #1319: a closed pull request starts its stored findings' retention period.
           List.of("pull_request", "closed"),
+          // Drops the review a limit held back when drafts are skipped. The extension has no
+          // qualifier for this action, so the observer names it as a raw event.
+          List.of("pull_request", "converted_to_draft"),
           List.of("issue_comment", "created"),
           List.of("pull_request_review_comment", "created"),
           List.of("check_suite", "completed"),
@@ -120,10 +123,10 @@ class WebhookEventsObserversTest {
       names.add(method.getName());
     }
     assertEquals(
-        9,
+        10,
         names.size(),
         "Observer set changed: update this pin deliberately. Expected onPullRequest, "
-            + "onIssueComment, onReviewComment, onCheckSuiteCompleted, onStatus, onPing, "
+            + "onPullRequestConvertedToDraft, onIssueComment, onReviewComment, onCheckSuiteCompleted, onStatus, onPing, "
             + "onInstallationEvent, onInstallationRepositoriesEvent and onRepositoryEvent.");
   }
 

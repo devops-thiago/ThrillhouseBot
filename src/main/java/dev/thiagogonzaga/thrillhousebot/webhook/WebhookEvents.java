@@ -157,6 +157,16 @@ public class WebhookEvents {
     routeEvent(EVENT_PULL_REQUEST, event);
   }
 
+  /**
+   * The extension has no qualifier for {@code converted_to_draft}, so the action is named as a raw
+   * event. Without an observer the delivery is acknowledged and dropped, and a review a limit held
+   * back for the pull request still runs after it became a draft.
+   */
+  void onPullRequestConvertedToDraft(
+      @RawEvent(event = EVENT_PULL_REQUEST, action = ACTION_CONVERTED_TO_DRAFT) GitHubEvent event) {
+    routeEvent(EVENT_PULL_REQUEST, event);
+  }
+
   void onIssueComment(@IssueComment.Created GitHubEvent event) {
     routeEvent("issue_comment", event);
   }

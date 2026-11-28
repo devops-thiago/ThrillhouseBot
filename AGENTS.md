@@ -725,7 +725,10 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   `WebhookPayload` and route exactly as the former hand-rolled controller did. Every listener
   method declares event/action qualifiers and takes only the raw event, so a delivery builds no
   hub4j payload and no installation client on the ack path; `WebhookEventsObserversTest` pins the
-  wiring (a lost qualifier silently drops deliveries), and the dedupe, the dispatch-rejected
+  wiring (a lost qualifier silently drops deliveries). An action the extension has no qualifier
+  for is named with `@RawEvent(event, action)` on an observer of its own, as `converted_to_draft`
+  is; `WebhookDraftConversionDeliveryTest` posts that delivery to the route, because a test that
+  calls the observer method passes whether or not the action is delivered. The dedupe, the dispatch-rejected
   rollback and the duplicate-skip recording lived with the routing. HTTP corner cases come from
   the extension's `Routes`: missing mandatory headers `400`, signature mismatch `400`, signed
   non-JSON body `500`, accepted delivery `200` with an empty body (`NativeImageIT` pins these).
