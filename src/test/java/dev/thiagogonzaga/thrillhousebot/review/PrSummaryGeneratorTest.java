@@ -22,9 +22,13 @@ import static org.mockito.Mockito.when;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class PrSummaryGeneratorTest {
@@ -47,6 +51,9 @@ class PrSummaryGeneratorTest {
     when(nudge.enabled()).thenReturn(true);
     when(nudge.minFiles()).thenReturn(20);
     when(nudge.minChangedLines()).thenReturn(1000);
+    var collapse = mock(ThrillhouseConfig.SummaryCollapseConfig.class);
+    when(review.summaryCollapse()).thenReturn(collapse);
+    when(collapse.enabled()).thenReturn(false);
 
     var fromConfig = new PrSummaryGenerator(config);
     var result =
@@ -58,6 +65,7 @@ class PrSummaryGeneratorTest {
             1, 5, 0, List.of(), summaryWithDiagram("flowchart TD\n  A --> B"), result);
 
     assertTrue(summary.contains("### Control-Flow Diagram"));
+    assertTrue(summary.contains("### Risk Assessment\n| Risk | Count |"), summary);
     // The same config wiring carries the nudge policy; this 1-file PR is under both bounds.
     assertFalse(summary.contains(LargePrNudge.NUDGE_HEADING), summary);
     assertTrue(
@@ -382,9 +390,10 @@ class PrSummaryGeneratorTest {
     assertTrue(summary.contains("`" + MarkdownSafe.inlineCode(hostilePath) + ":22`"), summary);
     assertTrue(summary.contains("`" + MarkdownSafe.inlineCode(hostilePath) + ":9`"), summary);
     assertFalse(summary.contains("\n### Injected"), summary);
-    // The only </details> is the genuine one that closes the double-check section (with a leading
-    // newline); the title's forged copy is neutralized, so no raw </details> comes from a title.
-    assertEquals(1, countOccurrences(summary, "</details>"), summary);
+    // Every </details> closes a block the generator opened; the title's forged copy is
+    // neutralized, so none comes from a title.
+    assertEquals(
+        countOccurrences(summary, "<details>"), countOccurrences(summary, "</details>"), summary);
     assertTrue(summary.contains("\n</details>"), summary);
   }
 
@@ -518,7 +527,8 @@ class PrSummaryGeneratorTest {
     // flattened and neutralized, so no heading, </details>, fence, or pipe escapes the section.
     assertTrue(summary.contains(MarkdownSafe.inline(hostilePurpose)), summary);
     assertFalse(summary.contains("\n### Injected"), summary);
-    assertFalse(summary.contains("</details>"), summary);
+    assertEquals(
+        countOccurrences(summary, "<details>"), countOccurrences(summary, "</details>"), summary);
     assertFalse(summary.contains("```"), summary);
   }
 
@@ -2540,5 +2550,168 @@ class PrSummaryGeneratorTest {
         new PrSummaryGenerator(false)
             .generate(1, 5, 0, List.of(), summaryWithGaps(List.of(credited)), result);
     assertFalse(rendered.contains(PrSummaryGenerator.GAPS_HEADING), rendered);
+  }
+
+  @Test
+  void foldsTheChangedFilesTableBehindItsFileCount() {
+    var files =
+        List.of(
+            new PrSummaryGenerator.ChangedFile("src/A.java", "modified"),
+            new PrSummaryGenerator.ChangedFile("src/B.java", "added"));
+
+    var two = generator.generate(2, 10, 1, files, null, withFindings());
+    var one = generator.generate(1, 10, 1, files.subList(0, 1), null, withFindings());
+
+    assertTrue(
+        two.contains(
+            "### Changed Files\nIncludes `src/A.java`, `src/B.java`.\n\n"
+                + "<details>\n<summary>2 files: show walkthrough</summary>\n\n"
+                + "| File | Change | Summary |"),
+        two);
+    assertTrue(two.contains("|\n\n</details>\n\n### Risk Assessment"), two);
+    assertTrue(one.contains("<summary>1 file: show walkthrough</summary>"), one);
+  }
+
+  @Test
+  void namesOnlyTheFirstThreeRowsAboveTheFoldedTable() {
+    var files =
+        Stream.of("a", "b", "c", "d`e")
+            .map(name -> new PrSummaryGenerator.ChangedFile(name, "modified"))
+            .toList();
+
+    var summary = generator.generate(4, 10, 1, files, null, withFindings());
+
+    assertTrue(summary.contains("Includes `a`, `b`, `c`.\n\n<details>"), summary);
+  }
+
+  @Test
+  void foldsTheChangeTotalsBehindThemselves() {
+    var summary = generator.generate(3, 120, 0, List.of(), null, withFindings());
+
+    assertTrue(
+        summary.contains(
+            "### Changes Overview\n<details>\n<summary>3 files, +120 / 0 lines</summary>\n\n"
+                + "- **Files changed:** 3\n"),
+        summary);
+    assertTrue(summary.contains("- **Lines removed:** 0\n\n</details>\n\n"), summary);
+  }
+
+  @Test
+  void leavesFailingChecksInViewAndAddsNoSectionForAGreenCi() {
+    var check = new ReviewResult.CiCheck("build", "check-run", "failing", null);
+    var failing =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.COMMENT,
+            false,
+            "",
+            List.of(),
+            List.of(check),
+            0);
+
+    var red = generator.generate(1, 5, 0, List.of(), null, failing);
+    var green = generator.generate(1, 5, 0, List.of(), null, withFindings());
+
+    var checks = red.substring(red.indexOf("CI Checks Status"));
+    assertFalse(checks.contains("<details>"), red);
+    assertTrue(checks.contains("| **build** |"), red);
+    assertFalse(green.contains("CI Checks Status"), green);
+  }
+
+  @Test
+  void foldsTheRiskTableWhenNothingIsCriticalOrHigh() {
+    var summary =
+        generator.generate(
+            1,
+            5,
+            0,
+            List.of(),
+            null,
+            withFindings(RiskLevel.MEDIUM, RiskLevel.MEDIUM, RiskLevel.LOW));
+
+    assertTrue(
+        summary.contains(
+            "### Risk Assessment\n<details>\n"
+                + "<summary>0 critical, 0 high, 2 medium, 1 low</summary>\n\n| Risk | Count |"),
+        summary);
+    assertTrue(summary.contains("| 🔵 Low | 1 |\n\n</details>\n\n"), summary);
+  }
+
+  @ParameterizedTest
+  @EnumSource(
+      value = RiskLevel.class,
+      names = {"CRITICAL", "HIGH"})
+  void keepsTheRiskTableOpenForACriticalOrHighFinding(RiskLevel risk) {
+    var summary = generator.generate(1, 5, 0, List.of(), null, withFindings(risk));
+
+    assertTrue(summary.contains("### Risk Assessment\n| Risk | Count |"), summary);
+  }
+
+  @Test
+  void foldsThePreviousFindingsCountsBehindTheirTotals() {
+    var statuses =
+        List.of(
+            new ReviewResult.PreviousFindingStatus(1, "resolved", "Fixed"),
+            new ReviewResult.PreviousFindingStatus(2, "unresolved", "Still broken"),
+            new ReviewResult.PreviousFindingStatus(3, "justified", "Intentional"),
+            new ReviewResult.PreviousFindingStatus(4, "superseded", "Code left the diff"));
+
+    var all = generator.generate(1, 0, 0, List.of(), null, withStatuses(statuses));
+    var two = generator.generate(1, 0, 0, List.of(), null, withStatuses(statuses.subList(0, 2)));
+
+    assertTrue(
+        all.contains(
+            "### Previous Findings Status\n<details>\n"
+                + "<summary>Earlier rounds: 1 resolved · 1 open · 1 justified · 1 superseded"
+                + "</summary>\n\n"
+                + "| Status | Count |"),
+        all);
+    assertTrue(two.contains("<summary>Earlier rounds: 1 resolved · 1 open</summary>"), two);
+  }
+
+  @Test
+  void leavesEverySectionOpenWhenFoldingIsOff() {
+    var open = new PrSummaryGenerator(false, LargePrNudge.DISABLED, false);
+    var files = List.of(new PrSummaryGenerator.ChangedFile("src/A.java", "modified"));
+    var statuses = List.of(new ReviewResult.PreviousFindingStatus(1, "resolved", "Fixed"));
+
+    var summary = open.generate(1, 5, 0, files, null, withStatuses(statuses));
+
+    assertFalse(summary.contains("<details>"), summary);
+    assertTrue(summary.contains("### Changes Overview\n- **Files changed:** 1"), summary);
+    assertTrue(summary.contains("### Changed Files\n| File | Change | Summary |"), summary);
+    assertTrue(summary.contains("### Risk Assessment\n| Risk | Count |"), summary);
+    assertTrue(summary.contains("### Previous Findings Status\n| Status | Count |"), summary);
+  }
+
+  private static ReviewResult withFindings(RiskLevel... risks) {
+    var findings =
+        Arrays.stream(risks)
+            .map(risk -> new Finding(risk, "src/A.java", 1, "Bug " + risk, "desc", null, null))
+            .toList();
+    var counts = Arrays.stream(risks).toList();
+    return new ReviewResult(
+        findings,
+        Collections.frequency(counts, RiskLevel.CRITICAL),
+        Collections.frequency(counts, RiskLevel.HIGH),
+        Collections.frequency(counts, RiskLevel.MEDIUM),
+        Collections.frequency(counts, RiskLevel.LOW),
+        null,
+        ReviewState.COMMENT,
+        false,
+        "",
+        List.of(),
+        List.of(),
+        0);
+  }
+
+  private static ReviewResult withStatuses(List<ReviewResult.PreviousFindingStatus> statuses) {
+    return new ReviewResult(
+        List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, false, "", statuses, List.of(), 0);
   }
 }

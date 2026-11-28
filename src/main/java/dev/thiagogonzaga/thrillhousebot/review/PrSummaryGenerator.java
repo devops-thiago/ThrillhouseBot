@@ -47,9 +47,14 @@ public class PrSummaryGenerator {
   // Opt-in "large PR, nothing inline" note; carries its own thresholds and off switch.
   private final LargePrNudge largePrNudge;
 
+  private final boolean collapseSections;
+
   @Inject
   public PrSummaryGenerator(ThrillhouseConfig config) {
-    this(config.review().diagram().enabled(), LargePrNudge.from(config.review().largePrNudge()));
+    this(
+        config.review().diagram().enabled(),
+        LargePrNudge.from(config.review().largePrNudge()),
+        config.review().summaryCollapse().enabled());
   }
 
   /** Visible for tests; the large-PR nudge stays off, matching its shipped default. */
@@ -59,9 +64,17 @@ public class PrSummaryGenerator {
 
   /** Visible for tests: pins the diagram switch and the large-PR nudge policy together. */
   PrSummaryGenerator(boolean diagramEnabled, LargePrNudge largePrNudge) {
+    this(diagramEnabled, largePrNudge, true);
+  }
+
+  /** Visible for tests: also pins whether the long sections are folded, as they are by default. */
+  PrSummaryGenerator(boolean diagramEnabled, LargePrNudge largePrNudge, boolean collapseSections) {
     this.diagramEnabled = diagramEnabled;
     this.largePrNudge = largePrNudge;
+    this.collapseSections = collapseSections;
   }
+
+  private static final int TEASER_FILES = 3;
 
   /** The clean-review celebration; rendered inside the summary, never as a separate comment. */
   public static final String ZERO_ISSUES_MESSAGE =
@@ -386,19 +399,42 @@ public class PrSummaryGenerator {
     appendWalkthroughDiagram(sb, aiSummary);
 
     sb.append("### Changes Overview\n");
+    openFold(
+        sb,
+        collapseSections,
+        fileCount(filesChanged)
+            + ", "
+            + signed('+', additions)
+            + " / "
+            + signed('-', deletions)
+            + " lines");
     sb.append("- **Files changed:** ").append(filesChanged).append("\n");
     sb.append("- **Lines added:** ").append(signed('+', additions)).append("\n");
-    sb.append("- **Lines removed:** ").append(signed('-', deletions)).append("\n\n");
+    sb.append("- **Lines removed:** ").append(signed('-', deletions)).append("\n");
+    closeFold(sb, collapseSections);
+    sb.append("\n");
 
     appendChangedFiles(sb, filesChanged, changedFiles, surfaces.fileSummaries());
 
+    var foldRisk = collapseSections && result.criticalCount() + result.highCount() == 0;
     sb.append("### Risk Assessment\n");
+    openFold(
+        sb,
+        foldRisk,
+        "%d critical, %d high, %d medium, %d low"
+            .formatted(
+                result.criticalCount(),
+                result.highCount(),
+                result.mediumCount(),
+                result.lowCount()));
     sb.append("| Risk | Count |\n");
     sb.append("|------|-------|\n");
     sb.append("| 🔴 Critical | ").append(result.criticalCount()).append(" |\n");
     sb.append("| 🟠 High | ").append(result.highCount()).append(" |\n");
     sb.append("| 🟡 Medium | ").append(result.mediumCount()).append(" |\n");
-    sb.append("| 🔵 Low | ").append(result.lowCount()).append(" |\n\n");
+    sb.append("| 🔵 Low | ").append(result.lowCount()).append(" |\n");
+    closeFold(sb, foldRisk);
+    sb.append("\n");
     if (!carried.isEmpty()) {
       sb.append(carriedCountNote(carried.size()));
     }
@@ -564,7 +600,7 @@ public class PrSummaryGenerator {
         + " raised by an earlier review._\n\n";
   }
 
-  private static void appendPreviousFindings(StringBuilder sb, ReviewResult result) {
+  private void appendPreviousFindings(StringBuilder sb, ReviewResult result) {
     // The record constructor guarantees a non-null status list.
     if (result.previousStatuses().isEmpty()) {
       return;
@@ -575,6 +611,15 @@ public class PrSummaryGenerator {
     var justified = result.previousCount("justified");
     var superseded = result.supersededPreviousCount();
     sb.append("### Previous Findings Status\n");
+    var counts = new StringBuilder("Earlier rounds: ");
+    counts.append(resolved).append(" resolved · ").append(unresolved).append(" open");
+    if (justified > 0) {
+      counts.append(" · ").append(justified).append(" justified");
+    }
+    if (superseded > 0) {
+      counts.append(" · ").append(superseded).append(" superseded");
+    }
+    openFold(sb, collapseSections, counts.toString());
     sb.append("| Status | Count |\n");
     sb.append("|--------|-------|\n");
     sb.append("| ✅ Resolved | ").append(resolved).append(" |\n");
@@ -585,7 +630,24 @@ public class PrSummaryGenerator {
           .append(superseded)
           .append(" |\n");
     }
+    closeFold(sb, collapseSections);
     sb.append("\n");
+  }
+
+  /**
+   * Folds what follows behind {@code label}, up to {@link #closeFold}. The blank line lets GitHub
+   * render the markdown inside the block.
+   */
+  private static void openFold(StringBuilder sb, boolean fold, String label) {
+    if (fold) {
+      sb.append("<details>\n<summary>").append(label).append("</summary>\n\n");
+    }
+  }
+
+  private static void closeFold(StringBuilder sb, boolean fold) {
+    if (fold) {
+      sb.append("\n</details>\n");
+    }
   }
 
   private static void appendFindingsOrCelebration(
@@ -1033,7 +1095,7 @@ public class PrSummaryGenerator {
    * (GitHub's authoritative total), not the reviewable-row count, so it also accounts for files the
    * ignore-glob dropped from the table — matching the "Changes Overview" total above it.
    */
-  private static void appendChangedFiles(
+  private void appendChangedFiles(
       StringBuilder sb,
       int totalFilesChanged,
       List<ChangedFile> changedFiles,
@@ -1041,10 +1103,15 @@ public class PrSummaryGenerator {
     if (changedFiles == null || changedFiles.isEmpty()) {
       return;
     }
+    var rows = walkthroughRows(changedFiles, summaryByPath);
     sb.append("### Changed Files\n");
+    if (collapseSections) {
+      sb.append(walkthroughTeaser(rows));
+    }
+    openFold(sb, collapseSections, fileCount(totalFilesChanged) + ": show walkthrough");
     sb.append("| File | Change | Summary |\n");
     sb.append("|------|--------|---------|\n");
-    for (ChangedFile file : walkthroughRows(changedFiles, summaryByPath)) {
+    for (ChangedFile file : rows) {
       String summary = summaryByPath.getOrDefault(file.path(), "");
       sb.append("| `")
           .append(MarkdownSafe.tableCell(MarkdownSafe.inlineCode(file.path())))
@@ -1059,7 +1126,20 @@ public class PrSummaryGenerator {
     if (overflow > 0) {
       sb.append("\n_…and ").append(overflow).append(" more file(s)._\n");
     }
+    closeFold(sb, collapseSections);
     sb.append("\n");
+  }
+
+  private static String fileCount(int files) {
+    return files + (files == 1 ? " file" : " files");
+  }
+
+  /** The line left in view above the folded table: the first files it lists. */
+  private static String walkthroughTeaser(List<ChangedFile> rows) {
+    return rows.stream()
+        .limit(TEASER_FILES)
+        .map(file -> "`" + MarkdownSafe.inlineCode(file.path()) + "`")
+        .collect(Collectors.joining(", ", "Includes ", ".\n\n"));
   }
 
   /**
