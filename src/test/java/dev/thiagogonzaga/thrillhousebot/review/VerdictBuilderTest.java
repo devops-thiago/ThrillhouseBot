@@ -672,7 +672,8 @@ class VerdictBuilderTest {
 
   @Test
   void theFindingsThePreviousRoundNamedAreHandedOnOnlyOnTheSameHead() {
-    var bullet = PrSummaryGenerator.GAP_FINDING_PREFIX + "Board never refreshes (`a.java:3`)";
+    var reference = "Board never refreshes (`a.java:3`)";
+    var bullet = PrSummaryGenerator.GAP_FINDING_PREFIX + reference;
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
             List.of(), List.of(), List.of(), true, null, null, null, null);
@@ -686,7 +687,7 @@ class VerdictBuilderTest {
     var unchanged = sources.getAllValues().get(0);
     var moved = sources.getAllValues().get(1);
     assertEquals("PR text", unchanged.claimText());
-    assertEquals(java.util.Set.of(bullet), unchanged.previouslyNamed());
+    assertEquals(java.util.Set.of(reference), unchanged.previouslyNamed());
     assertEquals(java.util.Set.of(), moved.previouslyNamed());
   }
 

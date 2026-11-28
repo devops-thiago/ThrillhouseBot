@@ -217,6 +217,7 @@ class CiHoldRevisitTest {
     assertEquals(HEAD, review.getValue().commitId());
     assertTrue(
         review.getValue().body().contains("Required CI is now green"), review.getValue().body());
+    assertTrue(FollowUpAnalyzer.isSelfAuthoredStatusBody(review.getValue().body()));
 
     var update = ArgumentCaptor.forClass(CheckRunManager.CheckRunUpdate.class);
     verify(checkRunManager).updateCheckRun(update.capture());
@@ -240,7 +241,9 @@ class CiHoldRevisitTest {
     verify(reviewPublisher)
         .createReviewWithFallback(
             anyString(), anyString(), anyString(), anyInt(), review.capture());
-    assertTrue(review.getValue().body().startsWith("CI is now green"), review.getValue().body());
+    assertTrue(
+        review.getValue().body().startsWith(ReadBackMarkers.STATUS + "\nCI is now green"),
+        review.getValue().body());
   }
 
   @Test

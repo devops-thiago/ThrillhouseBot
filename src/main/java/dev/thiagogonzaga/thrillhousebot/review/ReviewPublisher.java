@@ -893,10 +893,12 @@ public class ReviewPublisher {
     }
 
     var bodyParts = new ArrayList<String>();
+    var skipped = skippedFindingsBodyParts(inline, post);
     if (result.reviewState() == ReviewState.REQUEST_CHANGES) {
-      bodyParts.add("ThrillhouseBot requested changes — see inline comments on the diff.");
+      var sentence = "ThrillhouseBot requested changes — see inline comments on the diff.";
+      bodyParts.add(skipped.isEmpty() ? ReadBackMarkers.status(sentence) : sentence);
     }
-    bodyParts.addAll(skippedFindingsBodyParts(inline, post));
+    bodyParts.addAll(skipped);
     appendPreviousOutcome(bodyParts, result, post);
     bodyParts.addAll(reopenedDeclineNotes(result));
     appendReviewNotice(bodyParts, result, post);
@@ -1034,9 +1036,10 @@ public class ReviewPublisher {
             : "";
     // A round held because no stored earlier round could be read has nothing else to say why it
     // did not approve, and a follow-up posts no new summary comment to carry the banner.
-    return result.priorRoundsUnreadable()
-        ? truncation + ReviewResult.PRIOR_ROUNDS_UNREADABLE_NOTICE
-        : truncation;
+    return ReadBackMarkers.status(
+        result.priorRoundsUnreadable()
+            ? truncation + ReviewResult.PRIOR_ROUNDS_UNREADABLE_NOTICE
+            : truncation);
   }
 
   /**
@@ -1267,7 +1270,7 @@ public class ReviewPublisher {
       // finding most often lands on — it has to name what it closed (#737).
       var approveParts = new ArrayList<String>();
       if (!result.isFirstReview()) {
-        approveParts.add(PrSummaryGenerator.ZERO_ISSUES_MESSAGE);
+        approveParts.add(ReadBackMarkers.status(PrSummaryGenerator.ZERO_ISSUES_MESSAGE));
       }
       appendPreviousOutcome(approveParts, result, post);
       appendReviewNotice(approveParts, result, post);
@@ -1324,7 +1327,7 @@ public class ReviewPublisher {
       appendSection(sb, openList(result, post, List.of(), sb.length() + rest.length()));
     }
     appendSection(sb, rest.toString());
-    return sb.toString();
+    return ReadBackMarkers.status(sb.toString());
   }
 
   /**
@@ -2138,9 +2141,11 @@ public class ReviewPublisher {
     if (!bodyParts.isEmpty()) {
       return String.join("\n\n", bodyParts);
     }
-    return EVENT_REQUEST_CHANGES.equals(event)
-        ? "ThrillhouseBot requested changes" + BATCHED_INLINE_BODY_SUFFIX
-        : "ThrillhouseBot review" + BATCHED_INLINE_BODY_SUFFIX;
+    return ReadBackMarkers.status(
+        (EVENT_REQUEST_CHANGES.equals(event)
+                ? "ThrillhouseBot requested changes"
+                : "ThrillhouseBot review")
+            + BATCHED_INLINE_BODY_SUFFIX);
   }
 
   private void discardPendingReview(

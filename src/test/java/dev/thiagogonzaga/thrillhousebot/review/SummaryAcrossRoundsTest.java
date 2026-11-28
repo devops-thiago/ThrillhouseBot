@@ -319,7 +319,9 @@ class SummaryAcrossRoundsTest {
     var rows = body.lines().filter(line -> line.startsWith("- ")).toList();
     assertEquals(3, result.unresolvedPreviousCount());
     assertEquals(result.unresolvedPreviousCount(), rows.size(), body);
-    assertTrue(body.startsWith(ReviewResult.unresolvedPreviousMessage(3)), body);
+    assertTrue(
+        body.startsWith(ReadBackMarkers.STATUS + "\n" + ReviewResult.unresolvedPreviousMessage(3)),
+        body);
     assertEquals(
         List.of(
             "- `src/Main.java:10` — "
@@ -408,6 +410,49 @@ class SummaryAcrossRoundsTest {
     var body = postedReviewBody(result, "", List.of());
 
     assertFalse(body.contains(OpenFindingNames.REVIEW_BODY_LEAD_IN), body);
+  }
+
+  @Test
+  void aLaterRoundSkipsAReviewBodyWhoseWordingItDoesNotKnow() {
+    publishFirstRound();
+    var unresolved =
+        List.of(
+            new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there"),
+            new ReviewResponse.PreviousFindingStatus(2, "unresolved", "still there"));
+    var quiet =
+        builder.build(
+            followUp(List.of(ROUND_ONE), List.of()),
+            new ReviewResponse(List.of(), unresolved, null),
+            CI_CLEAR,
+            plan);
+    var quietBody = reworded(postedReviewBody(quiet, "", List.of()));
+    var busy =
+        builder.build(
+            followUp(List.of(ROUND_ONE), List.of()),
+            new ReviewResponse(List.of(NEW_IN_ROUND_TWO), unresolved, null),
+            CI_CLEAR,
+            plan);
+    var delta = FollowUpDeltaSummary.render(busy, List.of()).orElseThrow();
+    var busyBody = reworded(postedReviewBody(busy, delta, List.of()));
+
+    assertTrue(quietBody.contains(CRITICAL.title()), quietBody);
+    assertEquals("", priorContextFrom(quietBody));
+    assertTrue(busyBody.contains(CRITICAL.title()), busyBody);
+    var context = priorContextFrom(busyBody);
+    assertFalse(context.contains(CRITICAL.title()), context);
+    assertFalse(context.contains(DOUBLE_CHECK.title()), context);
+  }
+
+  /** {@code body} as a release that words its headings and lead-ins differently would post it. */
+  private static String reworded(String body) {
+    var other =
+        body.replace(FollowUpDeltaSummary.DELTA_HEADING, "## Mudanças desde a última revisão")
+            .replace(OpenFindingNames.REVIEW_BODY_LEAD_IN, "O ThrillhouseBot ainda lista ")
+            .replace("No new issues in this revision, but", "Nada novo nesta revisão, mas")
+            .replace("previous finding(s)", "achado(s) anterior(es)")
+            .replace("Previous findings", "Achados anteriores");
+    assertFalse(other.contains("previous finding"), other);
+    return other;
   }
 
   /** What a later round with no persisted response reads out of the review {@code body}. */
@@ -649,7 +694,9 @@ class SummaryAcrossRoundsTest {
     assertFalse(summary.contains(LargePrNudge.NUDGE_HEADING), summary);
     assertFalse(summary.contains("opened no inline findings"), summary);
     assertFalse(summary.contains(PrSummaryGenerator.ZERO_ISSUES_MESSAGE), summary);
-    assertTrue(body.startsWith(ReviewResult.unresolvedPreviousMessage(3)), body);
+    assertTrue(
+        body.startsWith(ReadBackMarkers.STATUS + "\n" + ReviewResult.unresolvedPreviousMessage(3)),
+        body);
     assertTrue(body.contains(ReviewResult.CI_PENDING_ALSO_LEAD_IN), body);
     assertFalse(body.contains("found no issues"), body);
     assertTrue(checkSummary.contains("3 previous finding(s) remain unresolved"), checkSummary);
@@ -678,7 +725,10 @@ class SummaryAcrossRoundsTest {
     var heldSummary = publishFollowUp(held, first);
     assertTrue(heldSummary.contains(LargePrNudge.NUDGE_HEADING), heldSummary);
     var heldBody = postedReviewBody(held);
-    assertTrue(heldBody.startsWith(ReviewResult.NO_ISSUES_CI_PENDING_LEAD_IN), heldBody);
+    assertTrue(
+        heldBody.startsWith(
+            ReadBackMarkers.STATUS + "\n" + ReviewResult.NO_ISSUES_CI_PENDING_LEAD_IN),
+        heldBody);
     assertFalse(heldBody.contains("remain unresolved"), heldBody);
     assertFalse(
         VerdictBuilder.checkSummaryForResult(held).contains("remain unresolved"),
@@ -1055,7 +1105,10 @@ class SummaryAcrossRoundsTest {
     assertEquals(0, third.resolvedPreviousCount());
     assertEquals(1, third.supersededPreviousCount());
     var named = ClosedFindingNames.reviewBodySection(third, NEW_ROUND_TWO_ONLY);
-    assertTrue(named.startsWith("ThrillhouseBot closed 1 previous finding(s)"), named);
+    assertTrue(
+        named.startsWith(
+            ReadBackMarkers.PREVIOUS_START + "\n" + "ThrillhouseBot closed 1 previous finding(s)"),
+        named);
     assertTrue(named.contains("`" + FILE + ":10` — " + CRITICAL.title()), named);
     assertTrue(
         FollowUpDeltaSummary.render(third, NEW_ROUND_TWO_ONLY)

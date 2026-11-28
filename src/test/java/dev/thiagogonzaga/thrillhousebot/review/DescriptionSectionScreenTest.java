@@ -309,13 +309,13 @@ class DescriptionSectionScreenTest {
             + "not in the section\n";
 
     assertEquals(
-        Set.of(PrSummaryGenerator.findingBullet(refresh)),
-        DescriptionGapCarryover.previousFindingBullets(List.of(summaryComment(body)), BOT));
-    assertEquals(Set.of(), DescriptionGapCarryover.previousFindingBullets(List.of(), BOT));
+        Set.of(PrSummaryGenerator.findingReference(refresh)),
+        DescriptionGapCarryover.previousFindingReferences(List.of(summaryComment(body)), BOT));
+    assertEquals(Set.of(), DescriptionGapCarryover.previousFindingReferences(List.of(), BOT));
     // A section that runs to the end of the comment.
     assertEquals(
-        Set.of(PrSummaryGenerator.findingBullet(refresh)),
-        DescriptionGapCarryover.previousFindingBullets(
+        Set.of(PrSummaryGenerator.findingReference(refresh)),
+        DescriptionGapCarryover.previousFindingReferences(
             List.of(
                 summaryComment(
                     PrSummaryGenerator.GAPS_HEADING
@@ -324,7 +324,7 @@ class DescriptionSectionScreenTest {
             BOT));
     assertEquals(
         Set.of(),
-        DescriptionGapCarryover.previousFindingBullets(
+        DescriptionGapCarryover.previousFindingReferences(
             List.of(summaryComment(PrSummaryGenerator.SUMMARY_HEADING + "\n")), BOT));
   }
 
@@ -343,7 +343,7 @@ class DescriptionSectionScreenTest {
             List.of(),
             List.of(refresh),
             new PrSummaryGenerator.DescriptionSources(
-                ANGULAR_251, Set.of(PrSummaryGenerator.findingBullet(refresh))));
+                ANGULAR_251, Set.of(PrSummaryGenerator.findingReference(refresh))));
 
     assertEquals(List.of(), withoutCarry);
     assertEquals(List.of(refresh), carried);

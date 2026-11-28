@@ -5118,13 +5118,22 @@ public class FollowUpAnalyzer {
     var out = new ArrayList<String>(lines.size());
     var index = 0;
     while (index < lines.size()) {
+      var current = lines.get(index).strip();
       var deltaEnd = FollowUpDeltaSummary.endOfSection(lines, index);
-      if (deltaEnd > index) {
+      if (current.equals(ReadBackMarkers.PREVIOUS_START)) {
+        index = skipWhile(lines, index, at -> !at.strip().equals(ReadBackMarkers.PREVIOUS_END));
+        index = skipWhile(lines, Math.min(index + 1, lines.size()), String::isBlank);
+        if (!out.isEmpty() && index < lines.size()) {
+          out.add("");
+        }
+      } else if (current.equals(ReadBackMarkers.STATUS)) {
+        index++;
+      } else if (deltaEnd > index) {
         index = skipWhile(lines, deltaEnd, String::isBlank);
         if (!out.isEmpty() && index < lines.size()) {
           out.add("");
         }
-      } else if (isNamedListLeadIn(lines.get(index).strip())) {
+      } else if (isNamedListLeadIn(current)) {
         index++;
         index = skipWhile(lines, index, String::isBlank);
         index = skipWhile(lines, index, line -> line.strip().startsWith("- "));
@@ -5153,7 +5162,8 @@ public class FollowUpAnalyzer {
    * about its own verdict would be handed back to it as an issue to account for, and re-counted
    * every round (#455). The bot must never treat its own output as its input.
    *
-   * <p>Recognition is by the body's first non-blank line against the producers' own constants — the
+   * <p>Recognition is by the body's first non-blank line: a {@link ReadBackMarkers} line, or, for a
+   * body posted before the markers existed (#1260), the producers' own English constants — the
    * unresolved-previous status sentence, the closed-findings section (#737), the clean-review
    * message, the two CI-hold notices, and the partial-review banner — so the check cannot drift
    * from the text it recognizes. The closed-findings section is the sharpest case of the rule: it
@@ -5167,7 +5177,9 @@ public class FollowUpAnalyzer {
       return true;
     }
     var line = first.get();
-    return ReviewResult.isUnresolvedPreviousMessage(line)
+    return line.equals(ReadBackMarkers.STATUS)
+        || line.equals(ReadBackMarkers.PREVIOUS_START)
+        || ReviewResult.isUnresolvedPreviousMessage(line)
         || line.equals(FollowUpDeltaSummary.DELTA_HEADING)
         || isNamedListLeadIn(line)
         || line.startsWith(ReviewResult.NO_ISSUES_CI_PENDING_LEAD_IN)

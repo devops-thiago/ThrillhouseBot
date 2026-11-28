@@ -248,11 +248,12 @@ public class CiHoldRevisit {
    * was gated, matching the check-run copy.
    */
   static String approvalBody(String headSha, boolean requiredContextsKnown) {
-    return (requiredContextsKnown ? "Required CI" : "CI")
-        + " is now green for "
-        + headSha
-        + ", so the approval the earlier review held back is posted. The code was not"
-        + " re-reviewed: that review found no issues, and only the CI gate held its approval.";
+    return ReadBackMarkers.status(
+        (requiredContextsKnown ? "Required CI" : "CI")
+            + " is now green for "
+            + headSha
+            + ", so the approval the earlier review held back is posted. The code was not"
+            + " re-reviewed: that review found no issues, and only the CI gate held its approval.");
   }
 
   /**

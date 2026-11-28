@@ -199,8 +199,10 @@ class BatchedInlineReviewTest {
     var submit = ArgumentCaptor.forClass(GitHubReviewClient.SubmitReviewRequest.class);
     verify(reviewClient).submitReview(any(), any(), any(), any(), eq(7), eq(99L), submit.capture());
     assertEquals(
-        "ThrillhouseBot review" + ReviewPublisher.BATCHED_INLINE_BODY_SUFFIX,
+        ReadBackMarkers.status(
+            "ThrillhouseBot review" + ReviewPublisher.BATCHED_INLINE_BODY_SUFFIX),
         submit.getValue().body());
+    assertTrue(FollowUpAnalyzer.isSelfAuthoredStatusBody(submit.getValue().body()));
     assertEquals("COMMENT", submit.getValue().event());
   }
 
@@ -220,7 +222,8 @@ class BatchedInlineReviewTest {
   @Test
   void batchedSubmitBodyUsesTheDefaultsOnlyWhenProseIsEmpty() {
     assertEquals(
-        "ThrillhouseBot requested changes" + ReviewPublisher.BATCHED_INLINE_BODY_SUFFIX,
+        ReadBackMarkers.status(
+            "ThrillhouseBot requested changes" + ReviewPublisher.BATCHED_INLINE_BODY_SUFFIX),
         ReviewPublisher.batchedReviewSubmitBody(List.of(), "REQUEST_CHANGES"));
     assertEquals("a\n\nb", ReviewPublisher.batchedReviewSubmitBody(List.of("a", "b"), "COMMENT"));
   }

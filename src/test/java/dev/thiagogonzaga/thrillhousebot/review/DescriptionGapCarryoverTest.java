@@ -157,6 +157,37 @@ class DescriptionGapCarryoverTest {
     }
 
     @Test
+    void aBulletQuotingAMarkerInCodeIsStillAGap() {
+      var finding = "The docs say `" + ReadBackMarkers.GAP_FINDING + "` is never written";
+      var criterion = "`" + ReadBackMarkers.GAP_CRITERION_FINDING + "` is not documented";
+      var body =
+          PrSummaryGenerator.GAPS_HEADING
+              + "\nintro:\n- "
+              + finding
+              + "\n- "
+              + criterion
+              + "\n\n### Changes Overview\n";
+
+      assertEquals(List.of(finding, criterion), DescriptionGapCarryover.listedGaps(body));
+    }
+
+    @Test
+    void aBulletEndingInASingleMarkerNamesNoFinding() {
+      var body =
+          PrSummaryGenerator.SUMMARY_MARKER
+              + "\n"
+              + PrSummaryGenerator.GAPS_HEADING
+              + "\nintro:\n- The docs never mention "
+              + ReadBackMarkers.GAP_FINDING
+              + "\n\n### Changes Overview\n";
+
+      var conversation = List.of(comment("thrillhousebot[bot]", body));
+
+      assertEquals(
+          java.util.Set.of(), DescriptionGapCarryover.previousFindingReferences(conversation, BOT));
+    }
+
+    @Test
     void aGapWrappedOntoASecondLineIsReadWhole() {
       var body = PrSummaryGenerator.GAPS_HEADING + "\nintro:\n- first half\nsecond half\n\n---\n";
 
@@ -506,8 +537,11 @@ class DescriptionGapCarryoverTest {
     private static final String FINDING_BULLET =
         "- "
             + PrSummaryGenerator.GAP_FINDING_PREFIX
+            + ReadBackMarkers.GAP_FINDING
             + "PAYMENT_API_KEY is hardcoded instead of read from the environment"
-            + " (`python/marketplace/config.py:5`)\n";
+            + " (`python/marketplace/config.py:5`)"
+            + ReadBackMarkers.GAP_FINDING
+            + "\n";
 
     private String render(ReviewResponse.Summary aiSummary) {
       var result =
@@ -561,6 +595,39 @@ class DescriptionGapCarryoverTest {
                   summary(List.of(), List.of("G1: service.py now rejects a ninth listing"))));
       assertFalse(round3.contains(CAP_GAP), round3);
       assertFalse(round3.contains(PrSummaryGenerator.GAPS_HEADING), round3);
+    }
+
+    @Test
+    void theGapsSurviveARoundThatWordsTheSectionDifferently() {
+      var round1 =
+          reworded(
+              render(
+                  new DescriptionGapCarryover.Carry(List.of(), LINKED_113)
+                      .apply(summary(List.of(CAP_GAP), List.of()))));
+      var carry =
+          DescriptionGapCarryover.of(
+              List.of(comment("thrillhousebot[bot]", posted(round1))), BOT, LINKED_113);
+      assertEquals(List.of(CAP_GAP), carry.gaps());
+
+      var round2 = reworded(render(carry.apply(summary(List.of(RESTATING_GAP), List.of()))));
+      var conversation = List.of(comment("thrillhousebot[bot]", posted(round2)));
+
+      assertEquals(
+          List.of(CAP_GAP), DescriptionGapCarryover.of(conversation, BOT, LINKED_113).gaps());
+      assertEquals(
+          java.util.Set.of(
+              "PAYMENT_API_KEY is hardcoded instead of read from the environment"
+                  + " (`python/marketplace/config.py:5`)"),
+          DescriptionGapCarryover.previousFindingReferences(conversation, BOT));
+    }
+
+    private static String reworded(String rendered) {
+      var other =
+          rendered
+              .replace(PrSummaryGenerator.GAPS_HEADING, "### ⚠️ Descrição vs. Implementação")
+              .replace(PrSummaryGenerator.GAP_FINDING_PREFIX, "Relatado como achado abaixo: ");
+      assertFalse(other.contains(PrSummaryGenerator.GAPS_HEADING), other);
+      return other;
     }
 
     @Test

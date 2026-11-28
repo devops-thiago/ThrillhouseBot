@@ -102,9 +102,14 @@ class FollowUpDeltaSummaryTest {
         "medium", "medium", file, line, title, "description", null, null);
   }
 
+  /** The section's lines as a release before the markers posted them (#1260). */
+  private static List<String> englishOnly(String body) {
+    return body.lines().filter(line -> !line.startsWith("<!-- thrillhousebot:")).toList();
+  }
+
   /** The section's lines, and where {@link FollowUpDeltaSummary#endOfSection} ends it. */
   private static String lastLineOfSection(String body) {
-    var lines = List.of(body.split("\n", -1));
+    var lines = englishOnly(body);
     return lines.get(FollowUpDeltaSummary.endOfSection(lines, 0) - 1);
   }
 
@@ -302,12 +307,16 @@ class FollowUpDeltaSummaryTest {
             - **Previous findings still open:** 1
             """),
         body);
-    var lines = List.of(body.split("\n", -1));
+    var lines = englishOnly(body);
     var end = FollowUpDeltaSummary.endOfSection(lines, 0);
     assertTrue(lines.get(end - 1).startsWith("- **Previous findings still open:** 1"), body);
     assertTrue(
         ClosedFindingNames.reviewBodySection(result, List.of(gone))
-            .startsWith(ClosedFindingNames.REVIEW_BODY_LEAD_IN + "2 previous finding(s)"));
+            .startsWith(
+                ReadBackMarkers.PREVIOUS_START
+                    + "\n"
+                    + ClosedFindingNames.REVIEW_BODY_LEAD_IN
+                    + "2 previous finding(s)"));
   }
 
   @Test
@@ -320,7 +329,9 @@ class FollowUpDeltaSummaryTest {
 
     var body = render(result).orElseThrow();
 
-    assertTrue(body.startsWith(FollowUpDeltaSummary.DELTA_HEADING), body);
+    assertTrue(
+        body.startsWith(ReadBackMarkers.PREVIOUS_START + "\n" + FollowUpDeltaSummary.DELTA_HEADING),
+        body);
     assertTrue(body.contains("**New findings this round:** 2"), body);
     assertTrue(body.contains("**Previous findings resolved:** 0"), body);
     assertTrue(body.contains("**Previous findings still open:** 1"), body);
