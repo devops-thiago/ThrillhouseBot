@@ -45,8 +45,8 @@ final class OpenFindingNames {
 
   static final String NEW_THREAD_MARK = " _(thread posted with this review)_";
 
-  /** Room kept for the line saying how many rows were left out. */
-  private static final int REMAINDER_RESERVE = 100;
+  /** Room kept for the line saying how many rows were left out, and for the end marker. */
+  private static final int REMAINDER_RESERVE = 100 + ReadBackMarkers.PREVIOUS_END.length();
 
   private OpenFindingNames() {}
 
@@ -72,13 +72,18 @@ final class OpenFindingNames {
     if (open.isEmpty()) {
       return "";
     }
-    var leadIn = REVIEW_BODY_LEAD_IN + open.size() + " previous finding(s) as open:\n\n";
+    var leadIn =
+        ReadBackMarkers.PREVIOUS_START
+            + "\n"
+            + REVIEW_BODY_LEAD_IN
+            + open.size()
+            + " previous finding(s) as open:\n\n";
     var rows =
         open.stream()
             .sorted(Comparator.comparing(Finding::risk))
             .map(finding -> row(finding, threads))
             .toList();
-    var all = leadIn + String.join("", rows);
+    var all = leadIn + String.join("", rows) + ReadBackMarkers.PREVIOUS_END;
     if (all.length() <= maxLength) {
       return all;
     }
@@ -91,6 +96,7 @@ final class OpenFindingNames {
     return sb.append("- …and ")
         .append(rows.size() - listed)
         .append(" more that do not fit within GitHub's comment length limit\n")
+        .append(ReadBackMarkers.PREVIOUS_END)
         .toString();
   }
 

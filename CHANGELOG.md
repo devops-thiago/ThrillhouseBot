@@ -83,6 +83,12 @@ cannot resolve its review threads.
   writes no file, commit or branch.
 - **A GitHub Enterprise setup guide**: `docs/GITHUB_ENTERPRISE.md` and a docs-site page say which
   GitHub Enterprise products work and what to set up on GitHub for an organization (#1488).
+- **The bot finds its own earlier output by hidden marker, not by its English wording** (#1260):
+  review bodies and the summary comment now carry HTML comments that say which part is a status
+  line, which names earlier findings and which lists description gaps. A later round reads those,
+  so a heading or lead-in can be worded differently without losing what the earlier round said.
+  Comments posted before this change are still read, and nothing you see on GitHub changes.
+
 ### Fixed
 
 - **A finding cleared from the PR conversation is not raised again on an unchanged file**

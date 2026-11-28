@@ -86,10 +86,13 @@ final class ClosedFindingNames {
     if (bullets.isEmpty()) {
       return "";
     }
-    return REVIEW_BODY_LEAD_IN
+    return ReadBackMarkers.PREVIOUS_START
+        + "\n"
+        + REVIEW_BODY_LEAD_IN
         + (result.resolvedPreviousCount() + result.supersededPreviousCount())
         + " previous finding(s) this round:\n\n"
-        + bullets;
+        + bullets
+        + ReadBackMarkers.PREVIOUS_END;
   }
 
   /**
