@@ -26,10 +26,13 @@ import java.net.http.HttpClient;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 import org.kohsuke.github.GHArtifact;
 import org.kohsuke.github.GHException;
+import org.kohsuke.github.GHLabel;
 import org.kohsuke.github.GHRepository;
 import org.kohsuke.github.GHWorkflowRun;
 import org.kohsuke.github.GitHub;
@@ -74,8 +77,17 @@ public class GitHubTokenReads {
   /** Artifacts listed per run; GitHub's maximum page size, so one call covers any real run. */
   static final int ARTIFACTS_PER_PAGE = 100;
 
+  static final int LABELS_PER_PAGE = 100;
+
+  /** Past this many, every cached repository is dropped: tokens are replaced within the hour. */
+  static final int MAX_CACHED_REPOSITORIES = 64;
+
   private final String apiUrl;
   private final GitHubAppConnector connector;
+  private final Map<RepositoryKey, GHRepository> readRepositories = new ConcurrentHashMap<>();
+
+  /** A repository object is bound to the client, and so to the token, that read it. */
+  private record RepositoryKey(String credential, String slug) {}
 
   @Inject
   public GitHubTokenReads(HttpClient httpClient, ThrillhouseConfig config) {
@@ -158,6 +170,71 @@ public class GitHubTokenReads {
     } catch (IOException | GHException e) {
       throw unreadable(e);
     }
+  }
+
+  /**
+   * The repository's labels, healing a rejected credential once (#626), in pages of {@value
+   * #LABELS_PER_PAGE} up to {@code maxPages}.
+   */
+  public List<GitHubLabelClient.Label> repositoryLabels(
+      String auth, String owner, String repo, int maxPages) {
+    var slug = owner + "/" + repo;
+    return GitHubTokenRefresh.SHARED.retrying(
+        "labels of " + slug, auth, credential -> labels(credential, slug, maxPages));
+  }
+
+  private List<GitHubLabelClient.Label> labels(String auth, String slug, int maxPages) {
+    try {
+      var pages = repository(auth, slug).listLabels().withPageSize(LABELS_PER_PAGE).iterator();
+      var labels = new ArrayList<GitHubLabelClient.Label>();
+      for (var page = 0; page < maxPages && pages.hasNext(); page++) {
+        for (var label : pages.nextPage()) {
+          labels.add(label(label));
+        }
+      }
+      return labels;
+    } catch (IOException | GHException e) {
+      throw unreadable(e);
+    }
+  }
+
+  /**
+   * Every label on a pull request or issue, healing a rejected credential once (#626). GitHub
+   * returns them all with the issue itself.
+   */
+  public List<GitHubLabelClient.Label> issueLabels(
+      String auth, String owner, String repo, int issueNumber) {
+    var slug = owner + "/" + repo;
+    return GitHubTokenRefresh.SHARED.retrying(
+        "labels of " + slug + "#" + issueNumber,
+        auth,
+        credential -> {
+          try {
+            return repository(credential, slug).getIssue(issueNumber).getLabels().stream()
+                .map(GitHubTokenReads::label)
+                .toList();
+          } catch (IOException | GHException e) {
+            throw unreadable(e);
+          }
+        });
+  }
+
+  /**
+   * The repository, read once per credential: hub4j needs it before it can read anything inside it,
+   * which would otherwise double the requests of every such read.
+   */
+  GHRepository repository(String auth, String slug) throws IOException {
+    var key = new RepositoryKey(auth, slug);
+    var known = readRepositories.get(key);
+    if (known != null) {
+      return known;
+    }
+    var repository = client(auth).getRepository(slug);
+    if (readRepositories.size() >= MAX_CACHED_REPOSITORIES) {
+      readRepositories.clear();
+    }
+    readRepositories.put(key, repository);
+    return repository;
   }
 
   /**
@@ -299,12 +376,16 @@ public class GitHubTokenReads {
         createdAt == null ? null : createdAt.toInstant());
   }
 
+  private static GitHubLabelClient.Label label(GHLabel label) {
+    return new GitHubLabelClient.Label(label.getName(), label.getDescription(), label.getColor());
+  }
+
   private static <T> List<T> firstPage(PagedIterator<T> pages) {
     return pages.hasNext() ? pages.nextPage() : List.of();
   }
 
   /** An answer hub4j could not read, without the cause: its message can quote the response. */
-  private static ProcessingException unreadable(Exception e) {
+  static ProcessingException unreadable(Exception e) {
     return new ProcessingException(
         "GitHub App request returned an unreadable answer (" + e.getClass().getSimpleName() + ")");
   }

@@ -129,7 +129,7 @@ public class DocGenerationService extends AbstractPrSuggestionGenerator {
   @Inject
   public DocGenerationService(
       GitHubAuthClient authClient,
-      @RestClient GitHubPullRequestClient prClient,
+      GitHubPullRequestClient prClient,
       @RestClient GitHubReviewClient reviewClient,
       @RestClient GitHubCommentClient commentClient,
       ReviewDiffFormatter diffFormatter,

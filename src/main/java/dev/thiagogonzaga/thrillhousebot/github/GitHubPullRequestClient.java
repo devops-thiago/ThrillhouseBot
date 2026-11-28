@@ -15,16 +15,14 @@
  */
 package dev.thiagogonzaga.thrillhousebot.github;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
-import jakarta.ws.rs.*;
-import jakarta.ws.rs.core.MediaType;
-import java.util.ArrayList;
 import java.util.List;
-import org.eclipse.microprofile.rest.client.annotation.RegisterProvider;
-import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 
-@RegisterRestClient(configKey = "github-api")
-@RegisterProvider(GitHubErrorLogger.class)
+/**
+ * The reads of a pull request and the repository it changes, made with an installation token the
+ * caller already holds. {@link GitHubPullRequestReads} makes each one through hub4j. The {@code
+ * Once} methods make one attempt; callers use the others, which heal a rejected credential (#626).
+ * The {@code accept} argument is not sent: hub4j chooses the media type.
+ */
 public interface GitHubPullRequestClient {
 
   // GitHub serves 30 PR files per page by default (100 max) and caps listings at 3000 files.
@@ -32,15 +30,8 @@ public interface GitHubPullRequestClient {
   int MAX_FILE_PAGES = 30;
 
   /** One HTTP attempt at reading a PR. Callers want {@link #getPullRequest} instead. */
-  @GET
-  @Path("/repos/{owner}/{repo}/pulls/{pullNumber}")
-  @Produces(MediaType.APPLICATION_JSON)
   PullRequestDetails getPullRequestOnce(
-      @HeaderParam("Authorization") String auth,
-      @HeaderParam("Accept") String accept,
-      @PathParam("owner") String owner,
-      @PathParam("repo") String repo,
-      @PathParam("pullNumber") int pullNumber);
+      String auth, String accept, String owner, String repo, int pullNumber);
 
   /**
    * Reads a PR, minting a fresh installation token and repeating the GET once when GitHub rejects
@@ -56,67 +47,26 @@ public interface GitHubPullRequestClient {
         credential -> getPullRequestOnce(credential, accept, owner, repo, pullNumber));
   }
 
-  /** One HTTP attempt at a files page. Callers want {@link #getPullRequestFilesPage} instead. */
-  @GET
-  @Path("/repos/{owner}/{repo}/pulls/{pullNumber}/files")
-  @Produces(MediaType.APPLICATION_JSON)
-  List<FileDiff> getPullRequestFilesPageOnce(
-      @HeaderParam("Authorization") String auth,
-      @HeaderParam("Accept") String accept,
-      @PathParam("owner") String owner,
-      @PathParam("repo") String repo,
-      @PathParam("pullNumber") int pullNumber,
-      @QueryParam("per_page") int perPage,
-      @QueryParam("page") int page);
-
-  /** One page of a PR's files, healing a rejected credential per page (#626). */
-  default List<FileDiff> getPullRequestFilesPage(
-      String auth,
-      String accept,
-      String owner,
-      String repo,
-      int pullNumber,
-      int perPage,
-      int page) {
-    return GitHubTokenRefresh.SHARED.retrying(
-        "PR files page " + page + " of " + owner + "/" + repo + "#" + pullNumber,
-        auth,
-        credential ->
-            getPullRequestFilesPageOnce(
-                credential, accept, owner, repo, pullNumber, perPage, page));
-  }
+  /** One attempt at the whole file listing. Callers want {@link #getPullRequestFiles} instead. */
+  List<FileDiff> getPullRequestFilesOnce(
+      String auth, String accept, String owner, String repo, int pullNumber);
 
   /**
-   * Every changed file in the PR, walking pages of {@value #FILES_PER_PAGE} up to {@value
+   * Every changed file in the PR, in pages of {@value #FILES_PER_PAGE} up to {@value
    * #MAX_FILE_PAGES} pages. Without pagination GitHub returns only the first 30 files, silently
    * truncating the diff (and therefore the review) for larger PRs.
    */
   default List<FileDiff> getPullRequestFiles(
       String auth, String accept, String owner, String repo, int pullNumber) {
-    var all = new ArrayList<FileDiff>();
-    List<FileDiff> batch;
-    int page = 1;
-    do {
-      batch = getPullRequestFilesPage(auth, accept, owner, repo, pullNumber, FILES_PER_PAGE, page);
-      if (batch != null) {
-        all.addAll(batch);
-      }
-      page++;
-    } while (batch != null && batch.size() == FILES_PER_PAGE && page <= MAX_FILE_PAGES);
-    return all;
+    return GitHubTokenRefresh.SHARED.retrying(
+        "PR files of " + owner + "/" + repo + "#" + pullNumber,
+        auth,
+        credential -> getPullRequestFilesOnce(credential, accept, owner, repo, pullNumber));
   }
 
   /** One HTTP attempt at a comparison. Callers want {@link #compareCommits} instead. */
-  @GET
-  @Path("/repos/{owner}/{repo}/compare/{base}...{head}")
-  @Produces(MediaType.APPLICATION_JSON)
   CompareResponse compareCommitsOnce(
-      @HeaderParam("Authorization") String auth,
-      @HeaderParam("Accept") String accept,
-      @PathParam("owner") String owner,
-      @PathParam("repo") String repo,
-      @PathParam("base") String base,
-      @PathParam("head") String head);
+      String auth, String accept, String owner, String repo, String base, String head);
 
   /** Compares two commits, healing a rejected credential once (#626). */
   default CompareResponse compareCommits(
@@ -128,16 +78,8 @@ public interface GitHubPullRequestClient {
   }
 
   /** One HTTP attempt at reading a file. Callers want {@link #getFileContent} instead. */
-  @GET
-  @Path("/repos/{owner}/{repo}/contents/{path}")
-  @Produces(MediaType.APPLICATION_JSON)
   FileContent getFileContentOnce(
-      @HeaderParam("Authorization") String auth,
-      @HeaderParam("Accept") String accept,
-      @PathParam("owner") String owner,
-      @PathParam("repo") String repo,
-      @PathParam("path") String path,
-      @QueryParam("ref") String ref);
+      String auth, String accept, String owner, String repo, String path, String ref);
 
   /**
    * Reads one file's content at a ref, healing a rejected credential once (#626). The path comes
@@ -174,22 +116,14 @@ public interface GitHubPullRequestClient {
   }
 
   /**
-   * The repository's file listing at a ref, in one call. {@code recursive=1} walks every directory
-   * so a caller can locate a file by name without probing paths; GitHub caps the response and sets
-   * {@code truncated} when it did.
+   * The repository's file listing at a ref. {@code recursive=1} walks every directory so a caller
+   * can locate a file by name without probing paths; GitHub caps the response and sets {@code
+   * truncated} when it did.
    *
    * @param treeSha a tree SHA, commit SHA, branch or tag name
    */
-  @GET
-  @Path("/repos/{owner}/{repo}/git/trees/{treeSha}")
-  @Produces(MediaType.APPLICATION_JSON)
   TreeResponse getTreeOnce(
-      @HeaderParam("Authorization") String auth,
-      @HeaderParam("Accept") String accept,
-      @PathParam("owner") String owner,
-      @PathParam("repo") String repo,
-      @PathParam("treeSha") String treeSha,
-      @QueryParam("recursive") String recursive);
+      String auth, String accept, String owner, String repo, String treeSha, String recursive);
 
   /** Reads a tree listing, healing a rejected credential once (#626). */
   default TreeResponse getTree(
@@ -205,7 +139,7 @@ public interface GitHubPullRequestClient {
       String body,
       Ref head,
       Ref base,
-      @JsonProperty("changed_files") int changedFiles,
+      int changedFiles,
       int additions,
       int deletions,
       // open or closed (a merged pull request is closed); null when GitHub gives none.
@@ -240,7 +174,7 @@ public interface GitHubPullRequestClient {
       int deletions,
       int changes,
       String patch,
-      @JsonProperty("previous_filename") String previousFilename,
+      String previousFilename,
       // The file's blob SHA at the pull request's head (#1319); null when GitHub gives none.
       String sha) {
 
@@ -269,8 +203,7 @@ public interface GitHubPullRequestClient {
    * comparison, {@code files} is the change from their merge base, which is the change from the
    * base only when the head is {@code ahead} of it or {@code identical} to it.
    */
-  record CompareResponse(
-      @JsonProperty("total_commits") int totalCommits, List<FileDiff> files, String status) {
+  record CompareResponse(int totalCommits, List<FileDiff> files, String status) {
     public CompareResponse {
       files = files == null ? List.of() : List.copyOf(files);
     }
