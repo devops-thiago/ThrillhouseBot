@@ -437,11 +437,37 @@ class ApprovalOnPushTest {
                 .readTree(
                     """
                     {"data":{"repository":{"pullRequest":{"reviews":{"nodes":[
-                      {"databaseId":1,"commit":{"oid":"sha1"}}]}}}}}"""));
+                      {"databaseId":1,"commit":{"oid":"sha1"}}]},"dismissed":{"nodes":[]}}}}}"""));
 
     approvalOnPush.withdraw(PUSH);
 
     verifyDismissed(1L, "sha2");
+  }
+
+  @Test
+  void dismissedApprovalOlderThanTheListedReviewsMakesTheRateWindowForgetTheCoveredHead()
+      throws Exception {
+    limiter.recordCompletion("o", "r", 1, "sha1");
+    when(reviewClient.listReviews("auth", ACCEPT, "o", "r", 1))
+        .thenReturn(
+            Collections.nCopies(
+                ReviewListing.MAX_LISTED_REVIEWS, review(9L, "COMMENTED", "sha1", "someone")));
+    // GitHub dismissed the approval on the push, and the listing no longer reaches back to it.
+    when(graphQLClient.execute(eq("auth"), any()))
+        .thenReturn(
+            new ObjectMapper()
+                .readTree(
+                    """
+                    {"data":{"repository":{"pullRequest":{"reviews":{"nodes":[]},
+                      "dismissed":{"nodes":[{"databaseId":1,"commit":{"oid":"sha1"}}]}}}}}"""));
+
+    approvalOnPush.withdraw(PUSH);
+
+    verifyNothingDismissed();
+    assertEquals(
+        OptionalLong.of(1_000 + WINDOW_MS),
+        limiter.hold("o", "r", 1, "sha1").reviewDueAt(),
+        "a return to sha1 is reviewed when the window closes");
   }
 
   @Test

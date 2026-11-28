@@ -67,12 +67,19 @@ class ReviewListingTest {
   }
 
   private void approvalsBy(String login, String nodes) throws JsonProcessingException {
+    ownReviewsBy(login, nodes, "");
+  }
+
+  private void ownReviewsBy(String login, String approved, String dismissed)
+      throws JsonProcessingException {
     when(graphQLClient.execute(
             eq("auth"), argThat(request -> login.equals(request.variables().get("author")))))
         .thenReturn(
             json(
                 "{\"data\":{\"repository\":{\"pullRequest\":{\"reviews\":{\"nodes\":["
-                    + nodes
+                    + approved
+                    + "]},\"dismissed\":{\"nodes\":["
+                    + dismissed
                     + "]}}}}}"));
   }
 
@@ -121,6 +128,41 @@ class ReviewListingTest {
     assertEquals(
         List.of(4L, 9L, 6_098_573_170L), all.stream().limit(3).map(ReviewResponse::id).toList());
     assertEquals(OTHER_BOT, all.getFirst().user().login());
+  }
+
+  @Test
+  void dismissedReviewOfTheBotsFromBeforeTheListedReviewsIsPutInFrontAsDismissed()
+      throws Exception {
+    var listed = fullListing();
+    ownReviewsBy(
+        BOT,
+        "{\"databaseId\":8,\"commit\":{\"oid\":\"sha2\"}}",
+        "{\"databaseId\":7,\"commit\":{\"oid\":\"sha1\"}}");
+    approvalsBy(OTHER_BOT, "");
+
+    var all = listing.list("auth", "o", "r", 1);
+
+    assertEquals(listed.size() + 2, all.size());
+    assertEquals(7L, all.getFirst().id());
+    assertEquals("DISMISSED", all.getFirst().state());
+    assertEquals("sha1", all.getFirst().commitId());
+    assertEquals(BOT, all.getFirst().user().login());
+    assertEquals("APPROVED", all.get(1).state());
+    assertEquals(listed, all.subList(2, all.size()));
+  }
+
+  @Test
+  void answerWithoutTheDismissedReviewsIsAFailedRead() throws Exception {
+    var listed = fullListing();
+    when(graphQLClient.execute(eq("auth"), any()))
+        .thenReturn(
+            json("{\"data\":{\"repository\":{\"pullRequest\":{\"reviews\":{\"nodes\":[]}}}}}"));
+
+    try (var log = CapturedLog.of(ReviewListing.class)) {
+      assertSame(listed, listing.list("auth", "o", "r", 1));
+
+      assertEquals(1, log.at(Level.WARNING).size(), log.at(Level.WARNING).toString());
+    }
   }
 
   @Test
