@@ -214,9 +214,6 @@ cannot resolve its review threads.
 - **An environment read named in a docstring is not a read (#1473)**: a read named inside a
   multi-line docstring or block comment counted as one when the bot chose which changed files to
   fetch for configuration-key context.
-  and reviews it when the window closes. A reopen or a repeated ready-for-review of the commit
-  just reviewed is still skipped. The waiting review is held in memory: a restart loses it, and a
-  push is still skipped when 10,000 pull requests already have a review waiting.
 
 ### Security
 
