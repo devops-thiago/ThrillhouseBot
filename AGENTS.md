@@ -504,7 +504,11 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   `identical` to it; a diverged (force-pushed) history, a failed call, a listing at GitHub's
   300-file cap, a history whose heads do not line up with its responses, and carried findings
   (#806) all answer `UNKNOWN`, and then everything behaves as before. A pure rename (no changes)
-  is unchanged. The order: a file `UNCHANGED` since the raising round is open, never superseded,
+  is unchanged. The comparison's patches also give the lines added since a round
+  (`RoundChanges.addedLinesSince`, unknown for a file listed with no patch): a re-raised finding
+  is a gap its prior's fix left (`FollowUpAnalyzer.leftByFix`, #1388) only when its quote reaches
+  a line added since the round that raised the prior, and a quote on older lines is dropped as a
+  replied duplicate; lines not known keep the finding. The order: a file `UNCHANGED` since the raising round is open, never superseded,
   never model-resolved and never asked about (`isStillOpen`, `unchangedSince`, `hasVanished`,
   `addUnreportedVanished`), unless another changed file its title or description names (by path,
   or by a file name with an extension no other changed file shares) changed since that round

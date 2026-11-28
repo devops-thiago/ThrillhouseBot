@@ -25,6 +25,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 class StoredRoundChangesTest {
@@ -59,6 +60,35 @@ class StoredRoundChangesTest {
 
     assertEquals(FileChange.UNCHANGED, changes.since(1, FILE), "the SHA case does not matter");
     assertEquals(FileChange.CHANGED, changes.since(1, OTHER));
+  }
+
+  @Test
+  void noLineOfAFileWithTheSameBlobWasAddedAndAnyOtherFileIsTheFallbacksAnswer() {
+    var fallback =
+        new DiffLineResolver.RoundChanges() {
+          @Override
+          public FileChange since(int round, String path) {
+            return FileChange.CHANGED;
+          }
+
+          @Override
+          public Optional<Set<Integer>> addedLinesSince(int round, String path) {
+            return Optional.of(Set.of(7));
+          }
+        };
+    var changes =
+        new StoredRoundChanges(
+            List.of(row("k1", FILE, HEAD_1, "blob-1", null), row("k2", OTHER, HEAD_1, "b-1", null)),
+            List.of(HEAD_2, HEAD_1),
+            Map.of(FILE, "blob-1", OTHER, "b-2"),
+            fallback);
+
+    assertEquals(Optional.of(Set.of()), changes.addedLinesSince(1, FILE));
+    assertEquals(Optional.of(Set.of(7)), changes.addedLinesSince(1, OTHER));
+    assertEquals(
+        Optional.empty(),
+        DiffLineResolver.RoundChanges.NONE.addedLinesSince(0, FILE),
+        "nothing is known without a comparison");
   }
 
   @Test

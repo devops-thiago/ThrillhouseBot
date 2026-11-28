@@ -26,6 +26,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 
@@ -171,8 +172,8 @@ class GapLeftByFixTest {
     var larger = finding(272, gap.title(), "    for (var entry : referred) {\n" + PRIOR_QUOTE);
     var part = finding(272, gap.title(), "entry.members.addAll(members)");
 
-    assertFalse(FollowUpAnalyzer.leftByFix(larger, prior, resolvedNow));
-    assertFalse(FollowUpAnalyzer.leftByFix(part, prior, resolvedNow));
+    assertFalse(FollowUpAnalyzer.leftByFix(larger, prior, 0, resolvedNow));
+    assertFalse(FollowUpAnalyzer.leftByFix(part, prior, 0, resolvedNow));
   }
 
   @Test
@@ -200,17 +201,18 @@ class GapLeftByFixTest {
             "    var referred = candidates(changed);\n    for (var entry : referred) {");
     var elsewhere = finding(272, gap.title(), "    return namedAfter(receiver, other);");
 
-    assertTrue(FollowUpAnalyzer.leftByFix(reaching, prior, fixes));
-    assertTrue(FollowUpAnalyzer.leftByFix(elsewhere, prior, fixes));
+    assertTrue(FollowUpAnalyzer.leftByFix(reaching, prior, 0, fixes));
+    assertTrue(FollowUpAnalyzer.leftByFix(elsewhere, prior, 0, fixes));
   }
 
   @Test
   void aFindingWithNoQuoteCannotShowItIsAboutOtherCode() {
     var resolvedNow = new FollowUpAnalyzer.Fixes(Set.of(priorKey), diff);
 
-    assertFalse(FollowUpAnalyzer.leftByFix(finding(272, gap.title(), null), prior, resolvedNow));
-    assertFalse(FollowUpAnalyzer.leftByFix(finding(272, gap.title(), " \n"), prior, resolvedNow));
-    assertTrue(FollowUpAnalyzer.leftByFix(gap, prior, resolvedNow));
+    assertFalse(FollowUpAnalyzer.leftByFix(finding(272, gap.title(), null), prior, 0, resolvedNow));
+    assertFalse(
+        FollowUpAnalyzer.leftByFix(finding(272, gap.title(), " \n"), prior, 0, resolvedNow));
+    assertTrue(FollowUpAnalyzer.leftByFix(gap, prior, 0, resolvedNow));
   }
 
   @Test
@@ -219,7 +221,7 @@ class GapLeftByFixTest {
 
     assertTrue(
         FollowUpAnalyzer.leftByFix(
-            gap, unquoted, new FollowUpAnalyzer.Fixes(Set.of(key(unquoted)), diff)));
+            gap, unquoted, 0, new FollowUpAnalyzer.Fixes(Set.of(key(unquoted)), diff)));
   }
 
   @Test
@@ -233,6 +235,82 @@ class GapLeftByFixTest {
         analyzer
             .dropRepliedDuplicates(response, json(roundOne), threads, BOT, KnownWriters.ALL, diff)
             .findings());
+  }
+
+  @Test
+  void aQuoteOfLinesAsOldAsThePriorFindingIsARestatement() throws Exception {
+    // The round that raised the prior finding already had the quoted line; the fix since then
+    // wrote lines 270 to 274 only. The newest round raised nothing and still keeps its place.
+    var since = diffKnowing(Map.of(0, Set.of(276), 1, Set.of(270, 271, 272, 273, 274)));
+    var response = new ReviewResponse(List.of(gap), List.of(status("resolved", priorKey)), null);
+
+    assertTrue(
+        analyzer
+            .dropRepliedDuplicates(response, rounds(), threads, BOT, KnownWriters.ALL, since)
+            .findings()
+            .isEmpty(),
+        "a second thread would open on the defect the maintainer already answered");
+  }
+
+  @Test
+  void aQuoteReachingALineWrittenSinceThePriorFindingIsStillAGap() throws Exception {
+    var since = diffKnowing(Map.of(0, Set.of(), 1, Set.of(275, 276)));
+    var response = new ReviewResponse(List.of(gap), List.of(status("resolved", priorKey)), null);
+    var reaching =
+        finding(274, gap.title(), "    }\n      for (var symbol : symbols) {\n" + GAP_QUOTE + "\n");
+
+    assertEquals(
+        List.of(gap),
+        analyzer
+            .dropRepliedDuplicates(response, rounds(), threads, BOT, KnownWriters.ALL, since)
+            .findings());
+    assertTrue(
+        FollowUpAnalyzer.leftByFix(
+            reaching,
+            prior,
+            1,
+            new FollowUpAnalyzer.Fixes(Set.of(priorKey), diffKnowing(Map.of(1, Set.of(275))))));
+  }
+
+  @Test
+  void aRoundWhoseChangedLinesAreNotKnownKeepsTheGap() throws Exception {
+    var response = new ReviewResponse(List.of(gap), List.of(status("resolved", priorKey)), null);
+
+    assertEquals(
+        List.of(gap),
+        analyzer
+            .dropRepliedDuplicates(
+                response, rounds(), threads, BOT, KnownWriters.ALL, diffKnowing(Map.of()))
+            .findings());
+  }
+
+  /** The newest round, which raised nothing, and then the round that raised the prior finding. */
+  private List<String> rounds() throws JsonProcessingException {
+    var mapper = new ObjectMapper();
+    return List.of(
+        mapper.writeValueAsString(new ReviewResponse(List.of(), List.of(), null)),
+        mapper.writeValueAsString(roundOne));
+  }
+
+  /** The diff, knowing the lines of the file added since each of the given prior rounds. */
+  private static DiffLineResolver diffKnowing(Map<Integer, Set<Integer>> addedSince) {
+    return new DiffLineResolver(
+        Map.of(FILE, PATCH),
+        List.of(),
+        DiffLineResolver.HeadFiles.NONE,
+        new DiffLineResolver.RoundChanges() {
+          @Override
+          public DiffLineResolver.FileChange since(int round, String path) {
+            return DiffLineResolver.FileChange.CHANGED;
+          }
+
+          @Override
+          public Optional<Set<Integer>> addedLinesSince(int round, String path) {
+            return FILE.equals(path)
+                ? Optional.ofNullable(addedSince.get(round))
+                : Optional.empty();
+          }
+        });
   }
 
   private static ReviewResponse.PreviousFindingStatus status(String status, String key) {

@@ -105,6 +105,15 @@ public final class DiffLineResolver {
     default Optional<RaisedAnchor> raisedAnchor(String key) {
       return Optional.empty();
     }
+
+    /**
+     * The lines of {@code path}, numbered as in the review's head, that were added or rewritten
+     * since the head the prior round at {@code round} reviewed; none for a file that did not
+     * change. Empty when that is not known.
+     */
+    default Optional<Set<Integer>> addedLinesSince(int round, String path) {
+      return Optional.empty();
+    }
   }
 
   /**
@@ -392,6 +401,28 @@ public final class DiffLineResolver {
     var added = byFile.get(resolveKey(file, FileSide::hasRightText)).added();
     return IntStream.rangeClosed(at.get().startLine(), at.get().endLine())
         .noneMatch(added::containsKey);
+  }
+
+  /**
+   * Whether {@code quote} sits in {@code file}'s diff ({@link #locateQuote} for {@code citedLine})
+   * on lines that are as they were at the head the prior round at {@code round} (newest first)
+   * reviewed: no line from its first to its last was added or rewritten since. {@code false} when
+   * the quote is not located or the lines changed since that round are not known ({@link
+   * RoundChanges#addedLinesSince}): nothing is known about it then.
+   */
+  public boolean quotesOnlyLinesUnchangedSince(
+      int round, String file, String quote, int citedLine) {
+    var at = locateQuote(file, quote, citedLine);
+    if (at.isEmpty()) {
+      return false;
+    }
+    return roundChanges
+        .addedLinesSince(round, resolveKey(file, FileSide::hasRightText))
+        .map(
+            added ->
+                IntStream.rangeClosed(at.get().startLine(), at.get().endLine())
+                    .noneMatch(added::contains))
+        .orElse(false);
   }
 
   /**

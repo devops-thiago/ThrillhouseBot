@@ -32,6 +32,8 @@ import dev.thiagogonzaga.thrillhousebot.review.DiffLineResolver.FileChange;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 /** Which files changed since each prior round's head (#1319), from one comparison per head. */
@@ -88,6 +90,50 @@ class RoundFileChangesTest {
     assertEquals(FileChange.CHANGED, changes.since(0, "src/Old.java"));
     assertEquals(FileChange.CHANGED, changes.since(0, "src/New.java"));
     assertEquals(FileChange.UNCHANGED, changes.since(0, "src/Was.java"));
+  }
+
+  @Test
+  void theLinesAddedSinceARoundAreThoseOfTheComparisonsPatch() {
+    compares(
+        ROUND,
+        new CompareResponse(
+            1,
+            List.of(
+                new FileDiff(
+                    "src/A.java", "modified", 2, 1, 3, "@@ -4,3 +4,4 @@\n a\n-b\n+c\n+d\n e", null),
+                new FileDiff("src/Big.bin", "modified", 0, 0, 0, null, null),
+                new FileDiff(
+                    "src/New.java", "renamed", 1, 0, 1, "@@ -1 +1,2 @@\n a\n+b", "Old.java")),
+            "ahead"));
+    var changes = changes(ROUND, HEAD, "diverged");
+
+    assertEquals(Optional.of(Set.of(5, 6)), changes.addedLinesSince(0, "src/A.java"));
+    assertEquals(Optional.of(Set.of(5, 6)), changes.addedLinesSince(0, "repo/src/A.java"));
+    assertEquals(Optional.of(Set.of(2)), changes.addedLinesSince(0, "src/New.java"));
+    assertEquals(
+        Optional.of(Set.of()), changes.addedLinesSince(0, "src/B.java"), "an unchanged file");
+    assertEquals(Optional.of(Set.of()), changes.addedLinesSince(1, "src/A.java"), "the same head");
+    assertEquals(Optional.empty(), changes.addedLinesSince(0, "src/Big.bin"), "no patch to read");
+    assertEquals(Optional.empty(), changes.addedLinesSince(0, "Old.java"), "the name it had");
+    assertEquals(Optional.empty(), changes.addedLinesSince(2, "src/A.java"), "no comparison");
+    assertEquals(Optional.empty(), changes.addedLinesSince(3, "src/A.java"), "past the rounds");
+  }
+
+  @Test
+  void aPathVariantThatFitsTwoComparedFilesHasNoKnownAddedLines() {
+    compares(
+        ROUND,
+        new CompareResponse(
+            1,
+            List.of(
+                new FileDiff("src/A.java", "modified", 1, 0, 1, "@@ -1 +1,2 @@\n a\n+b", null),
+                new FileDiff("app/src/A.java", "modified", 1, 0, 1, "@@ -7 +7,2 @@\n a\n+b", null)),
+            "ahead"));
+    var changes = changes(ROUND);
+
+    assertEquals(Optional.of(Set.of(2)), changes.addedLinesSince(0, "src/A.java"), "its own name");
+    assertEquals(Optional.of(Set.of(8)), changes.addedLinesSince(0, "app/src/A.java"));
+    assertEquals(Optional.empty(), changes.addedLinesSince(0, "repo/app/src/A.java"));
   }
 
   @Test

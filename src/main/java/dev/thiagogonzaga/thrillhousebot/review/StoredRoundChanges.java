@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Which files changed since each earlier round, read from the stored finding rows first (#1319): a
@@ -79,6 +80,17 @@ final class StoredRoundChanges implements DiffLineResolver.RoundChanges {
       return fallback.since(round, path);
     }
     return then.equalsIgnoreCase(now) ? FileChange.UNCHANGED : FileChange.CHANGED;
+  }
+
+  /**
+   * No line of a file the blobs show unchanged was added since the round. For any other file the
+   * blobs cannot say which lines changed, so the answer is {@code fallback}'s.
+   */
+  @Override
+  public Optional<Set<Integer>> addedLinesSince(int round, String path) {
+    return since(round, path) == FileChange.UNCHANGED
+        ? Optional.of(Set.of())
+        : fallback.addedLinesSince(round, path);
   }
 
   @Override
