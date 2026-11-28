@@ -91,7 +91,9 @@ final class FollowUpDeltaSummary {
       return Optional.empty();
     }
     var body =
-        DELTA_HEADING
+        ReadBackMarkers.PREVIOUS_START
+            + "\n"
+            + DELTA_HEADING
             + "\n\n"
             + NEW_COUNT
             + newFindings.size()
@@ -112,7 +114,8 @@ final class FollowUpDeltaSummary {
             + OPEN_COUNT
             + result.unresolvedPreviousCount()
             + "\n"
-            + promotedLines(promoted);
+            + promotedLines(promoted)
+            + ReadBackMarkers.PREVIOUS_END;
     var coverageDisclosure =
         ReviewResult.truncationDisclosure(result.omittedFiles(), result.truncation());
     body +=

@@ -93,7 +93,11 @@ class OpenFindingNamesTest {
     var section = section(open, List.of(), List.of(), 10_000);
 
     assertEquals(25, rows(section).size(), section);
-    assertTrue(section.startsWith("ThrillhouseBot still lists 25 previous finding(s) as open:"));
+    assertTrue(
+        section.startsWith(
+            ReadBackMarkers.PREVIOUS_START
+                + "\n"
+                + "ThrillhouseBot still lists 25 previous finding(s) as open:"));
   }
 
   @Test
@@ -172,7 +176,8 @@ class OpenFindingNamesTest {
     var section = section(List.of(hostile), List.of(), List.of(), 10_000);
 
     assertEquals(1, rows(section).size(), section);
-    assertFalse(section.contains("<!--"), section);
+    var rows = String.join("\n", rows(section));
+    assertFalse(rows.contains("<!--"), section);
     assertFalse(section.contains(" @octocat"), section);
     assertTrue(section.contains("&#96;x&#96; \\| y"), section);
   }
@@ -203,6 +208,20 @@ class OpenFindingNamesTest {
                     + (200 - listed)
                     + " more that do not fit within GitHub's comment length limit"),
         rows.getLast());
+  }
+
+  @Test
+  void theEndMarkerNeverPushesACutSectionOverTheLimit() {
+    var open =
+        IntStream.range(0, 2_000)
+            .mapToObj(i -> finding(RiskLevel.LOW, Confidence.HIGH, i + 1, "Finding " + i))
+            .toList();
+
+    for (var limit = 2_000; limit < 2_200; limit++) {
+      var section = section(open, List.of(), List.of(), limit);
+      assertTrue(section.length() <= limit, limit + " < " + section.length());
+      assertTrue(section.endsWith(ReadBackMarkers.PREVIOUS_END), section);
+    }
   }
 
   @Test

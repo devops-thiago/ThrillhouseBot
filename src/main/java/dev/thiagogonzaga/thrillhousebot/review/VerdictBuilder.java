@@ -464,7 +464,7 @@ public class VerdictBuilder {
                     // while
                     // open (#1074): nothing the section is about has changed there.
                     ctx.previousRoundHeadUnchanged()
-                        ? DescriptionGapCarryover.previousFindingBullets(
+                        ? DescriptionGapCarryover.previousFindingReferences(
                             ctx.conversationComments(), botIdentity)
                         : Set.of(),
                     linked.section(),

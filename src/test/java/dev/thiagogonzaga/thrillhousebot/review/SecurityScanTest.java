@@ -1928,6 +1928,36 @@ class SecurityScanTest {
   }
 
   @Test
+  void aScanFindingSavedByAnEarlierReleaseKeepsItsIdentityAndKey() {
+    // #1260: the title and the provenance line are what identify a scan finding, so both are
+    // spelled out here as an earlier release stored them.
+    var saved =
+        new ReviewResponse.Finding(
+            "medium",
+            "high",
+            "Dockerfile",
+            2,
+            "Security scan: final image stage runs as root",
+            "Earlier wording.\n\n_Raised by the deterministic security scan: a pattern match on the"
+                + " added lines, not model output, so it is not put to the second-pass verifier._",
+            "USER root",
+            null);
+    var files = List.of(added("Dockerfile", "FROM rust:1.80", "USER root"));
+    var s = scan(false, true);
+
+    assertTrue(SecurityScan.raisedByScan(saved.title(), saved.description()));
+    var detected = s.merge(response(), s.scan(files), List.of(), Set.of()).findings().get(0);
+    assertEquals(
+        "ef3025e4",
+        SuggestionFormatter.findingKey(detected.file(), detected.line(), detected.title()));
+
+    var merged = s.merge(response(), s.scan(files), List.of(saved), Set.of());
+
+    assertTrue(merged.findings().isEmpty(), "no second comment: " + merged.findings());
+    assertEquals("unresolved", merged.previousFindingsStatus().get(0).status());
+  }
+
+  @Test
   void aSecretThePreviousRoundRaisedIsTrackedNotRaisedAgain() {
     var token = fake.githubToken();
     var files = List.of(added("app.env", "X=1", "T=" + token));

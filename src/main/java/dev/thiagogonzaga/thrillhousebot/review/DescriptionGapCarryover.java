@@ -31,6 +31,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.regex.Matcher;
@@ -355,28 +356,38 @@ final class DescriptionGapCarryover {
   }
 
   /**
-   * The "Reported as a finding" bullets the newest bot-authored summary comment's Description vs.
-   * Implementation section lists, as rendered and without the list marker; empty when there is none
-   * (#1074).
+   * The findings the "Reported as a finding" bullets of the newest bot-authored summary comment's
+   * Description vs. Implementation section name, as rendered after the lead-in ({@link
+   * PrSummaryGenerator#findingReference}); empty when there is none (#1074).
    */
-  static Set<String> previousFindingBullets(
+  static Set<String> previousFindingReferences(
       List<GitHubCommentClient.IssueComment> conversation, BotIdentity botIdentity) {
     var body = previousSummary(conversation, botIdentity);
     if (body == null) {
       return Set.of();
     }
     var lines = body.split("\n", -1);
-    var bullets = new HashSet<String>();
+    var references = new HashSet<String>();
     for (var i = gapsHeadingLine(lines) + 1; i > 0 && i < lines.length; i++) {
       var line = lines[i].strip();
       if (endsGapsSection(line)) {
         break;
       }
-      if (line.startsWith("- " + PrSummaryGenerator.GAP_FINDING_PREFIX)) {
-        bullets.add(line.substring(2));
-      }
+      namedFinding(line).ifPresent(references::add);
     }
-    return bullets;
+    return references;
+  }
+
+  /** What a stripped line names when it is a finding's own bullet, marked or in English. */
+  private static Optional<String> namedFinding(String line) {
+    var marker = line.indexOf(ReadBackMarkers.GAP_FINDING);
+    if (line.startsWith("- ") && marker >= 0) {
+      return Optional.of(line.substring(marker + ReadBackMarkers.GAP_FINDING.length()));
+    }
+    var english = "- " + PrSummaryGenerator.GAP_FINDING_PREFIX;
+    return line.startsWith(english)
+        ? Optional.of(line.substring(english.length()))
+        : Optional.empty();
   }
 
   /** The body of the newest bot-authored summary comment; {@code null} when there is none. */
@@ -465,7 +476,8 @@ final class DescriptionGapCarryover {
         // A bullet naming a finding is that finding's, carried by the finding itself (#964), and
         // so is a criterion line pointing at one (#1093).
         open =
-            bullet.startsWith(PrSummaryGenerator.GAP_FINDING_PREFIX)
+            ReadBackMarkers.namesFinding(bullet)
+                    || bullet.startsWith(PrSummaryGenerator.GAP_FINDING_PREFIX)
                     || LinkedIssueCriteria.pointsAtFinding(bullet)
                 ? null
                 : new StringBuilder(bullet);
@@ -491,10 +503,19 @@ final class DescriptionGapCarryover {
     }
   }
 
-  /** The line holding the Description vs. Implementation heading, or -1 without one. */
+  /**
+   * The line holding the Description vs. Implementation heading, or -1 without one: the line under
+   * its {@linkplain ReadBackMarkers#GAPS marker}, or the English heading of a summary posted before
+   * the marker existed.
+   */
   private static int gapsHeadingLine(String[] lines) {
+    var marker = lineEqualTo(lines, ReadBackMarkers.GAPS);
+    return marker >= 0 ? marker + 1 : lineEqualTo(lines, PrSummaryGenerator.GAPS_HEADING);
+  }
+
+  private static int lineEqualTo(String[] lines, String wanted) {
     return IntStream.range(0, lines.length)
-        .filter(i -> lines[i].strip().equals(PrSummaryGenerator.GAPS_HEADING))
+        .filter(i -> lines[i].strip().equals(wanted))
         .findFirst()
         .orElse(-1);
   }

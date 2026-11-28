@@ -37,6 +37,11 @@ cannot resolve its review threads.
 
 ### Changed
 
+- **The bot finds its own earlier output by hidden marker, not by its English wording** (#1260):
+  review bodies and the summary comment now carry HTML comments that say which part is a status
+  line, which names earlier findings and which lists description gaps. A later round reads those,
+  so a heading or lead-in can be worded differently without losing what the earlier round said.
+  Comments posted before this change are still read, and nothing you see on GitHub changes.
 - **The PR summary folds its long sections** (#1445): **Changes Overview**, **Changed Files** and
   **Previous Findings Status** now open on a click, with their counts in the line you click, and so
   does **Risk Assessment** when there is no critical or high finding. A line above the folded file

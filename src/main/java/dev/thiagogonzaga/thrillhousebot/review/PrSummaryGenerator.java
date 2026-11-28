@@ -207,10 +207,10 @@ public class PrSummaryGenerator {
    * @param claimText the PR title and description and the linked-issue section, unfenced; a finding
    *     is named under the section only when it quotes or paraphrases this text. Blank when not
    *     known, which names every description finding as before
-   * @param previouslyNamed the "Reported as a finding" bullets the previous round's summary listed,
-   *     as rendered, when this round reviews the head that round reviewed; empty otherwise. A
-   *     finding still open that one of them names is named again, so a re-review of the same commit
-   *     does not drop it
+   * @param previouslyNamed the findings the previous round's summary named under the section, as
+   *     {@link #findingReference} renders them, when this round reviews the head that round
+   *     reviewed; empty otherwise. A finding still open that one of them names is named again, so a
+   *     re-review of the same commit does not drop it
    * @param linkedIssues the unfenced linked-issue section alone, {@code ""} when none; with one
    *     issue linked, each criterion the round states unmet gets its own line ({@link
    *     LinkedIssueCriteria}, #1093)
@@ -976,18 +976,28 @@ public class PrSummaryGenerator {
     if (gaps.isEmpty() && findings.isEmpty()) {
       return;
     }
-    sb.append(GAPS_HEADING).append("\n");
+    sb.append(ReadBackMarkers.GAPS).append("\n").append(GAPS_HEADING).append("\n");
     var fromIssue = findings.stream().anyMatch(PrSummaryGenerator::mentionsLinkedIssue);
     sb.append(fromIssue ? GAPS_INTRO_WITH_ISSUE : gapsIntro(gaps));
     for (String gap : gaps) {
       // One line per gap: a gap's own line break could otherwise end the section early, and the
       // next round reads these bullets back as the gaps it carries (#923).
-      sb.append("- ").append(MarkdownSafe.proseLine(gap)).append("\n");
+      sb.append("- ").append(gapLine(gap)).append("\n");
     }
     for (Finding f : findings) {
       sb.append("- ").append(findingBullet(f)).append("\n");
     }
     sb.append("\n");
+  }
+
+  /** A gap as its bullet renders it; a criterion line pointing at a finding is marked as one. */
+  private static String gapLine(String gap) {
+    var line = MarkdownSafe.proseLine(gap);
+    return LinkedIssueCriteria.pointsAtFinding(gap)
+        ? line.replace(
+            LinkedIssueCriteria.FINDING_SEPARATOR,
+            LinkedIssueCriteria.FINDING_SEPARATOR + ReadBackMarkers.GAP_CRITERION_FINDING)
+        : line;
   }
 
   /**
@@ -1018,11 +1028,19 @@ public class PrSummaryGenerator {
 
   /**
    * The bullet naming {@code finding} under Description vs. Implementation, without the list
-   * marker: what {@link DescriptionSources#previouslyNamed} holds for the previous round.
+   * marker.
    */
   static String findingBullet(Finding finding) {
-    return GAP_FINDING_PREFIX
-        + MarkdownSafe.inline(finding.title())
+    return GAP_FINDING_PREFIX + ReadBackMarkers.GAP_FINDING + findingReference(finding);
+  }
+
+  /**
+   * The finding as a bullet names it, without the lead-in: what {@link
+   * DescriptionSources#previouslyNamed} holds for the previous round, so a lead-in worded
+   * differently between rounds still names the same finding (#1260).
+   */
+  static String findingReference(Finding finding) {
+    return MarkdownSafe.inline(finding.title())
         + " (`"
         + MarkdownSafe.inlineCode(finding.file())
         + ":"
@@ -1044,7 +1062,7 @@ public class PrSummaryGenerator {
       List<Finding> collapsedOnto, List<Finding> findings, DescriptionSources sources) {
     var named = new LinkedHashSet<Finding>(collapsedOnto);
     findings.stream()
-        .filter(f -> sources.previouslyNamed().contains(findingBullet(f)))
+        .filter(f -> sources.previouslyNamed().contains(findingReference(f)))
         .forEach(named::add);
     findings.stream().filter(PrSummaryGenerator::reportsDescriptionMismatch).forEach(named::add);
     return named.stream().filter(sources::echoedBy).toList();

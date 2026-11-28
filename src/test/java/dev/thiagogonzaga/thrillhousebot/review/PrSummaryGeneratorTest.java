@@ -1857,6 +1857,7 @@ class PrSummaryGeneratorTest {
         summary.contains(
             "- "
                 + PrSummaryGenerator.GAP_FINDING_PREFIX
+                + ReadBackMarkers.GAP_FINDING
                 + "LOGD_MAX_FILE_SIZE never enforced; no rotation despite docs (`src/rotator.c:45`)"),
         summary);
     assertFalse(summary.contains("is reported as a finding below"), summary);
@@ -2346,9 +2347,13 @@ class PrSummaryGeneratorTest {
                 + gap
                 + "\n- "
                 + PrSummaryGenerator.GAP_FINDING_PREFIX
+                + ReadBackMarkers.GAP_FINDING
                 + "Registry calls are not retried (`csharp/IssuanceService.cs:41`)\n\n"),
         summary);
-    assertFalse(summary.contains(PrSummaryGenerator.GAP_FINDING_PREFIX + "Port"), summary);
+    assertFalse(
+        summary.contains(
+            PrSummaryGenerator.GAP_FINDING_PREFIX + ReadBackMarkers.GAP_FINDING + "Port"),
+        summary);
   }
 
   @Test
@@ -2371,6 +2376,7 @@ class PrSummaryGeneratorTest {
             PrSummaryGenerator.GAPS_HEADING
                 + "\nThe PR description does not fully match the change:\n- "
                 + PrSummaryGenerator.GAP_FINDING_PREFIX
+                + ReadBackMarkers.GAP_FINDING
                 + "Description claims five-minute result caching; no cache exists in the code"
                 + " (`go/handler.go:35`)\n"),
         summary);

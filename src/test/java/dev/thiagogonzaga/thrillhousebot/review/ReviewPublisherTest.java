@@ -652,7 +652,9 @@ class ReviewPublisherTest {
     followUpSummaryEnabled(true);
     var body =
         publisher.followUpDeltaSection(RESOLVED_FOLLOW_UP, false, List.of(THREADLESS_PREVIOUS));
-    assertTrue(body.startsWith(FollowUpDeltaSummary.DELTA_HEADING), body);
+    assertTrue(
+        body.startsWith(ReadBackMarkers.PREVIOUS_START + "\n" + FollowUpDeltaSummary.DELTA_HEADING),
+        body);
     assertTrue(body.contains("**Previous findings resolved:** 1"), body);
     assertTrue(body.contains("src/main/java/A.java:42") && body.contains("Unbounded retry"), body);
     verify(commentClient, never())
@@ -1275,7 +1277,7 @@ class ReviewPublisherTest {
         .createReview(anyString(), anyString(), eq("o"), eq("r"), eq(1), posted.capture());
     assertEquals("COMMENT", posted.getValue().event());
     var body = posted.getValue().body();
-    assertEquals(ReviewResult.PRIOR_ROUNDS_UNREADABLE_NOTICE.strip(), body);
+    assertEquals(ReadBackMarkers.status(ReviewResult.PRIOR_ROUNDS_UNREADABLE_NOTICE.strip()), body);
     // The bot's own sentence about its verdict is never offered back to the model as a finding.
     assertTrue(FollowUpAnalyzer.isSelfAuthoredStatusBody(body), body);
   }

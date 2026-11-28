@@ -1028,7 +1028,12 @@ class ReviewOrchestratorTest {
           captor
               .getValue()
               .body()
-              .startsWith("ThrillhouseBot closed 1 previous finding(s) this round:"),
+              .startsWith(
+                  ReadBackMarkers.STATUS
+                      + "\n"
+                      + ReadBackMarkers.PREVIOUS_START
+                      + "\n"
+                      + "ThrillhouseBot closed 1 previous finding(s) this round:"),
           captor.getValue().body());
     }
 
@@ -9915,7 +9920,9 @@ class ReviewOrchestratorTest {
       // PR has no issues; the CI hold follows under a neutral lead-in.
       assertTrue(
           body.startsWith(
-              "No new issues in this revision, but 1 previous finding(s) remain unresolved"),
+              ReadBackMarkers.STATUS
+                  + "\n"
+                  + "No new issues in this revision, but 1 previous finding(s) remain unresolved"),
           body);
       assertTrue(body.contains("\n\n" + ReviewResult.CI_PENDING_ALSO_LEAD_IN + "\n"), body);
       assertTrue(body.contains("- Check **build** is failed"));
@@ -9953,7 +9960,10 @@ class ReviewOrchestratorTest {
       verify(reviewClient)
           .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
       var body = captor.getValue().body();
-      assertTrue(body.startsWith(ReviewResult.NO_ISSUES_CI_PENDING_LEAD_IN + "\n"), body);
+      assertTrue(
+          body.startsWith(
+              ReadBackMarkers.STATUS + "\n" + ReviewResult.NO_ISSUES_CI_PENDING_LEAD_IN + "\n"),
+          body);
       assertFalse(body.contains("remain unresolved"), body);
     }
 
@@ -9981,7 +9991,11 @@ class ReviewOrchestratorTest {
       verify(reviewClient)
           .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
       var body = captor.getValue().body();
-      assertTrue(body.startsWith("No new issues in this revision, but 1 previous finding(s)"));
+      assertTrue(
+          body.startsWith(
+              ReadBackMarkers.STATUS
+                  + "\n"
+                  + "No new issues in this revision, but 1 previous finding(s)"));
       assertTrue(body.contains(ReviewResult.CI_UNREADABLE_ALSO_LEAD_IN), body);
       assertFalse(body.contains("found no issues"), body);
     }
@@ -10010,7 +10024,10 @@ class ReviewOrchestratorTest {
       verify(reviewClient)
           .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
       var body = captor.getValue().body();
-      assertTrue(body.startsWith(ReviewResult.NO_ISSUES_CI_UNREADABLE_LEAD_IN), body);
+      assertTrue(
+          body.startsWith(
+              ReadBackMarkers.STATUS + "\n" + ReviewResult.NO_ISSUES_CI_UNREADABLE_LEAD_IN),
+          body);
       assertFalse(body.contains("remain unresolved"), body);
     }
 

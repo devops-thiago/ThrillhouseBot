@@ -1093,13 +1093,22 @@ class LinkedIssueCriteriaTest {
             "- Linked issue #267: "
                 + CRITERION_267_4
                 + LinkedIssueCriteria.FINDING_SEPARATOR
+                + ReadBackMarkers.GAP_CRITERION_FINDING
                 + linkedLimit.title()),
         rendered);
     assertFalse(
-        rendered.contains("- " + PrSummaryGenerator.GAP_FINDING_PREFIX + linkedLimit.title()),
+        rendered.contains(
+            "- "
+                + PrSummaryGenerator.GAP_FINDING_PREFIX
+                + ReadBackMarkers.GAP_FINDING
+                + linkedLimit.title()),
         rendered);
     assertTrue(
-        rendered.contains("- " + PrSummaryGenerator.GAP_FINDING_PREFIX + persistence.title()),
+        rendered.contains(
+            "- "
+                + PrSummaryGenerator.GAP_FINDING_PREFIX
+                + ReadBackMarkers.GAP_FINDING
+                + persistence.title()),
         rendered);
     assertTrue(rendered.contains(PrSummaryGenerator.GAPS_INTRO_WITH_ISSUE), rendered);
 
@@ -1137,6 +1146,11 @@ class LinkedIssueCriteriaTest {
             fixed,
             sources);
     assertFalse(round2.contains(PrSummaryGenerator.GAPS_HEADING), round2);
+    var reworded = rendered.replace(LinkedIssueCriteria.FINDING_SEPARATOR, " (relatado: ");
+    assertTrue(
+        DescriptionGapCarryover.listedGaps(reworded).stream()
+            .noneMatch(gap -> gap.contains(CRITERION_267_4)),
+        reworded);
   }
 
   /** ThrillhouseBot-test#292's issue #281 (go): the batch-size criterion is the one left unmet. */

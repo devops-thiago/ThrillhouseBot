@@ -4891,6 +4891,31 @@ class FollowUpAnalyzerTest {
         FollowUpAnalyzer.withoutClosedFindingNames(body));
   }
 
+  @Test
+  void stripsAMarkedSectionByItsMarkersWhateverItSaysAndWhereverItSits() {
+    var section =
+        ReadBackMarkers.PREVIOUS_START
+            + "\nAchados anteriores:\n\n- `a.java:1` Titulo\n"
+            + ReadBackMarkers.PREVIOUS_END;
+
+    var between = FollowUpAnalyzer.withoutClosedFindingNames("Before\n\n" + section + "\n\nAfter");
+    assertFalse(between.contains("Titulo"), between);
+    assertTrue(between.startsWith("Before") && between.endsWith("After"), between);
+    assertEquals("After", FollowUpAnalyzer.withoutClosedFindingNames(section + "\n\nAfter"));
+    assertEquals(
+        "Before", FollowUpAnalyzer.withoutClosedFindingNames("Before\n\n" + section).strip());
+    assertEquals(
+        "Before",
+        FollowUpAnalyzer.withoutClosedFindingNames(
+                "Before\n\n" + ReadBackMarkers.PREVIOUS_START + "\n- cut off")
+            .strip());
+    assertEquals(
+        "Before\nVerdict",
+        FollowUpAnalyzer.withoutClosedFindingNames(
+            "Before\n" + ReadBackMarkers.STATUS + "\nVerdict"));
+    assertEquals("", ReadBackMarkers.status(""));
+  }
+
   /** A control: a body carrying no such section is returned unchanged. */
   @Test
   void leavesABodyWithNoClosedFindingsSectionAlone() {

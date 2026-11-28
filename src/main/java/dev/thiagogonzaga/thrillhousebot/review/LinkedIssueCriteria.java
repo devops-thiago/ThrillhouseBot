@@ -366,9 +366,7 @@ final class LinkedIssueCriteria {
       if (citesIssue(text)
           && placed.place(
               bestMatch(words(text), placed.criteria()),
-              FINDING_SEPARATOR
-                  + PrSummaryGenerator.findingBullet(finding)
-                      .substring(PrSummaryGenerator.GAP_FINDING_PREFIX.length()))) {
+              FINDING_SEPARATOR + PrSummaryGenerator.findingReference(finding))) {
         placed.pointed().add(finding);
       }
     }
