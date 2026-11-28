@@ -91,10 +91,11 @@ public final class MarkdownSafe {
    * fenced block left open is closed, so it cannot take in what the bot appends. A {@code null}
    * value is the empty string.
    *
-   * <p>Code is left byte for byte, in spans that close on their own line and in fenced blocks. A
+   * <p>Code is left as written, in spans that close on their own line and in fenced blocks, but for
+   * its line endings: a carriage return ends a line as a line feed does and is posted as one. A
    * span holding a {@code |} is the exception: GitHub reads it as text in a table row, so it is
-   * posted as text. A carriage return ends a line as a line feed does. See {@link MarkdownProse}
-   * for why the text is rewritten rather than only screened.
+   * posted as text. See {@link MarkdownProse} for why the text is rewritten rather than only
+   * screened.
    */
   public static String prose(String value) {
     return value == null ? "" : MarkdownProse.block(value);
