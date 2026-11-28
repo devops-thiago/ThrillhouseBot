@@ -72,8 +72,19 @@ final class RedactedAnchor {
   /** One piece of an anchor line, in the order the line holds them. */
   private sealed interface Piece {}
 
-  /** Text that stands in the diff line as it stands in the anchor. */
-  private record Text(String text) implements Piece {}
+  /**
+   * Text that stands in the diff line as it stands in the anchor. Its fallback table is worked out
+   * here, once for the anchor line, because the same text is looked for in every diff line.
+   */
+  private static final class Text implements Piece {
+    private final String text;
+    private final int[] fallback;
+
+    Text(String text) {
+      this.text = text;
+      this.fallback = fallbacks(text);
+    }
+  }
 
   /** A redacted value's characters after its shown prefix, counted as the scrub counted them. */
   private record Value(int characters) implements Piece {}
@@ -137,10 +148,10 @@ final class RedactedAnchor {
 
   /** Key material right after key material is one run, as long as the two together or longer. */
   private static void add(List<Piece> pieces, Piece shape) {
-    if (shape instanceof KeyMaterial(long more)
+    if (shape instanceof KeyMaterial more
         && !pieces.isEmpty()
-        && pieces.getLast() instanceof KeyMaterial(long before)) {
-      pieces.set(pieces.size() - 1, new KeyMaterial(before + more));
+        && pieces.getLast() instanceof KeyMaterial before) {
+      pieces.set(pieces.size() - 1, new KeyMaterial(before.min() + more.min()));
     } else {
       pieces.add(shape);
     }
@@ -149,8 +160,8 @@ final class RedactedAnchor {
   /** Whether {@code pieces}, one after the other, are the whole of {@code line}. */
   private static boolean matches(List<Piece> pieces, String line) {
     // Nearly every diff line is some other line, and where it starts or ends is enough to tell.
-    if ((pieces.getFirst() instanceof Text(String first) && !line.startsWith(first))
-        || (pieces.getLast() instanceof Text(String end) && !line.endsWith(end))) {
+    if ((pieces.getFirst() instanceof Text first && !line.startsWith(first.text))
+        || (pieces.getLast() instanceof Text end && !line.endsWith(end.text))) {
       return false;
     }
     // Where in the line the pieces read so far can end.
@@ -160,9 +171,9 @@ final class RedactedAnchor {
       var next = new boolean[line.length() + 1];
       boolean any =
           switch (piece) {
-            case Text(String text) -> afterText(line, text, ends, next);
-            case Value(int characters) -> afterValue(line, characters, ends, next);
-            case KeyMaterial(long min) -> afterKeyMaterial(line, min, ends, next);
+            case Text text -> afterText(line, text, ends, next);
+            case Value value -> afterValue(line, value.characters(), ends, next);
+            case KeyMaterial key -> afterKeyMaterial(line, key.min(), ends, next);
           };
       if (!any) {
         return false;
@@ -173,15 +184,16 @@ final class RedactedAnchor {
   }
 
   /**
-   * Marks in {@code ends} where {@code text} ends when it starts at one of {@code starts}.
+   * Marks in {@code ends} where {@code piece} ends when it starts at one of {@code starts}.
    *
    * <p>After a marker the starts can be nearly every place in the line, so the text is not compared
    * at each of them. Every place it occurs is found in one pass of the line: {@code held} is how
    * much of the text ends at the character just read, and when the next character does not carry it
    * on, it falls back to the longest shorter start of the text that still ends there.
    */
-  private static boolean afterText(String line, String text, boolean[] starts, boolean[] ends) {
-    int[] fallback = fallbacks(text);
+  private static boolean afterText(String line, Text piece, boolean[] starts, boolean[] ends) {
+    String text = piece.text;
+    int[] fallback = piece.fallback;
     boolean any = false;
     int held = 0;
     for (int at = 0; at < line.length(); at++) {
