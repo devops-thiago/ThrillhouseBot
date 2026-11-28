@@ -34,10 +34,12 @@ import static org.mockito.Mockito.when;
 
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.webhook.PrPauseService;
+import dev.thiagogonzaga.thrillhousebot.webhook.ReviewTriggerFilter;
 import io.vertx.core.Handler;
 import io.vertx.core.Vertx;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicLong;
@@ -48,18 +50,22 @@ class DeferredReviewReleaseTest {
   private static final String DATABASE_DOWN = "database unavailable";
   private static final String SHA_A = "sha-a";
   private static final String SHA_B = "sha-b";
+  private static final ReviewTriggerFilter.Skip DRAFT_SKIP =
+      new ReviewTriggerFilter.Skip(ReviewSkipReason.DRAFT, "PR is a draft");
 
   private final AtomicLong now = new AtomicLong(0);
   private final DeferredReviews deferred = new DeferredReviews(10, now::get);
   private final ReviewDispatcher dispatcher = mock(ReviewDispatcher.class);
   private final PrPauseService pauses = mock(PrPauseService.class);
+  private final HeldReviewDraftCheck draftCheck = mock(HeldReviewDraftCheck.class);
   private final ReviewSkipEmitter skipEmitter = mock(ReviewSkipEmitter.class);
   private final Vertx vertx = mock(Vertx.class);
   private final ExecutorService executor = mock(ExecutorService.class);
   private final List<Runnable> submitted = new ArrayList<>();
 
   private final DeferredReviewRelease release =
-      new DeferredReviewRelease(deferred, dispatcher, pauses, skipEmitter, vertx, executor);
+      new DeferredReviewRelease(
+          deferred, dispatcher, pauses, draftCheck, skipEmitter, vertx, executor);
 
   /** Keeps what the release submits, so a test decides when it runs. */
   private void captureSubmittedWork() {
@@ -158,6 +164,82 @@ class DeferredReviewReleaseTest {
             eq(1),
             anyString());
     assertTrue(deferred.isEmpty());
+  }
+
+  @Test
+  void aPullRequestConvertedToDraftWhileItsReviewWaitedIsNotReviewed() {
+    when(draftCheck.skipFor(request(1, SHA_A))).thenReturn(Optional.of(DRAFT_SKIP));
+    when(dispatcher.dispatchDeferred(any())).thenReturn(true);
+    deferred.defer(request(1, SHA_A), 0);
+    deferred.defer(request(2, SHA_B), 0);
+
+    release.release();
+
+    // Only the pull request that is a draft now loses its review.
+    verify(dispatcher, never()).dispatchDeferred(request(1, SHA_A));
+    verify(dispatcher).dispatchDeferred(request(2, SHA_B));
+    verify(skipEmitter)
+        .recordSkip(
+            ReviewSkipReason.DRAFT,
+            TestScopes.INSTALLATION_ID,
+            "owner",
+            "repo",
+            1,
+            "PR is a draft; the review a limit held back for it is dropped");
+    deferred.forget(request(2, SHA_B));
+    assertTrue(deferred.isEmpty());
+  }
+
+  @Test
+  void aHeadThatComesBackIsNotReadAgainToSeeWhetherItIsADraft() {
+    when(dispatcher.dispatchDeferred(any())).thenReturn(true);
+    deferred.defer(request(1, SHA_A), 0);
+    release.release();
+
+    // A full repository queue turns the review away again, and it is handed back again.
+    deferred.requeue(request(1, SHA_A), 30_000);
+    now.set(30_000);
+    release.release();
+
+    verify(dispatcher, times(2)).dispatchDeferred(request(1, SHA_A));
+    verify(draftCheck, times(1)).skipFor(request(1, SHA_A));
+
+    // A new head of the pull request is read for, once.
+    deferred.defer(request(1, SHA_B), 30_000);
+    release.release();
+    verify(draftCheck, times(1)).skipFor(request(1, SHA_B));
+  }
+
+  @Test
+  void aPausedPullRequestIsNotReadToSeeWhetherItIsADraft() {
+    when(pauses.isPaused(any(), eq("owner"), eq("repo"), eq(1))).thenReturn(true);
+    deferred.defer(request(1, SHA_A), 0);
+
+    release.release();
+
+    verifyNoInteractions(draftCheck);
+  }
+
+  @Test
+  void aDraftFoundAtHandBackLeavesTheNewerHeadDeferredMeanwhileToItsOwnHandBack() {
+    // The pull request was marked ready and pushed to between the read and its answer.
+    when(draftCheck.skipFor(any()))
+        .thenAnswer(
+            invocation -> {
+              deferred.defer(request(1, SHA_B), 1_000);
+              return Optional.of(DRAFT_SKIP);
+            })
+        .thenReturn(Optional.empty());
+    when(dispatcher.dispatchDeferred(any())).thenReturn(true);
+    deferred.defer(request(1, SHA_A), 0);
+
+    release.release();
+
+    verifyNoInteractions(skipEmitter);
+    verify(dispatcher, never()).dispatchDeferred(any());
+    now.set(1_000);
+    release.release();
+    verify(dispatcher).dispatchDeferred(request(1, SHA_B));
   }
 
   @Test

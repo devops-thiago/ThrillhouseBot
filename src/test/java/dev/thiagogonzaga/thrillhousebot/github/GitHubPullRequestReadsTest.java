@@ -116,6 +116,13 @@ class GitHubPullRequestReadsTest {
   }
 
   @Test
+  void aDraftPullRequestIsReadAsADraft() {
+    given("/pulls/7", PULL_BODY.replace("\"state\":\"open\"", "\"state\":\"open\",\"draft\":true"));
+
+    assertTrue(reads.getPullRequest(AUTH, JSON, "o", "r", 7).draft());
+  }
+
+  @Test
   void theRepositoryIsReadOnceForEachCredential() {
     given("/pulls/7", PULL_BODY);
 

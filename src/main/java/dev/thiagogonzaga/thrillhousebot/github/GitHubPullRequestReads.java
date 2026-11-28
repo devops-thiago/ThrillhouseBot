@@ -63,7 +63,8 @@ public class GitHubPullRequestReads implements GitHubPullRequestClient {
               pr.getChangedFiles(),
               pr.getAdditions(),
               pr.getDeletions(),
-              pr.getState().name().toLowerCase(Locale.ROOT));
+              pr.getState().name().toLowerCase(Locale.ROOT),
+              pr.isDraft());
         });
   }
 

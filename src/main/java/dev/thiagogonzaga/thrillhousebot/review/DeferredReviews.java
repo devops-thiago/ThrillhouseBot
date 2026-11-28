@@ -43,12 +43,12 @@ import java.util.function.Predicate;
  * that has none is refused and the caller records the skip, as it did before. An entry leaves when
  * the pull request is closed or merged, when a newer event for the pull request is dispatched,
  * filtered out or skipped because its head is already reviewed, when {@link DeferredReviewRelease}
- * finds the pull request paused or has its hand-back refused by the executor, and at shutdown.
- * Handing an entry out does not remove it, and neither does its review running: unless one of those
- * removes it or a request for another head replaces it, it stays, counted towards the limit, until
- * {@link #GIVE_UP_AFTER} has passed since it was first handed out. A request for the same head that
- * comes back after that long (a repository queue that stays full) is refused and its entry removed,
- * instead of retried without end.
+ * finds the pull request paused, finds it a draft that is skipped or has its hand-back refused by
+ * the executor, and at shutdown. Handing an entry out does not remove it, and neither does its
+ * review running: unless one of those removes it or a request for another head replaces it, it
+ * stays, counted towards the limit, until {@link #GIVE_UP_AFTER} has passed since it was first
+ * handed out. A request for the same head that comes back after that long (a repository queue that
+ * stays full) is refused and its entry removed, instead of retried without end.
  *
  * <p>A request handed out is still the pull request's only while its entry is the one {@link
  * #takeDue} left. An event that arrives before the request is handed back replaces or removes that
@@ -87,6 +87,15 @@ public class DeferredReviews {
       boolean released,
       long firstReleasedAt,
       boolean fromEvent) {}
+
+  /**
+   * A request handed out.
+   *
+   * @param request the review to hand back to the dispatcher
+   * @param first whether this head is handed out for the first time; {@code false} for one a limit
+   *     turned away again since, which comes back every time it is due
+   */
+  public record HandOut(ReviewOrchestrator.ReviewRequest request, boolean first) {}
 
   /** What became of a request {@link #takeDue} handed out, when it came back to its entry. */
   public enum HandedOut {
@@ -239,8 +248,13 @@ public class DeferredReviews {
    * #GIVE_UP_AFTER} has passed since its first hand-out.
    */
   public List<ReviewOrchestrator.ReviewRequest> takeDue() {
+    return takeDueHandOuts().stream().map(HandOut::request).toList();
+  }
+
+  /** Like {@link #takeDue}, saying for each request whether its head is handed out again. */
+  public List<HandOut> takeDueHandOuts() {
     long now = clock.getAsLong();
-    var due = new ArrayList<ReviewOrchestrator.ReviewRequest>();
+    var due = new ArrayList<HandOut>();
     for (var key : pending.keySet()) {
       pending.computeIfPresent(key, (_, entry) -> afterTick(entry, now, due));
     }
@@ -248,20 +262,20 @@ public class DeferredReviews {
   }
 
   /** The entry a tick leaves in place of {@code entry}; {@code null} removes it. */
-  private static Pending afterTick(
-      Pending entry, long now, List<ReviewOrchestrator.ReviewRequest> due) {
+  private static Pending afterTick(Pending entry, long now, List<HandOut> due) {
     if (entry.released()) {
       return now - entry.firstReleasedAt() >= GIVE_UP_AFTER.toMillis() ? null : entry;
     }
     if (entry.dueAt() > now) {
       return entry;
     }
-    due.add(entry.request());
+    boolean first = entry.firstReleasedAt() == NEVER;
+    due.add(new HandOut(entry.request(), first));
     return new Pending(
         entry.request(),
         entry.dueAt(),
         true,
-        entry.firstReleasedAt() == NEVER ? now : entry.firstReleasedAt(),
+        first ? now : entry.firstReleasedAt(),
         entry.fromEvent());
   }
 

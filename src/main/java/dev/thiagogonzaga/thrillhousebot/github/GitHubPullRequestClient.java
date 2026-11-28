@@ -143,9 +143,24 @@ public interface GitHubPullRequestClient {
       int additions,
       int deletions,
       // open or closed (a merged pull request is closed); null when GitHub gives none.
-      String state) {
+      String state,
+      // false when GitHub gives none.
+      boolean draft) {
     public PullRequestDetails(String title, String body, Ref head, Ref base) {
       this(title, body, head, base, 0, 0, 0);
+    }
+
+    /** Details of a pull request that is not a draft. */
+    public PullRequestDetails(
+        String title,
+        String body,
+        Ref head,
+        Ref base,
+        int changedFiles,
+        int additions,
+        int deletions,
+        String state) {
+      this(title, body, head, base, changedFiles, additions, deletions, state, false);
     }
 
     /** Details whose state is not known. */

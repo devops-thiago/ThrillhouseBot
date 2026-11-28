@@ -29,6 +29,20 @@ import org.junit.jupiter.api.Test;
 class ReviewTriggerFilterTest {
 
   @Test
+  void theDraftFilterAloneSkipsADraftOnlyWhenDraftsAreSkipped() {
+    var skipping = new ReviewTriggerFilter(true, List.of(), List.of(), List.of(), List.of());
+    var reviewing = new ReviewTriggerFilter(false, List.of(), List.of(), List.of(), List.of());
+
+    assertTrue(skipping.skipsDrafts());
+    assertEquals(
+        skipping.skipReason(pr("main", true)), skipping.draftSkipReason(true), "the same skip");
+    assertEquals(ReviewSkipReason.DRAFT, skipping.draftSkipReason(true).orElseThrow().reason());
+    assertTrue(skipping.draftSkipReason(false).isEmpty());
+    assertFalse(reviewing.skipsDrafts());
+    assertTrue(reviewing.draftSkipReason(true).isEmpty());
+  }
+
+  @Test
   void shouldReviewEveryPrWithDefaultConfig() {
     var filter = filter(false, List.of(), List.of(), List.of(), List.of());
 

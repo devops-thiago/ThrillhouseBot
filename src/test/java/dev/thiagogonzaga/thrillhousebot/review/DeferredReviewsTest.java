@@ -116,6 +116,24 @@ class DeferredReviewsTest {
   }
 
   @Test
+  void aHandOutSaysWhetherItsHeadIsHandedOutForTheFirstTime() {
+    deferred.defer(request(1, "sha-a"), 0);
+    assertEquals(
+        List.of(new DeferredReviews.HandOut(request(1, "sha-a"), true)),
+        deferred.takeDueHandOuts());
+
+    deferred.requeue(request(1, "sha-a"), 0);
+    assertEquals(
+        List.of(new DeferredReviews.HandOut(request(1, "sha-a"), false)),
+        deferred.takeDueHandOuts());
+
+    deferred.defer(request(1, "sha-b"), 0);
+    assertEquals(
+        List.of(new DeferredReviews.HandOut(request(1, "sha-b"), true)),
+        deferred.takeDueHandOuts());
+  }
+
+  @Test
   void aNewHeadStartsItsOwnGiveUpTime() {
     deferred.defer(request(1, "sha-a"), 0);
     deferred.takeDue();

@@ -1495,7 +1495,13 @@ class ReviewDispatcherTest {
             });
     var release =
         new DeferredReviewRelease(
-            deferred, dispatcher, pauses, skipEmitter, mock(Vertx.class), reviewExecutor);
+            deferred,
+            dispatcher,
+            pauses,
+            mock(HeldReviewDraftCheck.class),
+            skipEmitter,
+            mock(Vertx.class),
+            reviewExecutor);
 
     release.release();
 
