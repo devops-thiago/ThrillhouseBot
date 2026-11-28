@@ -1209,10 +1209,14 @@ makes each declined secret finding come back once, and the next decline stores
 the new marker. A GitHub App can hold several private keys; instances that
 share a database must be given the same one, for the same reason. Before 0.9.4
 the marker was keyed from `GITHUB_WEBHOOK_SECRET`. A decline recorded under
-such a marker keeps matching its line while the webhook secret stays the same,
-and so does one recorded under the unkeyed marker of 0.7.0. Those older markers
-stay in the comments they were posted in, and a short webhook secret can be
-guessed from them, so replace a short one (see "Startup checks" below). A new
+such a marker keeps matching its line while the webhook secret stays the same.
+From 0.9.4 the marker also names the scheme it was made under (`v2:` before the
+digits), and a stored marker is compared only under the scheme it names. The
+marker of 0.7.0 was not keyed, so anyone could compute it for a line of their
+choosing; it is no longer compared, and a secret finding declined on 0.7.0 comes
+back once. Those older markers stay in the comments they were posted in, and a
+short webhook secret can be guessed from them, so replace a short one (see
+"Startup checks" below). A new
 value, or any other change to the line apart from leading and trailing
 whitespace, is raised again. A secret finding declined
 before 0.7.0 has no fingerprint, so its decline holds only until the head moves;

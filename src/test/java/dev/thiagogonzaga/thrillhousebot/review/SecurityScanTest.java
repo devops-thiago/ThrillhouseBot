@@ -2667,14 +2667,10 @@ class SecurityScanTest {
             IllegalStateException.class,
             () -> SecurityScan.contentFingerprint("NO-SUCH-MAC", key, SecurityRule.JWT, "x"));
     assertTrue(thrown.getMessage().contains("NO-SUCH-MAC"));
-    var legacy =
+    var digest =
         org.junit.jupiter.api.Assertions.assertThrows(
-            IllegalStateException.class,
-            () -> SecurityScan.legacyContentFingerprint("NO-SUCH-DIGEST", SecurityRule.JWT, "x"));
-    assertTrue(legacy.getMessage().contains("NO-SUCH-DIGEST"));
-    assertEquals(
-        SecurityScan.legacyContentFingerprint(SecurityRule.JWT, "x"),
-        SecurityScan.legacyContentFingerprint("SHA-256", SecurityRule.JWT, "x"));
+            IllegalStateException.class, () -> SecurityScan.webhookKey("NO-SUCH-DIGEST", "s"));
+    assertTrue(digest.getMessage().contains("NO-SUCH-DIGEST"));
     var s = keyed("s");
     assertNotEquals(
         s.contentFingerprint(SecurityRule.JWT, "x"),
@@ -2692,8 +2688,7 @@ class SecurityScanTest {
       for (int i = 0; i < n; i++) {
         var found = modelFinding("src/config.env", i * 10 + 1, "scan identity " + i, "d");
         detections.add(
-            new SecurityScan.Detection(
-                SecurityRule.GENERIC_SECRET, found, Set.of(), null, Set.of()));
+            new SecurityScan.Detection(SecurityRule.GENERIC_SECRET, found, null, null, Set.of()));
         models.add(modelFinding("src/config.env", 1000000 + i, "unrelated allocation " + i, "d"));
       }
       var result = new SecurityScan.Result(detections, List.of(), List.of("src/config.env"));
@@ -2782,7 +2777,7 @@ class SecurityScanTest {
         first, keyed("webhook-secret-two").contentFingerprint(SecurityRule.GITHUB_TOKEN, line));
     // Without the key a reader cannot recompute it: the plain hash a guess would be tested with
     // is not what is posted.
-    assertNotEquals(first, SecurityScan.legacyContentFingerprint(SecurityRule.GITHUB_TOKEN, line));
+    assertNotEquals(first, unkeyedFingerprint(SecurityRule.GITHUB_TOKEN, line));
     assertEquals(8, first.length());
     assertEquals(
         keyed(null).contentFingerprint(SecurityRule.JWT, "x"),
@@ -2803,81 +2798,174 @@ class SecurityScanTest {
         SecurityScan.fingerprintOf(raised.description()));
   }
 
-  @Test
-  void aDeclineUnderTheUnkeyedMarkerKeepsMatchingAfterTheUpgrade() {
-    var token = fake.githubToken();
-    var line = "T=" + token;
-    var s = keyed("webhook-secret-one");
-    var keyedFinding =
-        s.merge(response(), s.scan(List.of(added("app.env", line))), List.of(), Set.of())
-            .findings()
-            .get(0);
-    var legacyMarker = SecurityScan.legacyContentFingerprint(SecurityRule.GITHUB_TOKEN, line);
-    var declinedBeforeUpgrade =
-        new ReviewResponse.Finding(
-            keyedFinding.risk(),
-            keyedFinding.confidence(),
-            keyedFinding.file(),
-            keyedFinding.line(),
-            keyedFinding.title(),
-            keyedFinding
-                .description()
-                .replace(SecurityScan.fingerprintOf(keyedFinding.description()), legacyMarker),
-            null,
-            null);
-    assertEquals(legacyMarker, SecurityScan.fingerprintOf(declinedBeforeUpgrade.description()));
+  /** {@code finding} as a round stored it, its content marker holding {@code marker}. */
+  private static ReviewResponse.Finding storedWithMarker(
+      ReviewResponse.Finding finding, String marker) {
+    var description =
+        finding
+            .description()
+            .replaceFirst("scan-content=\\S+ -->", "scan-content=" + marker + " -->");
+    assertTrue(description.endsWith("<!-- thrillhousebot:scan-content=" + marker + " -->"));
+    return new ReviewResponse.Finding(
+        finding.risk(),
+        finding.confidence(),
+        finding.file(),
+        finding.line(),
+        finding.title(),
+        description,
+        null,
+        null);
+  }
 
-    // After a push, on the same content: still covered, so it is not raised again.
-    var files = List.of(added("app.env", "X=1", line));
+  /** What the unkeyed marker of 0.7.0 held for a line: anyone can compute it. */
+  private static String unkeyedFingerprint(SecurityRule rule, String content) {
+    try {
+      var digest = java.security.MessageDigest.getInstance("SHA-256");
+      digest.update(rule.name().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+      digest.update((byte) 0);
+      return java.util.HexFormat.of()
+          .formatHex(digest.digest(content.getBytes(java.nio.charset.StandardCharsets.UTF_8)))
+          .substring(0, 8);
+    } catch (java.security.NoSuchAlgorithmException e) {
+      throw new IllegalStateException(e);
+    }
+  }
+
+  private static String webhookKeyedFingerprint(String webhookSecret, String line) {
+    return SecurityScan.contentFingerprint(
+        "HmacSHA256", SecurityScan.webhookKey(webhookSecret), SecurityRule.GITHUB_TOKEN, line);
+  }
+
+  private static SecurityScan upgraded(String webhookSecret) {
+    var material = "app-key-material".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    return new SecurityScan(true, false, 3.5, SKIPPED, material, webhookSecret);
+  }
+
+  private static ReviewResponse.Finding raisedFor(SecurityScan s, String line) {
+    return s.merge(response(), s.scan(List.of(added("app.env", line))), List.of(), Set.of())
+        .findings()
+        .get(0);
+  }
+
+  @Test
+  void thePostedMarkerNamesItsScheme() {
+    var line = "T=" + fake.githubToken();
+    var s = upgraded("webhook-secret-one");
+    var raised = raisedFor(s, line);
+    var marker =
+        "\n\n<!-- thrillhousebot:scan-content=v2:"
+            + s.contentFingerprint(SecurityRule.GITHUB_TOKEN, line)
+            + " -->";
+    assertTrue(raised.description().endsWith(marker));
+    // Posted as the hidden comment it is, and still the last line under an appended block.
     assertTrue(
-        mergeAfterDecline(s, response(), files, List.of(), List.of(declinedBeforeUpgrade))
+        SecurityScan.postedDescription(raised.title(), raised.description()).endsWith(marker));
+    assertTrue(
+        SecurityScan.withBlockAppended(raised.description(), "A note.")
+            .endsWith("A note." + marker));
+  }
+
+  @Test
+  void aDeclineUnderTheUnkeyedMarkerLapsesOnce() {
+    var line = "T=" + fake.githubToken();
+    var s = upgraded("webhook-secret-one");
+    var raised = raisedFor(s, line);
+    var declinedOnZeroSeven =
+        storedWithMarker(raised, unkeyedFingerprint(SecurityRule.GITHUB_TOKEN, line));
+
+    // The unkeyed value is not compared any more, so the same content is raised once more, and
+    // the finding raised carries the marker the next decline is matched by.
+    var files = List.of(added("app.env", "X=1", line));
+    var again =
+        mergeAfterDecline(s, response(), files, List.of(), List.of(declinedOnZeroSeven)).findings();
+    assertEquals(1, again.size());
+    assertTrue(
+        mergeAfterDecline(s, response(), files, List.of(), List.of(again.get(0)))
             .findings()
             .isEmpty());
-    // A rotated value is not.
-    var rotated = List.of(added("app.env", "X=1", "T=" + fake.githubToken()));
-    assertEquals(
-        1,
-        mergeAfterDecline(s, response(), rotated, List.of(), List.of(declinedBeforeUpgrade))
-            .findings()
-            .size());
-    // A decline recorded under another server's key does not match this one's content.
+  }
+
+  @Test
+  void aStoredMarkerEqualToAnotherLinesUnkeyedFingerprintDoesNotCoverThatLine() {
+    var s = upgraded("webhook-secret-one");
+    var declinedLine = "T=" + fake.githubToken();
+    var otherLine = "T=" + fake.githubToken();
+    var declined = raisedFor(s, declinedLine);
+    var other = raisedFor(s, otherLine);
+    // Same file, title and anchor, so only the marker tells the two lines apart.
+    assertEquals(declined.title(), other.title());
+    var unkeyedOfOther = unkeyedFingerprint(SecurityRule.GITHUB_TOKEN, otherLine);
+    var files = List.of(added("app.env", "X=1", otherLine));
+
+    // Whatever scheme the stored marker was written under, a value anyone can compute for the
+    // other line does not carry the decline over to it.
+    for (var marker : List.of(unkeyedOfOther, "v2:" + unkeyedOfOther)) {
+      assertEquals(
+          1,
+          mergeAfterDecline(
+                  s, response(), files, List.of(), List.of(storedWithMarker(declined, marker)))
+              .findings()
+              .size(),
+          marker);
+    }
+  }
+
+  @Test
+  void aStoredMarkerIsComparedOnlyUnderTheSchemeItNames() {
+    var line = "T=" + fake.githubToken();
+    var s = upgraded("webhook-secret-one");
+    var raised = raisedFor(s, line);
+    var files = List.of(added("app.env", "X=1", line));
+    var current = s.contentFingerprint(SecurityRule.GITHUB_TOKEN, line);
+    var webhookKeyed = webhookKeyedFingerprint("webhook-secret-one", line);
+
+    // A marker that names the current scheme is not compared with the webhook-keyed value.
     assertEquals(
         1,
         mergeAfterDecline(
-                keyed("webhook-secret-two"), response(), files, List.of(), List.of(keyedFinding))
+                s,
+                response(),
+                files,
+                List.of(),
+                List.of(storedWithMarker(raised, "v2:" + webhookKeyed)))
+            .findings()
+            .size());
+    // A marker with no scheme is from 0.9.3 or before, and is not compared with the current one.
+    assertEquals(
+        1,
+        mergeAfterDecline(
+                s, response(), files, List.of(), List.of(storedWithMarker(raised, current)))
+            .findings()
+            .size());
+    // A scheme this version does not know is no fingerprint it can compare.
+    assertEquals(
+        1,
+        mergeAfterDecline(
+                s, response(), files, List.of(), List.of(storedWithMarker(raised, "v3:" + current)))
             .findings()
             .size());
   }
 
   @Test
+  void theWebhookKeyedFingerprintIsTheOneZeroNineThreePosted() {
+    // Computed apart from this code, from the derivation 0.9.3 shipped: the key is the SHA-256
+    // of the label, a zero byte and the webhook secret, and the fingerprint the first eight hex
+    // digits of the HMAC-SHA-256 of the rule's name, a zero byte and the content.
+    assertEquals(
+        "1cb71079",
+        SecurityScan.contentFingerprint(
+            "HmacSHA256", SecurityScan.webhookKey("webhook-secret-one"), SecurityRule.JWT, "x"));
+  }
+
+  @Test
   void aDeclineUnderTheWebhookKeyedMarkerKeepsMatchingAfterTheUpgrade() {
     var line = "T=" + fake.githubToken();
-    var material = "app-key-material".getBytes(java.nio.charset.StandardCharsets.UTF_8);
-    var s = new SecurityScan(true, false, 3.5, SKIPPED, material, "webhook-secret-one");
-    var raised =
-        s.merge(response(), s.scan(List.of(added("app.env", line))), List.of(), Set.of())
-            .findings()
-            .get(0);
-    // What the version before posted for this line: keyed from the webhook secret.
-    var webhookMarker =
-        SecurityScan.contentFingerprint(
-            "HmacSHA256",
-            SecurityScan.webhookKey("webhook-secret-one"),
-            SecurityRule.GITHUB_TOKEN,
-            line);
+    var s = upgraded("webhook-secret-one");
+    var raised = raisedFor(s, line);
+    // What the version before posted for this line: keyed from the webhook secret, no scheme.
+    var webhookMarker = webhookKeyedFingerprint("webhook-secret-one", line);
     assertNotEquals(webhookMarker, SecurityScan.fingerprintOf(raised.description()));
-    var declinedBeforeUpgrade =
-        new ReviewResponse.Finding(
-            raised.risk(),
-            raised.confidence(),
-            raised.file(),
-            raised.line(),
-            raised.title(),
-            raised
-                .description()
-                .replace(SecurityScan.fingerprintOf(raised.description()), webhookMarker),
-            null,
-            null);
+    var declinedBeforeUpgrade = storedWithMarker(raised, webhookMarker);
 
     // After a push, on the same content: still covered, so it is not raised again.
     var files = List.of(added("app.env", "X=1", line));
@@ -2894,11 +2982,28 @@ class SecurityScanTest {
             .size());
     // With the webhook secret changed since, the old marker no longer matches and the finding
     // is raised again: the holding direction.
-    var afterRotation = new SecurityScan(true, false, 3.5, SKIPPED, material, "webhook-secret-two");
     assertEquals(
         1,
         mergeAfterDecline(
-                afterRotation, response(), files, List.of(), List.of(declinedBeforeUpgrade))
+                upgraded("webhook-secret-two"),
+                response(),
+                files,
+                List.of(),
+                List.of(declinedBeforeUpgrade))
+            .findings()
+            .size());
+    // A decline recorded under another server's App key does not match this one's content.
+    var elsewhere =
+        new SecurityScan(
+            true,
+            false,
+            3.5,
+            SKIPPED,
+            "another-app-key".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+            "webhook-secret-one");
+    assertEquals(
+        1,
+        mergeAfterDecline(elsewhere, response(), files, List.of(), List.of(raised))
             .findings()
             .size());
   }

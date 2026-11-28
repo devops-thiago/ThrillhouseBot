@@ -199,6 +199,15 @@ stays open unless such a reply or directive is behind it, whatever any other
 reply on the thread says. When the permission cannot be read, nobody is
 confirmed and the finding stays open.
 
+A decline of a secret-scan finding covers the line it was recorded for and no
+other. Later rounds match it by a short keyed fingerprint of that line, held in
+a hidden marker on the finding, and compare a stored marker only under the
+scheme it names: the current one, keyed from the App private key, or the one
+0.7.1 to 0.9.3 posted, keyed from the webhook secret. A pull request author can
+compute neither, so they cannot prepare a different secret that an earlier
+decline would cover. The marker 0.7.0 posted was not keyed and is not compared;
+a decline recorded under it lapses once and the finding is raised again.
+
 ### Complete mediation
 
 Every dashboard API call validates the session and checks repository access
