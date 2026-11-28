@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Locale;
 import java.util.function.Predicate;
+import java.util.regex.Pattern;
 
 /**
  * The hidden, machine-readable view of the pull request's open findings, written into the summary
@@ -49,6 +50,10 @@ import java.util.function.Predicate;
  * GitHub's size limit: at {@value #MAX_ENTRIES} entries, and at {@value #MAX_ARRAY_CHARS} rendered
  * characters, because the path in an entry has no length bound of its own. When it is cut, the
  * header says how many entries were left out ({@code omitted=N}) before the array.
+ *
+ * <p>The header also names the commit the round reviewed ({@code head=<sha>}), so a consumer can
+ * tell whether the list covers the pull request's current head. A round that writes no summary
+ * leaves the earlier commit in place.
  */
 final class FindingsManifest {
 
@@ -56,6 +61,9 @@ final class FindingsManifest {
   static final String MARKER_PREFIX = "<!-- thrillhousebot:findings v=1";
 
   private static final String MARKER_SUFFIX = " -->";
+
+  /** What may enter the header as a commit: hex only, so it can never close the comment. */
+  private static final Pattern COMMIT_SHA = Pattern.compile("[0-9a-f]{1,64}");
 
   /**
    * Entries kept: about 160 characters each for a typical path, so this many fit {@link
@@ -87,13 +95,31 @@ final class FindingsManifest {
    * thread}.
    */
   static String render(PrSummaryGenerator.CurrentState state, Predicate<Finding> thread) {
-    return line(collect(state, thread));
+    return render(state, thread, null);
+  }
+
+  /**
+   * {@link #render(PrSummaryGenerator.CurrentState, Predicate)}, naming {@code commitSha}, the head
+   * the round reviewed, in the header.
+   */
+  static String render(
+      PrSummaryGenerator.CurrentState state, Predicate<Finding> thread, String commitSha) {
+    return line(collect(state, thread), commitSha);
   }
 
   /** The manifest line carrying {@code open}. */
-  static String line(OpenFindings open) {
+  private static String line(OpenFindings open, String commitSha) {
     var header = open.omitted() == 0 ? MARKER_PREFIX : MARKER_PREFIX + " omitted=" + open.omitted();
-    return header + " " + open.entries() + MARKER_SUFFIX;
+    return header + headAttribute(commitSha) + " " + open.entries() + MARKER_SUFFIX;
+  }
+
+  /** {@code " head=<sha>"}, or nothing when there is no commit to name. */
+  private static String headAttribute(String commitSha) {
+    if (commitSha == null) {
+      return "";
+    }
+    var sha = commitSha.toLowerCase(Locale.ROOT);
+    return COMMIT_SHA.matcher(sha).matches() ? " head=" + sha : "";
   }
 
   /** The entries the manifest lists for {@code state}, within its two limits. */
