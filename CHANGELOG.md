@@ -34,6 +34,12 @@ cannot resolve its review threads.
   agents need not infer next work from several sections. A hidden `thrillhousebot:head` line
   fingerprints the head between edits; a fixed command cheat sheet makes the summary
   self-sufficient for agents without the repository's AGENTS.md. No extra model call.
+- **Hide the bot's outdated output** (#1441): with `REVIEW_HIDE_OUTDATED_ENABLED` on (off by
+  default), each posted review is followed by minimizing, as outdated, the bot's older reviews,
+  older summary comments, earlier status notices and command acknowledgements, and the root comment
+  of an addressed thread GitHub would not resolve. The newest summary and review, a standing request
+  for changes, open threads, answers someone asked for and other people's comments stay visible.
+  Nothing is deleted.
 
 ### Changed
 

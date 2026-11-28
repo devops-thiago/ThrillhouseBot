@@ -739,6 +739,24 @@ required review, also turn on "Dismiss stale pull request approvals when new
 commits are pushed" in the branch protection rule or ruleset, so GitHub drops
 it on the push itself.
 
+### Hiding outdated output
+
+With `REVIEW_HIDE_OUTDATED_ENABLED` on, each posted review is followed by a
+tidy-up of what the bot wrote before. It minimizes these as outdated, and a
+reader can still expand every one of them:
+
+- earlier reviews that have a body;
+- summary comments other than the newest;
+- status notices and command acknowledgements posted before the review started,
+  such as a failure notice or the answer to `/resolve`;
+- the root comment of a thread whose finding is addressed when GitHub would not
+  resolve the thread.
+
+The newest summary, the newest review, a request for changes that still stands,
+open threads, answers to `/describe`, `/help` and other requests for content, and
+everything other people wrote stay as they are. A refusal from GitHub is logged
+with its reason and the review is unaffected.
+
 ### Summary comment
 
 The summary keeps its long sections folded: **Changes Overview**, **Changed

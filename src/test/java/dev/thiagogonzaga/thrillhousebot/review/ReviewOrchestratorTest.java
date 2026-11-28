@@ -367,11 +367,14 @@ class ReviewOrchestratorTest {
         staticAnalysis,
         ticketContext,
         learnings,
-        findingStates);
+        findingStates,
+        outdatedOutput);
   }
 
   /** The learnings store the orchestrator is built with; a mock that reports off by default. */
   private ReviewLearnings learnings = mock(ReviewLearnings.class);
+
+  private final OutdatedOutputHider outdatedOutput = mock(OutdatedOutputHider.class);
 
   /** The CI-failure context the orchestrator is built with; off unless a test switches it on. */
   private CiFailureContextResolver ciFailureContext =
@@ -8410,17 +8413,20 @@ class ReviewOrchestratorTest {
       when(reviewThreadService.threadsByRootComment(AUTH, "owner", "repo", 5))
           .thenReturn(
               Map.of(
-                  100L, new ReviewThreadService.ThreadRef("T1", false),
+                  100L, new ReviewThreadService.ThreadRef("T1", false, "ROOT1"),
                   200L, new ReviewThreadService.ThreadRef("T2", false)));
       var errors = JsonNodeFactory.instance.arrayNode();
       errors.addObject().put("message", message);
       when(reviewThreadService.resolve(AUTH, "T1")).thenThrow(GitHubGraphQLException.from(errors));
-      when(reviewThreadService.resolve(AUTH, "T2")).thenReturn(true);
+      // T2 has no visible root comment, so its refusal leaves nothing to hide.
+      when(reviewThreadService.resolve(AUTH, "T2")).thenThrow(GitHubGraphQLException.from(errors));
 
-      reviewPublisher.resolveAddressedThreads(
-          AUTH, request(), List.of(), List.of(rootComment()), statuses);
+      var refused =
+          reviewPublisher.resolveAddressedThreads(
+              AUTH, request(), List.of(), List.of(rootComment()), statuses);
 
       verify(reviewThreadService).resolve(AUTH, "T2");
+      assertEquals(List.of("ROOT1"), refused);
     }
 
     /**
@@ -8807,6 +8813,22 @@ class ReviewOrchestratorTest {
       when(session.getPublicId()).thenReturn("test-public-id");
       when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
       return session;
+    }
+
+    @Test
+    void tidiesTheBotsOlderOutputAfterPostingTheReview() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = sessionWithPublicId();
+        mockedStatic
+            .when(
+                () -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+        stubCommonReviewMocks(buildCheck("completed", "success"));
+
+        orchestrator.review(request());
+
+        verify(outdatedOutput).hide(any(), eq(request()), any(), eq(List.of()));
+      }
     }
 
     @Test
