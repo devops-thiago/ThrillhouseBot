@@ -69,9 +69,12 @@ security limits. To report a vulnerability, see
   attempt. Any other failure (a timeout, a server error, a rate limit, or a 404
   or 422 for one review) leaves that approval in place and the bot goes on to
   its older ones. A later push, or a later review that does not approve, tries
-  again. The bot reads at most 1,000 reviews per pull request, oldest first,
-  and logs a warning when it reaches that limit, since an approval past it is
-  not seen. The dismissal waits for a review of the same pull request that is
+  again. The bot reads at most 1,000 reviews per pull request, the newest
+  ones. On a pull request with more, it asks GitHub separately for its own
+  approvals, so one that older reviews or a flood of replies pushed out of
+  that window is still found and dismissed. If that second request fails, an
+  approval older than the newest 1,000 reviews is not seen that time, and the
+  bot logs a warning. The dismissal waits for a review of the same pull request that is
   already running or waiting for a review slot, so for that long the old
   approval still counts. If the
   bot's approval counts towards a required review, also turn on "Dismiss stale

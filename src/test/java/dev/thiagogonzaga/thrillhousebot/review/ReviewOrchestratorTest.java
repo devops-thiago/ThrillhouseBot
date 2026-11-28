@@ -390,6 +390,10 @@ class ReviewOrchestratorTest {
     return new ReviewContextLoader(
         prClient,
         reviewClient,
+        new ReviewListing(
+            reviewClient,
+            mock(dev.thiagogonzaga.thrillhousebot.github.GitHubGraphQLClient.class),
+            BOT_ID),
         commentClient,
         instructionsResolver,
         repoSettingsResolver,

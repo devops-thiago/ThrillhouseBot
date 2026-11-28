@@ -57,6 +57,7 @@ public class ReviewContextLoader {
 
   private final GitHubPullRequestClient prClient;
   private final GitHubReviewClient reviewClient;
+  private final ReviewListing reviewListing;
   private final GitHubCommentClient commentClient;
   private final InstructionsResolver instructionsResolver;
   private final RepoSettingsResolver repoSettingsResolver;
@@ -78,6 +79,7 @@ public class ReviewContextLoader {
   public ReviewContextLoader(
       GitHubPullRequestClient prClient,
       @RestClient GitHubReviewClient reviewClient,
+      ReviewListing reviewListing,
       @RestClient GitHubCommentClient commentClient,
       InstructionsResolver instructionsResolver,
       RepoSettingsResolver repoSettingsResolver,
@@ -96,6 +98,7 @@ public class ReviewContextLoader {
       VerifiedWritersResolver verifiedWritersResolver) {
     this.prClient = prClient;
     this.reviewClient = reviewClient;
+    this.reviewListing = reviewListing;
     this.commentClient = commentClient;
     this.instructionsResolver = instructionsResolver;
     this.repoSettingsResolver = repoSettingsResolver;
@@ -1065,24 +1068,18 @@ public class ReviewContextLoader {
   }
 
   /**
-   * The most reviews {@link GitHubReviewClient#listReviews} reads: every page of its walk, full.
-   */
-  static final int MAX_LISTED_REVIEWS =
-      GitHubReviewClient.MAX_REVIEW_PAGES * GitHubReviewClient.REVIEWS_PER_PAGE;
-
-  /**
    * The pull request's reviews, oldest first, or an empty list when they could not be listed. A
    * pull request with no review yet lists as empty without failing, so a failure here is never the
    * ordinary first review: it is logged at warn with what the round loses, because the publisher
    * takes the approvals it dismisses from this one listing ({@code ApprovalWithdrawals.afterRound})
-   * and an empty one dismisses nothing. A listing that filled every page is logged too: GitHub
-   * lists oldest first, so the reviews left unread are the newest.
+   * and an empty one dismisses nothing. {@link ReviewListing} reads them: the newest ones when
+   * there are more than it lists, with the bot's own older approvals in front.
    */
   List<GitHubReviewClient.ReviewResponse> fetchPriorReviews(
       String auth, String owner, String repo, int prNumber) {
     List<GitHubReviewClient.ReviewResponse> reviews;
     try {
-      reviews = reviewClient.listReviews(auth, ACCEPT, owner, repo, prNumber);
+      reviews = reviewListing.list(auth, owner, repo, prNumber);
     } catch (RuntimeException e) {
       Log.warnf(
           e,
@@ -1093,18 +1090,6 @@ public class ReviewContextLoader {
           repo,
           prNumber);
       return List.of();
-    }
-    if (reviews.size() >= MAX_LISTED_REVIEWS) {
-      Log.warnf(
-          "Reviews on %s/%s #%d hit the %d-review read ceiling (%d pages of %d): GitHub lists the"
-              + " oldest first, so any newer review was not read, and an approval the bot gave"
-              + " among them is neither seen nor dismissed this round",
-          owner,
-          repo,
-          prNumber,
-          MAX_LISTED_REVIEWS,
-          GitHubReviewClient.MAX_REVIEW_PAGES,
-          GitHubReviewClient.REVIEWS_PER_PAGE);
     }
     return reviews;
   }

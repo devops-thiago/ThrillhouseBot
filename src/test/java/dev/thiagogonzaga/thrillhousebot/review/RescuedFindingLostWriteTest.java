@@ -313,6 +313,12 @@ class RescuedFindingLostWriteTest {
     }
 
     @Override
+    public jakarta.ws.rs.core.Response headReviewsOnce(
+        String auth, String accept, String owner, String repo, int pullNumber, int perPage) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
     public List<ReviewResponse> listReviewsPageOnce(
         String auth,
         String accept,

@@ -29,11 +29,13 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.CapturedLog;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubGraphQLClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
@@ -59,6 +61,7 @@ class ApprovalOnPushTest {
   private final GitHubAuthClient authClient = mock(GitHubAuthClient.class);
   private final GitHubReviewClient reviewClient = mock(GitHubReviewClient.class);
   private final GitHubPullRequestClient prClient = mock(GitHubPullRequestClient.class);
+  private final GitHubGraphQLClient graphQLClient = mock(GitHubGraphQLClient.class);
   private final ThrillhouseConfig config = mock(ThrillhouseConfig.class);
   private final ThrillhouseConfig.GitHubConfig githubConfig =
       mock(ThrillhouseConfig.GitHubConfig.class);
@@ -81,7 +84,12 @@ class ApprovalOnPushTest {
       new AutoReviewRateLimiter(WINDOW_MS, 10_000, now::get);
 
   private final ApprovalOnPush approvalOnPush =
-      new ApprovalOnPush(authClient, reviewClient, prClient, publisher, limiter);
+      new ApprovalOnPush(
+          authClient,
+          new ReviewListing(reviewClient, graphQLClient, BotIdentity.of(BOT)),
+          prClient,
+          publisher,
+          limiter);
 
   @BeforeEach
   void stubs() {
@@ -355,23 +363,22 @@ class ApprovalOnPushTest {
   }
 
   @Test
-  void listingThatFilledEveryPageIsLoggedAndStillActedOn() {
-    var reviews =
-        new java.util.ArrayList<>(
+  void approvalOlderThanTheListedReviewsIsStillDismissedOnAPush() throws Exception {
+    when(reviewClient.listReviews("auth", ACCEPT, "o", "r", 1))
+        .thenReturn(
             Collections.nCopies(
-                ReviewContextLoader.MAX_LISTED_REVIEWS - 1,
-                review(9L, "COMMENTED", "sha1", "maintainer")));
-    reviews.add(review(1L, "APPROVED", "sha1", BOT));
-    when(reviewClient.listReviews("auth", ACCEPT, "o", "r", 1)).thenReturn(reviews);
+                ReviewListing.MAX_LISTED_REVIEWS, review(9L, "COMMENTED", "sha1", "someone")));
+    when(graphQLClient.execute(eq("auth"), any()))
+        .thenReturn(
+            new ObjectMapper()
+                .readTree(
+                    """
+                    {"data":{"repository":{"pullRequest":{"reviews":{"nodes":[
+                      {"databaseId":1,"commit":{"oid":"sha1"}}]}}}}}"""));
 
-    try (var log = CapturedLog.of(ApprovalOnPush.class)) {
-      approvalOnPush.withdraw(PUSH);
+    approvalOnPush.withdraw(PUSH);
 
-      verifyDismissed(1L, "sha2");
-      var warnings = log.at(Level.WARNING);
-      assertEquals(1, warnings.size(), warnings.toString());
-      assertTrue(warnings.getFirst().contains("read ceiling"), warnings.getFirst());
-    }
+    verifyDismissed(1L, "sha2");
   }
 
   @Test

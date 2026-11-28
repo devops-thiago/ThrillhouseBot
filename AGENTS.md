@@ -399,9 +399,17 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   429 or rate-limit 403 that `GitHubWriteRetry` gave up on. So one such failure does not leave the
   older ones counting; do not widen the stop back to every 4xx. The listing is
   `ReviewContextLoader.fetchPriorReviews`: a listing that fails is logged at warn (the round then
-  dismisses nothing, because the earlier approvals could not be checked) and so is one that fills
-  the 1,000-review walk, where the unread reviews are the newest. A pull request with no reviews
-  lists as empty without failing, so keep the failure at warn. Do not narrow the walk to the
+  dismisses nothing, because the earlier approvals could not be checked). A pull request with no
+  reviews lists as empty without failing, so keep the failure at warn. Both this listing and the
+  push's go through `ReviewListing`. `GitHubReviewClient.listReviews` returns at most 1,000
+  reviews, and past that the newest ones (it reads the last page number from the `Link` header
+  and walks the pages at the end): every inline reply adds a review, so anyone can fill a window
+  from either end, and no window over everybody's reviews is enough. For a listing at the limit
+  `ReviewListing` therefore asks GraphQL for the bot's own `APPROVED` reviews
+  (`reviews(author:, states:)`, filtered by GitHub, one call per `BotIdentity` login) and puts the
+  ones the listing lacks in front, so the list stays oldest first; when that call fails it warns
+  and returns the listing alone. Do not read the reviews for a dismissal past `ReviewListing`,
+  and do not replace the author filter with a longer page walk. Do not narrow the walk to the
   bot's latest review, and never dismiss a review the bot did not write. An approval the push
   already dismissed lists as `DISMISSED` and is skipped.
 - **No "no issues" wording while anything is open** (#933). Every surface reads
