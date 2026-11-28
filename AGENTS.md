@@ -609,11 +609,18 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   hand-back that failed for an hour (`DeferredReviewRelease.release`). The store holds one
   request per pull request (the latest wins), at most 10,000, and gives up on a head that keeps
   coming back for an hour. "Latest" is decided by where the request comes from: an event's request
-  goes in through `defer` and replaces the entry, while a request the dispatcher's worker or a
-  failed hand-back puts back goes in through `requeue`, which leaves a different head an event
+  goes in through `defer` and replaces the entry, while a request the dispatcher's worker puts
+  back goes in through `requeue`, which leaves a different head an event
   deferred in place, because that request can be older than the push that arrived while it waited. `DeferredReviewRelease` runs one timer for all of them and hands a due
   request to `dispatchDeferred`, so it is serialized, takes a slot and has the window read again
-  like any other. An entry goes on close or merge, on a newer automatic dispatch, on an event the
+  like any other. Between `takeDue` and the hand-back an event can replace or remove the entry, so
+  the release never calls `forget` or `requeue`: it goes through `DeferredReviews.handBack`,
+  `dropHandedOut` and `waitAgain`, which act only while the entry is still the one handed out and
+  otherwise leave the request superseded, with nothing put back, removed or counted. `handBack`
+  calls `dispatchDeferred` inside the store's update of that entry, and `dispatch` forgets the
+  entry before it queues, so a request handed back late cannot replace a newer push already queued
+  for the pull request's worker. An entry goes on close or merge, on a newer automatic dispatch, on
+  an event for the head already reviewed, on an event the
   pause or trigger filters reject, on `converted_to_draft` when drafts are skipped, on a hand-back
   that finds the pull request paused or that the executor refuses (both recorded skips), and at
   shutdown; a restart loses them all. Handing an entry out does not remove it: unless one of those

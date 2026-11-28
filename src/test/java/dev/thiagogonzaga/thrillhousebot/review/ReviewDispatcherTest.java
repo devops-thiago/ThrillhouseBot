@@ -36,9 +36,11 @@ import static org.mockito.Mockito.when;
 
 import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
+import dev.thiagogonzaga.thrillhousebot.webhook.PrPauseService;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanContext;
+import io.vertx.core.Vertx;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -1259,6 +1261,70 @@ class ReviewDispatcherTest {
         .recordSkip(
             eq(ReviewSkipReason.RATE_LIMITED), anyLong(), eq("owner"), eq("repo"), eq(42), any());
     assertTrue(deferred.isEmpty());
+  }
+
+  @Test
+  void anEventForTheHeadJustReviewedDropsTheOlderHeadKeptForLater() {
+    var windowed = dispatcherWithRealWindow();
+    when(orchestrator.review(any(ReviewOrchestrator.ReviewRequest.class))).thenReturn(true);
+    windowed.dispatch(reviewRequest("owner", "repo", 42, "sha1"));
+    awaitEmptyDispatcherState(windowed, 5, TimeUnit.SECONDS);
+    assertEquals(
+        ReviewDispatcher.RateWindowHold.KEPT,
+        windowed.holdForRateWindow(reviewRequest("owner", "repo", 42, "sha2")));
+
+    // The branch is pushed back to the commit the last review covered.
+    assertEquals(
+        ReviewDispatcher.RateWindowHold.NOT_KEPT,
+        windowed.holdForRateWindow(reviewRequest("owner", "repo", 42, "sha1")));
+
+    // The head kept for later is no longer the pull request's, so it is not reviewed.
+    assertTrue(deferred.isEmpty());
+  }
+
+  @Test
+  void anEventWithNoHeadInsideTheWindowLeavesTheHeadKeptForLater() {
+    var windowed = dispatcherWithRealWindow();
+    when(orchestrator.review(any(ReviewOrchestrator.ReviewRequest.class))).thenReturn(true);
+    windowed.dispatch(reviewRequest("owner", "repo", 42, "sha1"));
+    awaitEmptyDispatcherState(windowed, 5, TimeUnit.SECONDS);
+    windowed.holdForRateWindow(reviewRequest("owner", "repo", 42, "sha2"));
+
+    assertEquals(
+        ReviewDispatcher.RateWindowHold.NOT_KEPT,
+        windowed.holdForRateWindow(reviewRequest("owner", "repo", 42, null)));
+    assertEquals(
+        ReviewDispatcher.RateWindowHold.NOT_KEPT,
+        windowed.holdForRateWindow(reviewRequest("owner", "repo", 42, " ")));
+
+    assertFalse(deferred.isEmpty());
+  }
+
+  @Test
+  void aDeferredReviewHandedBackLateDoesNotReplaceTheNewerPushQueuedMeanwhile() {
+    // A review of the pull request is running, so whatever is dispatched waits behind it.
+    var key = new ReviewDispatcher.PrKey("owner", "repo", 42);
+    var busy = new ReviewDispatcher.PerPrState();
+    busy.running = true;
+    dispatcher.seedState(key, busy);
+    var older = reviewRequest("owner", "repo", 42, "sha1");
+    var newer = reviewRequest("owner", "repo", 42, "sha2");
+    deferred.defer(older, 0);
+    // The newer push arrives, with the window closed, after the older one was handed out.
+    var pauses = mock(PrPauseService.class);
+    when(pauses.isPaused(any(), any(), any(), eq(42)))
+        .thenAnswer(
+            invocation -> {
+              dispatcher.dispatch(newer);
+              return false;
+            });
+    var release =
+        new DeferredReviewRelease(
+            deferred, dispatcher, pauses, skipEmitter, mock(Vertx.class), reviewExecutor);
+
+    release.release();
+
+    assertEquals(newer, busy.latestRequest);
   }
 
   @Test
