@@ -1225,8 +1225,9 @@ public record ReviewResult(
   private static final int NAMED_FILES_LIMIT = 10;
 
   /**
-   * The first {@value #NAMED_FILES_LIMIT} of {@code names}, each a code span since a file's name is
-   * the pull request author's text, and a count of the rest.
+   * The first {@value #NAMED_FILES_LIMIT} of {@code names}, each through {@link
+   * MarkdownSafe#codeSpan} since a file's name is the pull request author's text, and a count of
+   * the rest.
    */
   private static String nameList(List<String> names) {
     var listed =
