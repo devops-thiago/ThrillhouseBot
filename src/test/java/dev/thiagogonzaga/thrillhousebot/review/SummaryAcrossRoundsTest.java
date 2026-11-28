@@ -316,11 +316,14 @@ class SummaryAcrossRoundsTest {
 
     var body = postedReviewBody(result, "", threads);
 
-    var rows = body.lines().filter(line -> line.startsWith("- ")).toList();
+    var counted = VerdictDigest.without(body);
+    var rows = counted.lines().filter(line -> line.startsWith("- ")).toList();
     assertEquals(3, result.unresolvedPreviousCount());
     assertEquals(result.unresolvedPreviousCount(), rows.size(), body);
+    assertTrue(body.contains("**Changes requested: 2 findings block this merge.**"), body);
     assertTrue(
-        body.startsWith(ReadBackMarkers.STATUS + "\n" + ReviewResult.unresolvedPreviousMessage(3)),
+        counted.startsWith(
+            ReadBackMarkers.STATUS + "\n" + ReviewResult.unresolvedPreviousMessage(3)),
         body);
     assertEquals(
         List.of(
@@ -694,8 +697,10 @@ class SummaryAcrossRoundsTest {
     assertFalse(summary.contains(LargePrNudge.NUDGE_HEADING), summary);
     assertFalse(summary.contains("opened no inline findings"), summary);
     assertFalse(summary.contains(PrSummaryGenerator.ZERO_ISSUES_MESSAGE), summary);
+    assertTrue(body.startsWith(VerdictDigest.START + "\n**Changes requested: "), body);
     assertTrue(
-        body.startsWith(ReadBackMarkers.STATUS + "\n" + ReviewResult.unresolvedPreviousMessage(3)),
+        VerdictDigest.without(body)
+            .startsWith(ReadBackMarkers.STATUS + "\n" + ReviewResult.unresolvedPreviousMessage(3)),
         body);
     assertTrue(body.contains(ReviewResult.CI_PENDING_ALSO_LEAD_IN), body);
     assertFalse(body.contains("found no issues"), body);
