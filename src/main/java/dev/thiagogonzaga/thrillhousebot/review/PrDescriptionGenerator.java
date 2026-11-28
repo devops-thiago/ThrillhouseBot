@@ -30,7 +30,6 @@ import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
 import java.util.List;
-import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 /**
  * Builds the {@code /describe} suggestion: an improved PR title and description generated from the
@@ -83,7 +82,7 @@ public class PrDescriptionGenerator extends AbstractPrSuggestionGenerator {
 
   @Inject
   public PrDescriptionGenerator(
-      @RestClient GitHubPullRequestClient prClient,
+      GitHubPullRequestClient prClient,
       ReviewDiffFormatter diffFormatter,
       InstructionsResolver instructionsResolver,
       RepoSettingsResolver repoSettingsResolver,
