@@ -84,7 +84,7 @@ public class MaintainerReplyService {
       TriggerDetector triggerDetector,
       @RestClient GitHubReviewClient reviewClient,
       @RestClient GitHubCommentClient commentClient,
-      @RestClient GitHubPullRequestClient prClient,
+      GitHubPullRequestClient prClient,
       ReviewDiffFormatter diffFormatter,
       ReplyAssistant replyAssistant,
       RepoSettingsResolver repoSettingsResolver,

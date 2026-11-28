@@ -140,6 +140,12 @@ cannot resolve its review threads.
   (#1314), with the same tokens and to `GITHUB_API_URL`. A job log's address now costs three
   requests instead of one, as the repository and the job are read first. These calls follow
   `HTTP_CONNECT_TIMEOUT` and `HTTP_REQUEST_TIMEOUT` rather than the REST client's settings.
+- **Pull request and label reads go through hub4j** (#1314): details, files, comparisons, file
+  contents, trees and labels are read with the same installation token as before, from
+  `GITHUB_API_URL`. hub4j reads the repository first, once per token; listing a pull request's
+  files also reads the pull request; and its labels now come with one read of its issue instead of
+  a paged listing. These calls follow `HTTP_CONNECT_TIMEOUT` and `HTTP_REQUEST_TIMEOUT` rather
+  than the REST client's settings.
 
 
 ### Fixed

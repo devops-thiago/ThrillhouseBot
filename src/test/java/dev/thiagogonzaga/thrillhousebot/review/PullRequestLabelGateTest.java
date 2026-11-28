@@ -20,23 +20,20 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubLabelClient;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubTokenReads;
 import dev.thiagogonzaga.thrillhousebot.webhook.ReviewTriggerFilter;
 import java.util.List;
 import java.util.Optional;
-import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 
 /** Unit tests for {@link PullRequestLabelGate}: the label read and the stand-down (#1021). */
@@ -46,13 +43,12 @@ class PullRequestLabelGateTest {
 
   private final ReviewTriggerFilter triggerFilter = mock(ReviewTriggerFilter.class);
   private final GitHubAuthClient authClient = mock(GitHubAuthClient.class);
-  private final GitHubLabelClient labelClient = mock(GitHubLabelClient.class);
+  private final GitHubTokenReads reads = mock(GitHubTokenReads.class);
   private final CheckRunManager checkRunManager = mock(CheckRunManager.class);
   private final ReviewSkipEmitter skipEmitter =
       new ReviewSkipEmitter(io.opentelemetry.api.OpenTelemetry.noop());
   private final PullRequestLabelGate gate =
-      new PullRequestLabelGate(
-          triggerFilter, authClient, labelClient, checkRunManager, skipEmitter);
+      new PullRequestLabelGate(triggerFilter, authClient, reads, checkRunManager, skipEmitter);
 
   private static final ReviewTriggerFilter.Skip EXCLUDED =
       new ReviewTriggerFilter.Skip(ReviewSkipReason.EXCLUDED_LABEL, "PR carries an excluded label");
@@ -77,51 +73,20 @@ class PullRequestLabelGateTest {
     return new GitHubLabelClient.Label(name, null, null);
   }
 
-  private void page(int page, List<GitHubLabelClient.Label> labels) {
-    when(labelClient.listIssueLabels(
-            AUTH, "application/vnd.github+json", "owner", "repo", 42, 100, page))
-        .thenReturn(labels);
-  }
-
   @Test
-  void readsEveryPageOfLabelsAsTheInstallation() {
+  void readsEveryLabelAsTheInstallation() {
     when(authClient.getAuthHeader(123L, "repo")).thenReturn(AUTH);
-    page(1, IntStream.range(0, 100).mapToObj(i -> label("l" + i)).toList());
-    page(2, List.of(label("dependencies")));
+    when(reads.issueLabels(AUTH, "owner", "repo", 42))
+        .thenReturn(List.of(label("java"), label("dependencies")));
 
     var labels = gate.currentLabels(123L, "owner", "repo", 42).orElseThrow();
 
-    assertEquals(101, labels.size());
-    assertEquals("dependencies", labels.get(100));
+    assertEquals(List.of("java", "dependencies"), labels);
   }
 
   @Test
-  void theReadStopsAtThePageCap() {
-    when(labelClient.listIssueLabels(
-            anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt()))
-        .thenReturn(IntStream.range(0, 100).mapToObj(i -> label("l" + i)).toList());
-
-    var labels = gate.currentLabels(AUTH, "owner", "repo", 42).orElseThrow();
-
-    assertEquals(100 * PrLabeler.MAX_LABEL_PAGES, labels.size());
-    verify(labelClient, times(PrLabeler.MAX_LABEL_PAGES))
-        .listIssueLabels(
-            anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt());
-  }
-
-  @Test
-  void aPageWithoutABodyMakesTheWholeSetUnreadable() {
-    page(1, IntStream.range(0, 100).mapToObj(i -> label("l" + i)).toList());
-    page(2, null);
-
-    assertTrue(gate.currentLabels(AUTH, "owner", "repo", 42).isEmpty());
-  }
-
-  @Test
-  void aFailedPageMakesTheWholeSetUnreadable() {
-    page(1, IntStream.range(0, 100).mapToObj(i -> label("l" + i)).toList());
-    when(labelClient.listIssueLabels(
-            anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), eq(2)))
+  void aFailedReadMakesTheSetUnreadable() {
+    when(reads.issueLabels(AUTH, "owner", "repo", 42))
         .thenThrow(new RuntimeException("labels down"));
 
     assertTrue(gate.currentLabels(AUTH, "owner", "repo", 42).isEmpty());
@@ -133,7 +98,7 @@ class PullRequestLabelGateTest {
         .thenThrow(new RuntimeException("token down"));
 
     assertTrue(gate.currentLabels(123L, "owner", "repo", 42).isEmpty());
-    verifyNoInteractions(labelClient);
+    verifyNoInteractions(reads);
   }
 
   @Test
