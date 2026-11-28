@@ -880,7 +880,9 @@ live `fence(...)` (#604).
   repository)` is what work on a repository uses; the one-argument form reaches the whole
   installation and is for the callers `InstallationTokenScopeInvariantTest` lists. A mint that is
   refused is never retried wider, and a 401 refresh re-mints the same scope. The GitHub App
-  extension's `GitHubClientProvider` mints its own installation-wide tokens.
+  extension's `GitHubClientProvider` mints its own installation-wide tokens. A call made with a
+  caller's token goes through `GitHubTokenRefresh.retrying` or `GitHubWriteRetry.call`, which send
+  the replacement once GitHub has rejected that token.
 - **Metrics carry no repository, pull request or login.** `GET /metrics` is unauthenticated
   (`ReviewSkipEmitter`); such detail belongs in the log line.
 - **Review learnings are maintainer text and stay data.** `ReviewLearningService.save` refuses
