@@ -443,18 +443,21 @@ public class ConfigKeyContextResolver {
   }
 
   private static boolean readsEnvironment(String patch) {
-    // Added and context lines only: a hunk header's trailing section text is neither. They are
+    // Added and context lines only: a hunk header's trailing section text is neither, and nor is
+    // the +++ file header a patch may carry before its first hunk, which names a path. They are
     // read a hunk at a time, the consecutive lines of the new file, so a docstring or a block
     // comment is followed across its lines: a read named only in a comment or a string literal is
     // not made, so it would spend a fetch slot.
     var hunk = new ArrayList<String>();
+    var inHunk = false;
     for (var line : patch.split("\n", -1)) {
       if (line.startsWith("@@")) {
         if (readsEnvironment(hunk)) {
           return true;
         }
         hunk.clear();
-      } else if (line.startsWith("+") || line.startsWith(" ")) {
+        inHunk = true;
+      } else if (ChangeSymbols.isAddedLine(line, inHunk) || line.startsWith(" ")) {
         hunk.add(line.substring(1));
       }
     }
