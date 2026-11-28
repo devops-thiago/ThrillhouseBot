@@ -23,6 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -322,6 +323,71 @@ class RedactedAnchorTest {
       line.setCharAt(random.nextInt(line.length()), 'A');
     }
     return line.toString();
+  }
+
+  /**
+   * Every anchor of up to three pieces that are half a pair, a whole pair, a letter or a value
+   * marker, against every line of up to four halves, letters and blanks: each reads as the former
+   * pattern read it. That pattern compared code points, so half a pair in the anchor was never the
+   * first half of a whole pair in the line, and a value's count was a count of code points.
+   */
+  @Test
+  void halfPairsAndPairsAreReadAsTheFormerPatternReadThem() {
+    var high = "\uD83D";
+    var whole = "\uD83D\uDE00";
+    var anchorWithHalfBeforeAValue = high + "[redacted: \u2026, 1 chars]";
+    assertFalse(formerPattern(anchorWithHalfBeforeAValue).matcher(whole).matches());
+    assertTrue(formerPattern(anchorWithHalfBeforeAValue).matcher(high + whole).matches());
+    assertTrue(formerPattern("[redacted: \u2026, 2 chars]").matcher("a" + whole).matches());
+    assertFalse(formerPattern("[redacted: \u2026, 3 chars]").matcher("a" + whole).matches());
+
+    String[] pieces = {
+      high,
+      "\uDE00",
+      whole,
+      "x",
+      "[redacted: \u2026, 1 chars]",
+      "[redacted: \u2026, 2 chars]",
+      "[redacted: " + high + "\u2026, 2 chars]",
+      "[redacted: x" + high + "\u2026, 3 chars]"
+    };
+    char[] alphabet = {'\uD83D', '\uDE00', 'x', ' '};
+    var lines = new ArrayList<String>();
+    for (int length = 0; length <= 4; length++) {
+      for (int code = 0; code < 1 << (2 * length); code++) {
+        var chars = new char[length];
+        for (int at = 0; at < length; at++) {
+          chars[at] = alphabet[(code >> (2 * at)) & 3];
+        }
+        lines.add(new String(chars));
+      }
+    }
+    int matched = 0;
+    for (int code = 0; code < pieces.length * pieces.length * pieces.length; code++) {
+      // Anchors of one, two and three pieces; a code past the count's range is another count's.
+      for (int count = 1; count <= 3; count++) {
+        var anchor = new StringBuilder();
+        int rest = code;
+        for (int piece = 0; piece < count; piece++) {
+          anchor.append(pieces[rest % pieces.length]);
+          rest /= pieces.length;
+        }
+        if (rest != 0) {
+          continue;
+        }
+        var former = formerPattern(anchor.toString());
+        var matcher = RedactedAnchor.lineMatcher(anchor.toString());
+        for (var line : lines) {
+          boolean expected = former.matcher(line).matches();
+          matched += expected ? 1 : 0;
+          assertEquals(
+              expected,
+              matcher.test(line),
+              () -> "anchor <" + escaped(anchor) + "> line <" + escaped(line) + ">");
+        }
+      }
+    }
+    assertTrue(matched > 500, "the lines include many that match: " + matched);
   }
 
   /** {@code text} with what a report could not show (half a pair, a tab) written as its code. */
