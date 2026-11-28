@@ -837,6 +837,13 @@ sheet titled from the configured bot login (`GITHUB_BOT_LOGINS`) with `@`-mentio
 deterministic and uses no extra model call, so agents need no repository AGENTS.md; when the
 manifest line lists open findings, the block points at that line instead of repeating file paths.
 
+When a round closes findings, the summary lists them folded under **Closed this round**: each
+title struck through with its file and line, whether it was resolved or superseded, and the commit
+the round reviewed. That commit is where the closure was checked, not necessarily the one that fixed
+it. A reason is shown only when it is one of the bot's fixed sentences (a maintainer's `resolved`,
+the suggested change landing, the code leaving the diff, the model reporting the finding fixed on a
+file that changed); the model's own wording is not repeated. The list covers the latest round only. `REVIEW_SUMMARY_CLOSED_LIST_ENABLED=false` leaves it out.
+
 Each PR has one summary comment. The first round posts it; every later round
 finds it by its `<!-- thrillhousebot:summary -->` marker (or, for a summary
 posted before 0.7.0, by its heading) and replaces its body, so it always

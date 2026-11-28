@@ -650,6 +650,11 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   `MAX_ARRAY_CHARS` rendered characters (the path has no length bound) is cut with `omitted=N` in
   the header. `v=1` is a contract version (#1379, #1378): a field removed or renamed bumps it. The
   line is written outside `PromptLabelScrubber.scrubMarkdown`, so the scrub cannot rewrite it.
+- **Closed this round** (#1449, `REVIEW_SUMMARY_CLOSED_LIST_ENABLED`): `PrSummaryGenerator` only
+  marks the place with `ClosedThisRound.ANCHOR`; `ReviewPublisher.publishSummary`, which has the
+  reviewed head, replaces it with the list or removes it. It names what `ClosedFindingNames` names,
+  and shows a status note only when it is one of the bot's fixed sentences: a new deterministic
+  closure note joins that set in `ClosedThisRound.render`.
 - **Opt-in Agent next steps** (#1442, `REVIEW_AGENT_NEXT_STEPS_ENABLED`): when on,
   `ReviewPublisher.publishSummary` writes a hidden `<!-- thrillhousebot:head=… -->` line after the
   `pr-text` fingerprint, then embeds `AgentNextSteps.render` directly under

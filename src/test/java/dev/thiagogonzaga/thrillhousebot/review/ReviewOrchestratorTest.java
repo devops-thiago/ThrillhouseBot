@@ -3712,6 +3712,28 @@ class ReviewOrchestratorTest {
       }
     }
 
+    private String summaryProse = PrSummaryGenerator.SUMMARY_HEADING;
+
+    @Test
+    void theSummaryListsWhatTheRoundClosedAmongThePreviousFindings() {
+      var closedList = mock(ThrillhouseConfig.SummaryClosedListConfig.class);
+      when(closedList.enabled()).thenReturn(true);
+      when(reviewConfig.summaryClosedList()).thenReturn(closedList);
+      summaryProse = PrSummaryGenerator.SUMMARY_HEADING + "\n\n" + ClosedThisRound.ANCHOR;
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        reviewAFollowUpWithASupersededPrevious(mockedStatic, true);
+
+        verify(commentClient)
+            .createComment(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> req.body().contains("~~Null check~~ (`src/Main.java:5`)")));
+      }
+    }
+
     private ReviewSession reviewAFollowUpWithASupersededPrevious(
         org.mockito.MockedStatic<ReviewSession> mockedStatic, boolean forceSummary) {
       return reviewAFollowUpWithASupersededPrevious(mockedStatic, forceSummary, false);
@@ -3737,7 +3759,7 @@ class ReviewOrchestratorTest {
         List<ReviewResponse.Finding> raised) {
       when(followUpSummaryConfig.enabled()).thenReturn(true);
       when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any(), any()))
-          .thenReturn(PrSummaryGenerator.SUMMARY_HEADING);
+          .thenReturn(summaryProse);
       var session = mock(ReviewSession.class);
       session.id = 1L;
       when(session.getRepository()).thenReturn("owner/repo");

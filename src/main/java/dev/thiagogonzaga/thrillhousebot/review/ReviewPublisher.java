@@ -186,6 +186,19 @@ public class ReviewPublisher {
       ReviewOrchestrator.ReviewRequest req,
       ReviewResult result,
       DiffLineResolver lineResolver) {
+    return publishSummary(auth, req, result, lineResolver, List.of());
+  }
+
+  /**
+   * {@link #publishSummary(String, ReviewOrchestrator.ReviewRequest, ReviewResult,
+   * DiffLineResolver)}, with the previous round's findings the closed list names (#1449).
+   */
+  SummaryOutcome publishSummary(
+      String auth,
+      ReviewOrchestrator.ReviewRequest req,
+      ReviewResult result,
+      DiffLineResolver lineResolver,
+      List<ReviewResponse.Finding> previousFindings) {
     return publishSummary(
         new SummaryRequest(
             auth,
@@ -196,7 +209,8 @@ public class ReviewPublisher {
             req.forceSummary(),
             PromptSections.prContext(req.prTitle(), req.prDescription()),
             lineResolver,
-            req.commitSha()));
+            req.commitSha(),
+            previousFindings));
   }
 
   /**
@@ -212,7 +226,32 @@ public class ReviewPublisher {
       boolean forceSummary,
       String prText,
       DiffLineResolver lineResolver,
-      String commitSha) {}
+      String commitSha,
+      List<ReviewResponse.Finding> previousFindings) {
+
+    SummaryRequest(
+        String auth,
+        String owner,
+        String repo,
+        int prNumber,
+        ReviewResult result,
+        boolean forceSummary,
+        String prText,
+        DiffLineResolver lineResolver,
+        String commitSha) {
+      this(
+          auth,
+          owner,
+          repo,
+          prNumber,
+          result,
+          forceSummary,
+          prText,
+          lineResolver,
+          commitSha,
+          List.of());
+    }
+  }
 
   /**
    * What a round's summary write left on the pull request.
@@ -257,7 +296,9 @@ public class ReviewPublisher {
             ? latestBotSummaryComment(auth, owner, repo, prNumber)
             : Optional.<GitHubCommentClient.IssueComment>empty();
     var priorHead = agentEnabled ? priorHeadSha(existing) : null;
-    var prose = summaryProse(result, state, manifestLine, commitSha, priorHead, agentEnabled);
+    var prose =
+        withClosedList(
+            summaryProse(result, state, manifestLine, commitSha, priorHead, agentEnabled), summary);
     var request =
         new GitHubCommentClient.CreateCommentRequest(
             PrSummaryGenerator.SUMMARY_MARKER
@@ -292,6 +333,29 @@ public class ReviewPublisher {
         AgentNextSteps.render(result, commitSha, priorHead, state, manifestLine, botIdentity);
     var scrubbedSection = PromptLabelScrubber.scrubMarkdown(section, result.findings());
     return AgentNextSteps.embedAfterHeading(prose, scrubbedSection);
+  }
+
+  /** {@code prose} with the closed list in its place, or with the place taken out (#1449). */
+  private String withClosedList(String prose, SummaryRequest summary) {
+    if (!prose.contains(ClosedThisRound.ANCHOR)) {
+      return prose;
+    }
+    var list =
+        closedListEnabled()
+            ? PromptLabelScrubber.scrubMarkdown(
+                ClosedThisRound.render(
+                    summary.result(), summary.previousFindings(), summary.commitSha(), botIdentity),
+                summary.result().findings())
+            : "";
+    return prose.replace(ClosedThisRound.ANCHOR, list);
+  }
+
+  /** Partial config mocks in unit tests leave the setting unset, which reads as off. */
+  private boolean closedListEnabled() {
+    var review = config.review();
+    return review != null
+        && review.summaryClosedList() != null
+        && review.summaryClosedList().enabled();
   }
 
   /**

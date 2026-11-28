@@ -56,7 +56,7 @@ final class ClosedFindingNames {
    * bound {@code ReviewResult.nameList} puts on the coverage disclosure's file names, for the same
    * reason: one comment carries all of this, and a PR can close many findings in one round.
    */
-  private static final int NAMED_LIMIT = 10;
+  static final int NAMED_LIMIT = 10;
 
   /**
    * Opening words of the review-body section. Kept as a constant because {@code
@@ -120,19 +120,33 @@ final class ClosedFindingNames {
    */
   static List<ReviewResponse.Finding> closed(
       ReviewResult result, List<ReviewResponse.Finding> previousFindings, String closedAs) {
+    return closures(result, previousFindings, closedAs).stream().map(Closure::finding).toList();
+  }
+
+  /** A finding the round closed, with the note on the status that closed it. */
+  record Closure(ReviewResponse.Finding finding, String note) {}
+
+  /**
+   * {@link #closed} with each close's note: the one selection every surface that names closed
+   * findings reads.
+   */
+  static List<Closure> closures(
+      ReviewResult result, List<ReviewResponse.Finding> previousFindings, String closedAs) {
     var previous = previousFindings == null ? List.<ReviewResponse.Finding>of() : previousFindings;
-    var closed = new ArrayList<ReviewResponse.Finding>();
+    var closures = new ArrayList<Closure>();
     for (var status : result.previousStatuses()) {
       // An earlier round's status carries id 0, which names no finding here.
       if (closedAs.equalsIgnoreCase(status.status())
           && status.id() >= 1
           && status.id() <= previous.size()) {
-        closed.add(previous.get(status.id() - 1));
+        closures.add(new Closure(previous.get(status.id() - 1), status.note()));
       }
     }
     // An earlier round's finding carries itself, not an id into the previous round (#1066).
-    closed.addAll(result.earlierRoundCloses(closedAs));
-    return closed;
+    for (var status : result.earlierRoundClosingStatuses(closedAs)) {
+      closures.add(new Closure(status.earlierRound().finding(), status.note()));
+    }
+    return closures;
   }
 
   /**

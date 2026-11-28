@@ -67,7 +67,7 @@ public class FollowUpAnalyzer {
    */
   static final String STATUS_SUPERSEDED = "superseded";
 
-  private static final String SUPERSEDED_NOTE =
+  static final String SUPERSEDED_NOTE =
       "The code this finding targeted is no longer in this revision's diff (removed by a"
           + " force-push or a later commit) — superseded.";
 

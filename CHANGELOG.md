@@ -46,6 +46,10 @@ cannot resolve its review threads.
   for changes, the review body that alone describes a still-open finding, open threads, answers
   someone asked for and other people's comments stay visible.
   Nothing is deleted.
+- **The summary names the findings a round closed** (#1449): a folded **Closed this round** list
+  with each title struck through, its file and line, whether it was resolved or superseded, the
+  reviewed commit and, when it is one of the bot's fixed sentences, the reason. On by default;
+  `REVIEW_SUMMARY_CLOSED_LIST_ENABLED=false` leaves it out. No extra model call.
 
 ### Changed
 
