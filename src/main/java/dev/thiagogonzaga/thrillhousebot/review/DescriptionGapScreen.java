@@ -1441,25 +1441,76 @@ final class DescriptionGapScreen {
   /**
    * What {@code part} of a quote matches in the normalised source, on word boundaries: its words,
    * each one {@link #STEM_END} follows taking any ending; {@code null} when it holds no word.
+   *
+   * <p>The quote is the model's text and may hold any number of stems, so each ending is written to
+   * be read once ({@link #endingThen}).
    */
-  private static Pattern needle(String part) {
+  static Pattern needle(String part) {
     var segments = part.split(STEM_END, -1);
-    var body = new StringBuilder();
+    // The words between one stem's ending and the next. Only the first and the last may be empty:
+    // two endings with nothing between them are one.
+    var between = new ArrayList<String>();
+    var words = new StringBuilder();
+    boolean any = false;
     for (var i = 0; i < segments.length; i++) {
-      var words = normalize(segments[i]);
-      if (!words.isEmpty()) {
+      var segment = normalize(segments[i]);
+      if (!segment.isEmpty()) {
         // A segment after a stem opens a new word unless it carries on the stem's letters.
-        if (!body.isEmpty() && !Character.isLetterOrDigit(segments[i].charAt(0))) {
-          body.append(' ');
+        if (any && !Character.isLetterOrDigit(segments[i].charAt(0))) {
+          words.append(' ');
         }
-        body.append(Pattern.quote(words));
+        words.append(segment);
+        any = true;
       }
-      // A stem is three letters or more, so the words before each mark are never empty.
+      // A stem INFLECTION marks is three letters or more, so words stand before its mark. A mark
+      // the quote itself holds may have none.
       if (i < segments.length - 1) {
-        body.append("\\p{L}*");
+        any = true;
+        if (!words.isEmpty() || between.isEmpty()) {
+          between.add(words.toString());
+          words.setLength(0);
+        }
       }
     }
-    return body.isEmpty() ? null : Pattern.compile("(?<= )" + body + "(?= )");
+    if (!any) {
+      return null;
+    }
+    between.add(words.toString());
+    var body = new StringBuilder("(?<= )").append(Pattern.quote(between.getFirst()));
+    for (int i = 1; i < between.size(); i++) {
+      body.append(endingThen(between.get(i), i == between.size() - 1));
+    }
+    return Pattern.compile(body.append("(?= )").toString());
+  }
+
+  /**
+   * A stem's ending, any letters, and the {@code words} after it, as a pattern that does not come
+   * back to a letter it has read. Which form it takes depends on the letters {@code words} opens
+   * with, the ones that carry on the stem's word:
+   *
+   * <ul>
+   *   <li>None: the ending is every letter up to the first character that is not one.
+   *   <li>Some, and the word ends with them (a digit or a blank follows, or the needle ends): they
+   *       are the last letters of the run, which must be long enough to hold them after the stem.
+   *   <li>Some, and another ending follows them: their first occurrence. A later one leaves the
+   *       next ending only fewer letters of the same run to take, so it finds nothing more.
+   * </ul>
+   */
+  private static String endingThen(String words, boolean last) {
+    int letters = 0;
+    while (letters < words.length() && Character.isLetter(words.codePointAt(letters))) {
+      letters += Character.charCount(words.codePointAt(letters));
+    }
+    var carried = words.substring(0, letters);
+    var rest = Pattern.quote(words.substring(letters));
+    if (carried.isEmpty()) {
+      return "\\p{L}*+" + rest;
+    }
+    if (letters < words.length() || last) {
+      int count = carried.codePointCount(0, letters);
+      return "(?=\\p{L}{" + count + "})\\p{L}*+(?<=" + Pattern.quote(carried) + ")" + rest;
+    }
+    return "(?>\\p{L}*?" + Pattern.quote(carried) + ")";
   }
 
   private static String joinEditorialLetters(String quote) {
