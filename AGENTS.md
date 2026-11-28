@@ -670,6 +670,9 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
 
 ### Structure
 
+- Every system prompt carries `PrReviewPrompts.ENGLISH_PROSE_RULE` (#1467): a model told nothing
+  about language can switch on its own. A new system prompt appends it and joins the list in
+  `PromptLanguageRuleTest`.
 - `PrReviewPrompts.SYSTEM` is the core (`CORE_IDENTITY`, `CORE_FINDING_FIELDS_AND_SEVERITY`,
   `CORE_SELF_CHECK`, `FINDINGS_RESPONSE_CONTRACT`) plus ten `DIMENSION_*` blocks. Correctness,
   security and regressions are always on (`ReviewDimension.alwaysOn`).
