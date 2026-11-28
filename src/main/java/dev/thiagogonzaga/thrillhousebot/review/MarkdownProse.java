@@ -455,8 +455,11 @@ final class MarkdownProse {
 
   /**
    * A backtick run: a code span when the same run closes it on this line, else literal. A span
-   * holding a {@code |} is literal as well unless the pipes are escaped later ({@link #cell}): its
-   * text is then read as prose like the rest of the line, and its backticks pair with no other.
+   * holding a {@code |} is not one unless the pipes are escaped later ({@link #cell}): its opening
+   * run is escaped and its text is then read as prose like the rest of the line. Its closing run is
+   * read next as a run of its own, so it opens a span when a later run of the same length closes it
+   * with no {@code |} between them. GitHub pairs the two the same way once the opening run is
+   * escaped, in a table row and out of one, and the text between them is code in both.
    */
   private static int backticks(String text, int i, StringBuilder sb, boolean pipesEscaped) {
     int end = runEnd(text, i);
