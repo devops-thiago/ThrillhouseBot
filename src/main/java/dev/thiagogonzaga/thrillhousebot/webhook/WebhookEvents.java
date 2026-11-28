@@ -454,12 +454,24 @@ public class WebhookEvents {
 
   /**
    * A pull request converted to draft starts no review, and when drafts are skipped the head a
-   * limit held back for it must not be reviewed either once the limit allows.
+   * limit held back for it must not be reviewed either once the limit allows. That review is
+   * counted as skipped when it still waited; marking the pull request ready reviews its head.
    */
   private void forgetDeferredOfFilteredPullRequest(WebhookPayload payload) {
     var pr = payload.pullRequest();
-    if (pr != null && !unscoped(payload) && triggerFilter.skipReason(pr).isPresent()) {
-      reviewDispatcher.forgetDeferred(scope(payload), pr.number());
+    if (pr == null || unscoped(payload)) {
+      return;
+    }
+    var skip = triggerFilter.skipReason(pr);
+    if (skip.isPresent() && reviewDispatcher.dropDeferred(scope(payload), pr.number())) {
+      var repo = payload.repository();
+      skipEmitter.recordSkip(
+          skip.get().reason(),
+          installationOf(payload),
+          repo.owner().login(),
+          repo.name(),
+          pr.number(),
+          skip.get().detail() + "; the review a limit held back for it is dropped");
     }
   }
 

@@ -17,12 +17,14 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.thiagogonzaga.thrillhousebot.github.PullRequestClosure;
 import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.Test;
@@ -211,6 +213,156 @@ class DeferredReviewsTest {
 
     now.set(GIVE_UP_MS);
     assertEquals(List.of(), deferred.takeDue());
+    assertTrue(deferred.isEmpty());
+  }
+
+  @Test
+  void aHandedOutRequestIsHandedBackAndItsEntryStaysHandedOut() {
+    deferred.defer(request(1, "sha-a"), 0);
+    deferred.takeDue();
+
+    assertEquals(
+        DeferredReviews.HandedOut.HANDED_BACK, deferred.handBack(request(1, "sha-a"), _ -> true));
+
+    assertFalse(deferred.isEmpty());
+    assertEquals(List.of(), deferred.takeDue());
+  }
+
+  @Test
+  void aHandedOutRequestTheDispatcherRefusesIsDropped() {
+    deferred.defer(request(1, "sha-a"), 0);
+    deferred.takeDue();
+
+    assertEquals(
+        DeferredReviews.HandedOut.DROPPED, deferred.handBack(request(1, "sha-a"), _ -> false));
+
+    assertTrue(deferred.isEmpty());
+  }
+
+  @Test
+  void aRequestIsNotHandedBackOnceAnEventReplacedOrRemovedItsEntry() {
+    var handedBack = new ArrayList<ReviewOrchestrator.ReviewRequest>();
+    // Never kept.
+    assertEquals(
+        DeferredReviews.HandedOut.SUPERSEDED,
+        deferred.handBack(request(1, "sha-a"), handedBack::add));
+    // Kept and not handed out yet.
+    deferred.defer(request(1, "sha-a"), 0);
+    assertEquals(
+        DeferredReviews.HandedOut.SUPERSEDED,
+        deferred.handBack(request(1, "sha-a"), handedBack::add));
+    // Handed out, then kept again by an event for the same head.
+    deferred.takeDue();
+    deferred.defer(request(1, "sha-a"), 0);
+    assertEquals(
+        DeferredReviews.HandedOut.SUPERSEDED,
+        deferred.handBack(request(1, "sha-a"), handedBack::add));
+    // Handed out, then replaced by a newer head.
+    deferred.takeDue();
+    deferred.defer(request(1, "sha-b"), 0);
+    assertEquals(
+        DeferredReviews.HandedOut.SUPERSEDED,
+        deferred.handBack(request(1, "sha-a"), handedBack::add));
+    // The newer head handed out in turn does not make the older request current again.
+    deferred.takeDue();
+    assertEquals(
+        DeferredReviews.HandedOut.SUPERSEDED,
+        deferred.handBack(request(1, "sha-a"), handedBack::add));
+
+    assertEquals(List.of(), handedBack);
+    assertEquals(
+        DeferredReviews.HandedOut.HANDED_BACK,
+        deferred.handBack(request(1, "sha-b"), handedBack::add));
+    assertEquals(List.of(request(1, "sha-b")), handedBack);
+  }
+
+  @Test
+  void aHandBackThatThrowsLeavesTheEntryHandedOut() {
+    deferred.defer(request(1, "sha-a"), 0);
+    deferred.takeDue();
+
+    var handedOut = request(1, "sha-a");
+
+    assertThrows(
+        IllegalStateException.class,
+        () ->
+            deferred.handBack(
+                handedOut,
+                _ -> {
+                  throw new IllegalStateException("no worker");
+                }));
+
+    assertEquals(
+        DeferredReviews.HandedOut.WAITS_AGAIN,
+        deferred.waitAgain(request(1, "sha-a"), Duration.ofSeconds(30)));
+  }
+
+  @Test
+  void onlyTheEntryOfTheHandedOutRequestIsDropped() {
+    assertEquals(DeferredReviews.HandedOut.SUPERSEDED, deferred.dropHandedOut(request(1, "sha-a")));
+    deferred.defer(request(1, "sha-a"), 0);
+    deferred.takeDue();
+    // A push arrives before the request is dropped: its head stays.
+    deferred.defer(request(1, "sha-b"), 0);
+    assertEquals(DeferredReviews.HandedOut.SUPERSEDED, deferred.dropHandedOut(request(1, "sha-a")));
+    assertEquals(List.of(request(1, "sha-b")), deferred.takeDue());
+
+    assertEquals(DeferredReviews.HandedOut.DROPPED, deferred.dropHandedOut(request(1, "sha-b")));
+    assertTrue(deferred.isEmpty());
+  }
+
+  @Test
+  void aHandedOutRequestWaitsAgainUntilTheGiveUpTime() {
+    deferred.defer(request(1, "sha-a"), 0);
+    deferred.takeDue();
+
+    now.set(1_000);
+    assertEquals(
+        DeferredReviews.HandedOut.WAITS_AGAIN,
+        deferred.waitAgain(request(1, "sha-a"), Duration.ofSeconds(30)));
+    now.set(30_999);
+    assertEquals(List.of(), deferred.takeDue());
+    now.set(31_000);
+    assertEquals(List.of(request(1, "sha-a")), deferred.takeDue());
+
+    // The hour is counted from the first hand-out, not from the last.
+    now.set(GIVE_UP_MS);
+    assertEquals(
+        DeferredReviews.HandedOut.DROPPED,
+        deferred.waitAgain(request(1, "sha-a"), Duration.ofSeconds(30)));
+    assertTrue(deferred.isEmpty());
+  }
+
+  @Test
+  void aRequestDoesNotWaitAgainOnceAnEventReplacedOrRemovedItsEntry() {
+    var delay = Duration.ofSeconds(30);
+    deferred.defer(request(1, "sha-a"), 0);
+    deferred.takeDue();
+    // A newer push was dispatched, which drops the entry, and its worker put it back.
+    deferred.forget(request(1, "sha-a"));
+    assertEquals(
+        DeferredReviews.HandedOut.SUPERSEDED, deferred.waitAgain(request(1, "sha-a"), delay));
+    assertTrue(deferred.isEmpty());
+
+    deferred.requeue(request(1, "sha-b"), 500);
+    assertEquals(
+        DeferredReviews.HandedOut.SUPERSEDED, deferred.waitAgain(request(1, "sha-a"), delay));
+    now.set(500);
+    assertEquals(List.of(request(1, "sha-b")), deferred.takeDue());
+  }
+
+  @Test
+  void droppingAPullRequestSaysWhetherAReviewStillWaited() {
+    assertFalse(deferred.forgetWaiting(SCOPE, 1));
+
+    deferred.defer(request(1, "sha-a"), 1_000);
+    assertTrue(deferred.forgetWaiting(SCOPE, 1));
+    assertTrue(deferred.isEmpty());
+
+    // One already handed out is removed too, and is not a review this stopped.
+    deferred.defer(request(1, "sha-a"), 0);
+    deferred.takeDue();
+    assertFalse(deferred.forgetWaiting(SCOPE, 1));
     assertTrue(deferred.isEmpty());
   }
 
