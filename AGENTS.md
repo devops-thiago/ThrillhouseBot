@@ -877,7 +877,8 @@ live `fence(...)` (#604).
   they close on their own line and hold no `|` (GitHub ends a table cell at a pipe before it reads
   a span; `proseCell` keeps such a span, since it escapes the pipes), a carriage return ends a line
   as a line feed does, and every other backtick becomes `&#96;`. A name the bot did not write, a
-  changed file's path above all, is posted as a code span (`MarkdownSafe.codeSpan`) or through
+  changed file's path above all, is posted as a code span (`MarkdownSafe.codeSpan`, which writes a
+  name holding a `|` as escaped text with no span, so it reads the same in a table cell) or through
   `inline`, never joined in raw. The bot's own text, the
   `@thrillhousebot` hints included, is never passed through these. Text read back from a posted
   comment and compared with a model's (`DescriptionGapCarryover.listedGaps`,
