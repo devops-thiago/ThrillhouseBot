@@ -1328,6 +1328,56 @@ class ReviewDispatcherTest {
   }
 
   @Test
+  void aPushDispatchedDuringAHandBackQueuesBehindTheHandedBackReview() throws Exception {
+    var key = new ReviewDispatcher.PrKey("owner", "repo", 42);
+    var busy = new ReviewDispatcher.PerPrState();
+    busy.running = true;
+    dispatcher.seedState(key, busy);
+    var older = reviewRequest("owner", "repo", 42, "sha1");
+    var newer = reviewRequest("owner", "repo", 42, "sha2");
+    deferred.defer(older, 0);
+    deferred.takeDue();
+    var handingBack = new CountDownLatch(1);
+    var pushDispatched = new CountDownLatch(1);
+    try (var threads = Executors.newVirtualThreadPerTaskExecutor()) {
+      var handBack =
+          threads.submit(
+              () ->
+                  deferred.handBack(
+                      older,
+                      request -> {
+                        handingBack.countDown();
+                        // The push cannot be dispatched until the hand-back is done, so this
+                        // wait runs out.
+                        awaitQuietly(pushDispatched, 300);
+                        return dispatcher.dispatchDeferred(request);
+                      }));
+      assertTrue(handingBack.await(5, TimeUnit.SECONDS));
+      var push =
+          threads.submit(
+              () -> {
+                dispatcher.dispatch(newer);
+                pushDispatched.countDown();
+              });
+
+      assertEquals(DeferredReviews.HandedOut.HANDED_BACK, handBack.get(5, TimeUnit.SECONDS));
+      push.get(5, TimeUnit.SECONDS);
+    }
+
+    // The push was queued after the review handed back, so it is the one the worker takes.
+    assertEquals(newer, busy.latestRequest);
+    assertTrue(deferred.isEmpty());
+  }
+
+  private static void awaitQuietly(CountDownLatch latch, long millis) {
+    try {
+      assertFalse(latch.await(millis, TimeUnit.MILLISECONDS));
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+    }
+  }
+
+  @Test
   void aPushInsideTheWindowIsSkippedAndCountedWhenItCannotBeKept() {
     var windowed = dispatcherWithRealWindow(new DeferredReviews(0, now::get));
     when(orchestrator.review(any(ReviewOrchestrator.ReviewRequest.class))).thenReturn(true);
