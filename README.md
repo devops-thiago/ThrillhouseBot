@@ -654,6 +654,14 @@ thrillhousebot.ai.models.some-separate-budget-model.separate-output-budget=true
 `REQUEST_CHANGES` and fail the check run. Other findings are posted as comments
 with a neutral check.
 
+The review says which of the two it is. A change request opens with how many
+findings block, names each one with its thread and says how to clear it; the
+listings below that hold nothing blocking are folded. A comment review that has
+findings opens by saying that nothing in it blocks the merge, and adds when an
+earlier change request of the bot's still stands. With
+`REVIEW_BATCHED_INLINE_REVIEW_ENABLED` off, a comment round whose findings all got
+threads and that has nothing else to say posts no review body, as before.
+
 | Mode | Blocks merge when |
 |---|---|
 | `balanced` (default) | CRITICAL or HIGH risk at HIGH confidence |

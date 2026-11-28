@@ -101,7 +101,8 @@ final class OpenFindingNames {
         + "\n";
   }
 
-  private static String threadReference(Finding finding, Threads threads) {
+  /** Where the thread of {@code finding} is, or the mark saying why there is none. */
+  static String threadReference(Finding finding, Threads threads) {
     var root =
         FollowUpAnalyzer.openFindingThread(
             finding, threads.inlineComments(), threads.botIdentity());

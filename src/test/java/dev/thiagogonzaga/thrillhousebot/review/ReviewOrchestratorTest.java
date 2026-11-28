@@ -6506,7 +6506,7 @@ class ReviewOrchestratorTest {
                       req.body().contains("Floating bug")
                           && req.body().contains("missing.java:99")
                           && req.body().contains("Null deref when the account is deleted.")
-                          && !req.body().contains("Anchored bug")));
+                          && !VerdictDigest.without(req.body()).contains("Anchored bug")));
     }
 
     @Test
@@ -6556,7 +6556,7 @@ class ReviewOrchestratorTest {
               anyInt(),
               argThat(
                   req ->
-                      req.body().contains("requested changes")
+                      req.body().contains("Changes requested")
                           && req.body().contains("Floating bug")
                           && req.body().contains("Null deref when the account is deleted.")));
     }

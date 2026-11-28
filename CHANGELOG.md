@@ -37,6 +37,12 @@ cannot resolve its review threads.
 
 ### Changed
 
+- **A review says whether anything in it blocks the merge** (#1542): a change request opens with
+  how many findings block, which ones (this round's and the earlier ones still open) with their
+  threads, and how to clear them, in place of the fixed "requested changes, see inline comments"
+  line. Listings under it that hold nothing blocking are folded. A comment review that has findings
+  opens by saying that nothing in it blocks, and says when an earlier change request of the bot's
+  still stands. Which findings block is unchanged.
 - **The PR summary folds its long sections** (#1445): **Changes Overview**, **Changed Files** and
   **Previous Findings Status** now open on a click, with their counts in the line you click, and so
   does **Risk Assessment** when there is no critical or high finding. A line above the folded file

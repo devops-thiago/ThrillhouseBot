@@ -193,36 +193,106 @@ class BatchedInlineReviewTest {
   }
 
   @Test
-  void batchedRoundSubmitsTheCommentDefaultBodyOnACleanApprovalWithThreads() {
-    post(result(ReviewState.APPROVE, finding(1, "Bug")));
+  void batchedCommentRoundOpensByStatingNothingBlocks() {
+    post(result(ReviewState.COMMENT, finding(1, "Bug")));
 
     var submit = ArgumentCaptor.forClass(GitHubReviewClient.SubmitReviewRequest.class);
     verify(reviewClient).submitReview(any(), any(), any(), any(), eq(7), eq(99L), submit.capture());
-    assertEquals(
-        "ThrillhouseBot review" + ReviewPublisher.BATCHED_INLINE_BODY_SUFFIX,
-        submit.getValue().body());
+    assertEquals(VerdictDigest.nothingBlocks(false), submit.getValue().body());
     assertEquals("COMMENT", submit.getValue().event());
   }
 
   @Test
-  void batchedRoundSubmitsRequestChangesWithItsLeadIn() {
+  void batchedChangeRequestNamesWhatBlocks() {
     post(result(ReviewState.REQUEST_CHANGES, finding(1, "Bug")));
 
     var submit = ArgumentCaptor.forClass(GitHubReviewClient.SubmitReviewRequest.class);
     verify(reviewClient).submitReview(any(), any(), any(), any(), eq(7), eq(99L), submit.capture());
     assertEquals("REQUEST_CHANGES", submit.getValue().event());
     assertTrue(
-        submit.getValue().body().contains("ThrillhouseBot requested changes — see inline comments"),
+        submit.getValue().body().contains("**Changes requested: 1 finding blocks this merge.**"),
         submit.getValue().body());
     verify(reviewClient, never()).createReview(any(), any(), any(), any(), anyInt(), any());
   }
 
+  private static GitHubReviewClient.ReviewResponse priorReview(String state, String login) {
+    return new GitHubReviewClient.ReviewResponse(
+        1L,
+        "",
+        state,
+        "old",
+        login == null ? null : new GitHubReviewClient.ReviewResponse.User(login));
+  }
+
+  private String commentRoundBodyAfter(GitHubReviewClient.ReviewResponse... priorReviews) {
+    return roundBodyAfter(ReviewState.COMMENT, priorReviews);
+  }
+
+  private String roundBodyAfter(
+      ReviewState state, GitHubReviewClient.ReviewResponse... priorReviews) {
+    publisher.postReview(
+        new ReviewPublisher.PostReviewRequest(
+            "Bearer tok",
+            "owner",
+            "repo",
+            7,
+            "sha",
+            result(state, finding(1, "Bug")),
+            new DiffLineResolver(Map.of(FILE, PATCH)),
+            false,
+            List.of(),
+            "",
+            List.of(priorReviews)));
+    var submit = ArgumentCaptor.forClass(GitHubReviewClient.SubmitReviewRequest.class);
+    verify(reviewClient).submitReview(any(), any(), any(), any(), eq(7), eq(99L), submit.capture());
+    return submit.getValue().body();
+  }
+
   @Test
-  void batchedSubmitBodyUsesTheDefaultsOnlyWhenProseIsEmpty() {
-    assertEquals(
-        "ThrillhouseBot requested changes" + ReviewPublisher.BATCHED_INLINE_BODY_SUFFIX,
-        ReviewPublisher.batchedReviewSubmitBody(List.of(), "REQUEST_CHANGES"));
-    assertEquals("a\n\nb", ReviewPublisher.batchedReviewSubmitBody(List.of("a", "b"), "COMMENT"));
+  void aCommentRoundUnderAStandingChangeRequestSaysItStillStands() {
+    var body =
+        commentRoundBodyAfter(
+            priorReview("CHANGES_REQUESTED", "thrillhousebot[bot]"),
+            priorReview("COMMENTED", "thrillhousebot[bot]"),
+            priorReview("APPROVED", "someone-else"),
+            priorReview("APPROVED", null));
+
+    assertEquals(VerdictDigest.nothingBlocks(true), body);
+  }
+
+  @Test
+  void anApprovalAfterTheChangeRequestEndsIt() {
+    var body =
+        commentRoundBodyAfter(
+            priorReview("CHANGES_REQUESTED", "thrillhousebot[bot]"),
+            priorReview("APPROVED", "thrillhousebot[bot]"));
+
+    assertEquals(VerdictDigest.nothingBlocks(false), body);
+  }
+
+  @Test
+  void anApprovingRoundDoesNotSayTheEarlierChangeRequestStays() {
+    var body =
+        roundBodyAfter(
+            ReviewState.APPROVE, priorReview("CHANGES_REQUESTED", "thrillhousebot[bot]"));
+
+    assertEquals(VerdictDigest.nothingBlocks(false), body);
+  }
+
+  @Test
+  void aChangeRequestFoldsTheListingsThatBlockNothing() {
+    var doubtful =
+        new Finding(RiskLevel.LOW, Confidence.LOW, FILE, 2, "Maybe a leak", "desc", null, null);
+
+    post(result(ReviewState.REQUEST_CHANGES, finding(1, "Bug"), doubtful));
+
+    var submit = ArgumentCaptor.forClass(GitHubReviewClient.SubmitReviewRequest.class);
+    verify(reviewClient).submitReview(any(), any(), any(), any(), eq(7), eq(99L), submit.capture());
+    var body = submit.getValue().body();
+    assertTrue(body.contains("**Changes requested: 1 finding blocks this merge.**"), body);
+    assertTrue(
+        body.contains("<summary>Not blocking: 1 finding without an inline thread</summary>"), body);
+    assertTrue(body.indexOf("blocks this merge") < body.indexOf("Maybe a leak"), body);
   }
 
   @Test
@@ -522,7 +592,7 @@ class BatchedInlineReviewTest {
     post(result(ReviewState.REQUEST_CHANGES, finding(1, "Bug")));
 
     verify(reviewClient).createPullRequestComment(any(), any(), any(), any(), eq(7), any());
-    assertTrue(fallbackReviewBody().contains("requested changes"));
+    assertTrue(fallbackReviewBody().contains("Changes requested"));
     verify(reviewClient, never())
         .submitReview(any(), any(), any(), any(), anyInt(), anyLong(), any());
   }

@@ -4953,7 +4953,7 @@ public class FollowUpAnalyzer {
     if (body == null || isSelfAuthoredStatusBody(body)) {
       return "";
     }
-    return withoutClosedFindingNames(body);
+    return withoutClosedFindingNames(VerdictDigest.without(body));
   }
 
   /** {@code index} advanced past the run of lines from it that satisfy {@code matching}. */
@@ -5032,7 +5032,12 @@ public class FollowUpAnalyzer {
    * with none of them and is preserved.
    */
   static boolean isSelfAuthoredStatusBody(String body) {
-    var first = body.lines().map(String::strip).filter(line -> !line.isEmpty()).findFirst();
+    var first =
+        VerdictDigest.without(body)
+            .lines()
+            .map(String::strip)
+            .filter(line -> !line.isEmpty())
+            .findFirst();
     if (first.isEmpty()) {
       return true;
     }
