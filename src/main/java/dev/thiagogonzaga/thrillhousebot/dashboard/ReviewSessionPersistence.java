@@ -19,6 +19,7 @@ import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.Consumer;
@@ -106,6 +107,26 @@ public class ReviewSessionPersistence {
             ReviewSession.STATUS_COMPLETED)
         .stream()
         .map(ReviewSession::getCommitSha)
+        .toList();
+  }
+
+  /**
+   * Start times of the same sessions {@link #findAllPriorAiResponseJsons} returns, in the same
+   * newest-first order, so a follow-up can tell which prior rounds a comment was written after.
+   */
+  @Transactional
+  public List<Instant> findAllPriorStartTimes(
+      RepoScope scope, int prNumber, long excludeSessionId) {
+    return this.repository
+        .find(
+            PRIOR_ROUNDS_QUERY,
+            scope.installationId(),
+            scope.repositoryId(),
+            prNumber,
+            excludeSessionId,
+            ReviewSession.STATUS_COMPLETED)
+        .stream()
+        .map(ReviewSession::getTimestamp)
         .toList();
   }
 

@@ -76,6 +76,12 @@ cannot resolve its review threads.
   GitHub Enterprise products work and what to set up on GitHub for an organization (#1488).
 ### Fixed
 
+- **A finding cleared from the PR conversation is not raised again on an unchanged file**
+  (#1430): a later round could report the same defect in other words and count it as new,
+  because only a finding answered on its own review thread was dropped. A finding closed with
+  `@thrillhousebot resolved` on the conversation is now dropped too while its file, and the other
+  changed files it names, are unchanged since the round that raised it. A change to one of them
+  still raises it, and the older comment does not close the finding raised after that change.
 - **A review no longer drifts into another language** (#1467): no prompt said which language to
   write in, so a model could answer an English pull request with a summary in another one. Every
   prompt now asks for English prose, with code, identifiers, paths and quotations left as they are.
