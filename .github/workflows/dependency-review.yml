@@ -47,11 +47,16 @@ jobs:
           # https://github.com/mourner/robust-predicates/blob/v3.0.3/LICENSE).
           # ClearlyDefined reports LicenseRef-scancode-public-domain AND
           # Unlicense; allow the package rather than the scancode LicenseRef.
+          #
+          # build-helper-maven-plugin is MIT (its pom names "The MIT License",
+          # https://spdx.org/licenses/MIT.txt), which the dependency graph reads
+          # as a non-standard license.
           allow-dependencies-licenses: >-
             pkg:maven/io.netty/netty-bom,
             pkg:maven/io.opentelemetry/opentelemetry-bom,
             pkg:maven/io.opentelemetry/opentelemetry-bom-alpha,
             pkg:maven/io.quarkus.platform/quarkus-bom,
             pkg:maven/io.quarkus.platform/quarkus-maven-plugin,
+            pkg:maven/org.codehaus.mojo/build-helper-maven-plugin,
             pkg:npm/robust-predicates
           comment-summary-in-pr: always
