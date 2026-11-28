@@ -1488,4 +1488,65 @@ class PathMentionsTest {
       assertEquals(spansBefore(written), spansNow(written), () -> "the URLs of: " + written);
     }
   }
+
+  /** A combining mark. */
+  private static final String ACUTE = "\u0301";
+
+  /**
+   * What the texts about combining marks are made of: the two openings of a URL, word characters,
+   * letters and digits of other scripts, and marks of every kind, in and beyond the basic plane,
+   * whole and as the halves of a pair.
+   */
+  private static final String[] MARK_PIECES = {
+    "www.",
+    "://",
+    "a",
+    "h",
+    "_",
+    "7",
+    "-",
+    " ",
+    "é",
+    "\u0663",
+    ACUTE,
+    "\u0300",
+    "\u0903",
+    "\u20DD",
+    "\uD834\uDD67",
+    "\uD835\uDC00",
+    "\uD834",
+    "\uDD67"
+  };
+
+  @Test
+  void randomTextsOfCombiningMarksHoldTheUrlsThePatternFoundInThem() {
+    var random = new Random(1523);
+    for (int round = 0; round < 150_000; round++) {
+      var text = new StringBuilder();
+      int pieces = random.nextInt(12);
+      for (int piece = 0; piece < pieces; piece++) {
+        text.append(MARK_PIECES[random.nextInt(MARK_PIECES.length)]);
+      }
+      var written = text.toString();
+      assertEquals(spansBefore(written), spansNow(written), () -> "the URLs of: " + written);
+    }
+  }
+
+  /**
+   * 400,000 characters of combining marks, as one run or as a mark on every letter. A letter looks
+   * back over the marks right before it and no further, so each mark is read once.
+   */
+  @ParameterizedTest
+  @ValueSource(ints = {1, 7, 400_000})
+  void aLongRunOfCombiningMarksIsReadOnce(int run) {
+    var marked = (ACUTE.repeat(run) + "h").repeat(400_000 / run);
+    var onALetter = "e" + marked + "ttp://x.io";
+    var onAHyphen = "-" + ACUTE.repeat(400_000) + "www.x";
+
+    assertEquals(
+        List.of(), assertTimeoutPreemptively(Duration.ofSeconds(10), () -> spansNow(onALetter)));
+    assertEquals(
+        List.of("400001-400006"),
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> spansNow(onAHyphen)));
+  }
 }

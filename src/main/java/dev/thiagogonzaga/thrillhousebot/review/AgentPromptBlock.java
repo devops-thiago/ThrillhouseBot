@@ -22,7 +22,8 @@ import dev.thiagogonzaga.thrillhousebot.github.CommentBodyLimit;
  * pipeline already holds — no extra model call.
  *
  * <p>The block goes ahead of the comment's hidden finding marker, so the marker stays the last
- * thing in the comment: the file name printed here is the pull request author's text.
+ * thing in the comment: the file name printed here is the pull request author's text. A comment
+ * with no marker gets no block whose text is shaped like one.
  *
  * <p>The block repeats the description's first paragraph, cut at {@value #MAX_PROBLEM_CHARS}
  * characters, and is left off a comment it would push past GitHub's comment-body limit: the cap
