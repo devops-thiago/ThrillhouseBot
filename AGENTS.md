@@ -692,7 +692,9 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   reads the clock and the window once, so a caller never asks twice about one event), and
   records a skip for the head already reviewed and when the store refuses, which includes a
   hand-back that failed for an hour (`DeferredReviewRelease.release`). The store holds one
-  request per pull request (the latest wins), at most 10,000, and gives up on a head that keeps
+  request per pull request (the latest wins), at most 10,000 and at most 1,000 of one repository
+  (a full repository queue sends the rest of a burst here, so one repository could otherwise take
+  every place), and gives up on a head that keeps
   coming back for an hour. "Latest" is decided by where the request comes from: an event's request
   goes in through `defer` and replaces the entry, while a request the dispatcher's worker puts
   back goes in through `requeue`, which leaves a different head an event

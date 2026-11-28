@@ -85,7 +85,8 @@ security limits. To report a vulnerability, see
   kept and reviewed late instead of skipped, so timing a push to land inside
   the window does not by itself avoid the review. That later review is held in
   memory. It does not run if the bot restarts while it waits, if 10,000 pull
-  requests already have one kept, if the repository's queue stays full for an
+  requests, or 1,000 of the same repository, already have one kept, if the
+  repository's queue stays full for an
   hour, if the review cannot be started (the executor refuses it, or starting
   it fails for an hour), or if the pull request is paused meanwhile, or
   converted to a draft while drafts are skipped. The approval of the old head

@@ -474,9 +474,10 @@ the bot bounds them without any setting:
 These limits are kept in memory in the one bot process and reset on restart.
 A review still waiting for a window to close or for a place in the queue is
 forgotten by a restart; the next push or a `/review` reviews that PR. The bot
-keeps such a review for at most 10,000 pull requests at a time, counting one
-for an hour after it was first started. Past that, a push held back for another
-pull request is skipped at once, with `reason=RATE_LIMITED` for the window and
+keeps such a review for at most 10,000 pull requests at a time, and for at
+most 1,000 of one repository, counting one for an hour after it was first
+started. Past either, a push held back for another pull request is skipped at
+once, with `reason=RATE_LIMITED` for the window and
 `reason=REPOSITORY_QUEUE_FULL` for the queue. A kept review is also given up,
 and counted as skipped, when the same commit is still being turned away an hour
 after its first start, when the executor refuses it as it comes due, when the
@@ -1950,7 +1951,8 @@ reason in the dashboard summary
    a reopen or a second ready-for-review. A push inside the window is kept:
    its review starts when the window closes, and the log says `deferred` until
    then. A push the bot could not keep is counted here too: 10,000 pull
-   requests already had a review kept for later, or the same commit was still
+   requests, or 1,000 of this repository, already had a review kept for later,
+   or the same commit was still
    being held back an hour after its review was first started.
 7. **Redelivery** (`reason=DUPLICATE_DELIVERY`): GitHub redelivered a webhook
    the bot already handled. This is normal.
@@ -1964,8 +1966,9 @@ reason in the dashboard summary
 9. **Repository queue full** (`reason=REPOSITORY_QUEUE_FULL`): as many automatic
    reviews of the repository were waiting as `AUTO_REVIEW_MAX_QUEUED_PER_REPO`
    allows for a whole hour, so the review that kept asking for a place was given
-   up, or the queue was full while 10,000 pull requests already had a review
-   kept for later, so this one was skipped at once. Push again later or comment
+   up, or the queue was full while 10,000 pull requests, or 1,000 of this
+   repository, already had a review kept for later, so this one was skipped at
+   once. Push again later or comment
    `/review`. See
    [Limits on automatic reviews](#limits-on-automatic-reviews).
 
