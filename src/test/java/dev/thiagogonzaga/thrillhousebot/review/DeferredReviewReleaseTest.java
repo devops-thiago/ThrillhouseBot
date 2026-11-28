@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -190,6 +191,34 @@ class DeferredReviewReleaseTest {
     // It is due again after the retry delay.
     now.set(DeferredReviewRelease.RETRY.toMillis());
     assertEquals(List.of(request(1, "sha-a")), deferred.takeDue());
+  }
+
+  @Test
+  void aReviewThatCouldNotBeHandedBackForAnHourIsCountedAsSkipped() {
+    when(pauses.isPaused(any(), any(), any(), eq(1)))
+        .thenThrow(new IllegalStateException("database unavailable"));
+    deferred.defer(request(1, "sha-a"), 0);
+
+    // First handed out at 0: it waits again after every failure until the hour is up.
+    release.release();
+    now.set(DeferredReviews.GIVE_UP_AFTER.toMillis() - 1);
+    release.release();
+    verify(skipEmitter, never()).recordSkip(any(), anyLong(), any(), any(), anyInt(), any());
+    assertFalse(deferred.isEmpty());
+
+    now.set(DeferredReviews.GIVE_UP_AFTER.toMillis() + DeferredReviewRelease.RETRY.toMillis());
+    release.release();
+
+    verify(skipEmitter)
+        .recordSkip(
+            eq(ReviewSkipReason.DISPATCH_REJECTED),
+            eq(TestScopes.INSTALLATION_ID),
+            eq("owner"),
+            eq("repo"),
+            eq(1),
+            anyString());
+    verify(dispatcher, never()).dispatchDeferred(any());
+    assertTrue(deferred.isEmpty());
   }
 
   private static ReviewOrchestrator.ReviewRequest request(int prNumber, String sha) {

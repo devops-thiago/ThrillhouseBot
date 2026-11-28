@@ -117,6 +117,8 @@ class WebhookEventsTest {
     when(config.review()).thenReturn(reviewConfig);
     when(reviewConfig.conversationalRepliesEnabled()).thenReturn(true);
     doReturn(installationEvents).when(beanManager).getEvent();
+    when(reviewDispatcher.holdForRateWindow(any()))
+        .thenReturn(ReviewDispatcher.RateWindowHold.NOT_HELD);
     events = newEvents(triggerFilter);
   }
 
@@ -390,6 +392,21 @@ class WebhookEventsTest {
 
   private WebhookEvents newEvents(ReviewTriggerFilter filter) {
     return newEvents(filter, autoReviewRateLimiter);
+  }
+
+  /** Makes the mocked dispatcher answer for the rate window from {@code limiter}. */
+  private void readRateWindowFrom(AutoReviewRateLimiter limiter) {
+    when(reviewDispatcher.holdForRateWindow(any()))
+        .thenAnswer(
+            invocation -> {
+              ReviewOrchestrator.ReviewRequest request = invocation.getArgument(0);
+              var hold =
+                  limiter.hold(
+                      request.owner(), request.repo(), request.prNumber(), request.commitSha());
+              return hold.throttled()
+                  ? ReviewDispatcher.RateWindowHold.NOT_KEPT
+                  : ReviewDispatcher.RateWindowHold.NOT_HELD;
+            });
   }
 
   private WebhookEvents newEvents(ReviewTriggerFilter filter, AutoReviewRateLimiter limiter) {
@@ -723,7 +740,8 @@ class WebhookEventsTest {
   @Test
   void shouldSkipAutomaticReviewWithinRateLimitWindow() {
     when(reviewConfig.autoReviewMinInterval()).thenReturn(Duration.ofHours(1));
-    when(autoReviewRateLimiter.isThrottled("owner", "repo", 55)).thenReturn(true);
+    when(reviewDispatcher.holdForRateWindow(any(ReviewOrchestrator.ReviewRequest.class)))
+        .thenReturn(ReviewDispatcher.RateWindowHold.NOT_KEPT);
 
     // A new push (fresh head SHA) within the window is still skipped.
     var body =
@@ -774,7 +792,8 @@ class WebhookEventsTest {
   @Test
   void shouldEmitStructuredSkipEventWhenRateLimited() {
     when(reviewConfig.autoReviewMinInterval()).thenReturn(Duration.ofHours(1));
-    when(autoReviewRateLimiter.isThrottled("owner", "repo", 55)).thenReturn(true);
+    when(reviewDispatcher.holdForRateWindow(any(ReviewOrchestrator.ReviewRequest.class)))
+        .thenReturn(ReviewDispatcher.RateWindowHold.NOT_KEPT);
 
     var body =
         buildPullRequestPayload("synchronize", 55, "owner/repo", "fresh-sha", "main")
@@ -794,15 +813,14 @@ class WebhookEventsTest {
 
   @Test
   void aPushInsideTheRateWindowIsKeptForLaterInsteadOfSkipped() {
-    when(autoReviewRateLimiter.isThrottled("owner", "repo", 55)).thenReturn(true);
-    when(reviewDispatcher.deferThrottled(any(ReviewOrchestrator.ReviewRequest.class)))
-        .thenReturn(true);
+    when(reviewDispatcher.holdForRateWindow(any(ReviewOrchestrator.ReviewRequest.class)))
+        .thenReturn(ReviewDispatcher.RateWindowHold.KEPT);
 
     deliverPullRequest("push-in-window", "synchronize", 55, "owner/repo", "fresh-sha");
 
     // The new head is reviewed when the window closes, so nothing is counted as skipped.
     var kept = ArgumentCaptor.forClass(ReviewOrchestrator.ReviewRequest.class);
-    verify(reviewDispatcher).deferThrottled(kept.capture());
+    verify(reviewDispatcher).holdForRateWindow(kept.capture());
     assertEquals("fresh-sha", kept.getValue().commitSha());
     assertEquals(55, kept.getValue().prNumber());
     assertFalse(kept.getValue().isManualTrigger());
@@ -829,7 +847,7 @@ class WebhookEventsTest {
     deliverPullRequest("push-draft", "synchronize", 55, "owner/repo", "sha55");
 
     verify(reviewDispatcher).forgetDeferred(any(RepoScope.class), eq(55));
-    verify(reviewDispatcher, never()).deferThrottled(any());
+    verify(reviewDispatcher, never()).holdForRateWindow(any());
   }
 
   @Test
@@ -999,15 +1017,13 @@ class WebhookEventsTest {
 
   @Test
   void shouldDispatchAutomaticReviewWhenRateLimitWindowOpen() {
-    when(autoReviewRateLimiter.isThrottled("owner", "repo", 56)).thenReturn(false);
-
     var body =
         buildPullRequestPayload("synchronize", 56, "owner/repo", "sha56", "main")
             .getBytes(StandardCharsets.UTF_8);
 
     deliver("pull_request", event("pull_request", DELIVERY, body));
 
-    verify(autoReviewRateLimiter).isThrottled("owner", "repo", 56);
+    verify(reviewDispatcher).holdForRateWindow(any(ReviewOrchestrator.ReviewRequest.class));
     verify(reviewDispatcher).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
   }
 
@@ -1015,7 +1031,8 @@ class WebhookEventsTest {
   void theFirstReadyForReviewOfAHeadIsDispatchedEvenWhenThrottled() {
     when(reviewConfig.autoReviewMinInterval()).thenReturn(Duration.ofHours(1));
     when(autoReviewRateLimiter.clearForReadyHead("org", "svc", 57, "sha57")).thenReturn(true);
-    when(autoReviewRateLimiter.isThrottled("org", "svc", 57)).thenReturn(true);
+    when(reviewDispatcher.holdForRateWindow(any(ReviewOrchestrator.ReviewRequest.class)))
+        .thenReturn(ReviewDispatcher.RateWindowHold.NOT_KEPT);
 
     var body =
         buildPullRequestPayload("ready_for_review", 57, "org/svc", "sha57", "main")
@@ -1023,7 +1040,7 @@ class WebhookEventsTest {
 
     deliver("pull_request", event("pull_request", DELIVERY, body));
 
-    verify(autoReviewRateLimiter, never()).isThrottled("org", "svc", 57);
+    verify(reviewDispatcher, never()).holdForRateWindow(any());
     verify(reviewDispatcher).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
   }
 
@@ -1031,7 +1048,8 @@ class WebhookEventsTest {
   void aReadyForReviewWhoseHeadAlreadyLiftedTheWindowIsThrottled() {
     when(reviewConfig.autoReviewMinInterval()).thenReturn(Duration.ofHours(1));
     when(autoReviewRateLimiter.clearForReadyHead("org", "svc", 57, "sha57")).thenReturn(false);
-    when(autoReviewRateLimiter.isThrottled("org", "svc", 57)).thenReturn(true);
+    when(reviewDispatcher.holdForRateWindow(any(ReviewOrchestrator.ReviewRequest.class)))
+        .thenReturn(ReviewDispatcher.RateWindowHold.NOT_KEPT);
 
     var body =
         buildPullRequestPayload("ready_for_review", 57, "org/svc", "sha57", "main")
@@ -1050,6 +1068,7 @@ class WebhookEventsTest {
     when(reviewConfig.autoReviewMinInterval()).thenReturn(Duration.ofHours(1));
     var limiter = limiterWithInterval(Duration.ofHours(1));
     events = newEvents(triggerFilter, limiter);
+    readRateWindowFrom(limiter);
     // A review of an earlier push just completed, so the window is open.
     limiter.recordCompletion("org", "svc", 57, "reviewed");
 
@@ -1083,7 +1102,8 @@ class WebhookEventsTest {
     when(reviewConfig.autoReviewMinInterval()).thenReturn(shipped);
     var limiter = limiterWithInterval(shipped);
     events = newEvents(triggerFilter, limiter);
-    limiter.recordCompletion("owner", "repo", 61, "reviewed");
+    readRateWindowFrom(limiter);
+    limiter.recordCompletion("owner", "repo", 61, "sha61");
 
     deliverPullRequest("reopen-1", "reopened", 61, "owner/repo", "sha61");
     deliverPullRequest("reopen-2", "reopened", 61, "owner/repo", "sha61");
