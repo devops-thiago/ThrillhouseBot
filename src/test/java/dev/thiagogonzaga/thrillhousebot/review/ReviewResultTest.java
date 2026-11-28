@@ -522,7 +522,7 @@ class ReviewResultTest {
   }
 
   // A file's name is the pull request author's text: in a code span it mentions and renders
-  // nothing.
+  // nothing, and one holding a pipe, which gets no span, is escaped text.
   @Test
   void coverageGapClausePutsEachFileNameInACodeSpan() {
     var names = new java.util.ArrayList<String>();
@@ -552,7 +552,7 @@ class ReviewResultTest {
                     List.of(),
                     List.of(),
                     SummaryDegradation.NONE))
-            .contains("(x/@&#8203;victim\\|y, a\\|b.txt)"));
+            .contains("(x\\/\\@&#8203;victim\\|y, a\\|b\\.txt)"));
   }
 
   @Test

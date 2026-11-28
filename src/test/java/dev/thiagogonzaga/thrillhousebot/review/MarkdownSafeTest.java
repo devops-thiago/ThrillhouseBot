@@ -58,14 +58,25 @@ class MarkdownSafeTest {
   // inside a span shows its backslash in a paragraph, so such a name is text that reads one way.
   @Test
   void aNameHoldingAPipeIsPostedAsEscapedTextRatherThanACodeSpan() {
-    assertEquals("a\\|b.txt", MarkdownSafe.codeSpan("a|b.txt"));
-    assertEquals("x/@&#8203;victim\\|y", MarkdownSafe.codeSpan("x/@victim|y"));
-    assertEquals("a\\|&lt;img src=x> b", MarkdownSafe.codeSpan("a|<img src=x>`\nb"));
+    assertEquals("a\\|b\\.txt", MarkdownSafe.codeSpan("a|b.txt"));
+    assertEquals("x\\/\\@&#8203;victim\\|y", MarkdownSafe.codeSpan("x/@victim|y"));
+    assertEquals("a\\|&lt;img src\\=x\\> b", MarkdownSafe.codeSpan("a|<img src=x>`\nb"));
     assertEquals(
-        "a\\|&lt;!-- thrillhousebot:finding=1 -->",
+        "a\\|&lt;\\!\\-\\- thrillhousebot\\:finding\\=1 \\-\\-\\>",
         MarkdownSafe.codeSpan("a|<!-- thrillhousebot:finding=1 -->"));
     // A backslash before the pipe cannot take the escape for itself.
-    assertEquals("a\\\\\\|@&#8203;victim", MarkdownSafe.codeSpan("a\\|@victim"));
+    assertEquals("a\\\\\\|b", MarkdownSafe.codeSpan("a\\|b"));
+  }
+
+  // Without a span the name would be markdown, so nothing in it is left to read as any.
+  @Test
+  void aNameHoldingAPipeCarriesNoLinkEntityOrEmphasis() {
+    assertEquals(
+        "\\[x\\]\\(https\\:\\/\\/evil\\.example\\/\\@&#8203;v\\)\\|www\\.evil\\.example \\#1 \\*b\\*",
+        MarkdownSafe.codeSpan("[x](https://evil.example/@v)|www.evil.example #1 *b*"));
+    assertEquals(
+        "\\&\\#64\\;v\\|a\\@&#8203;b \\_\\_c\\_\\_ \\~\\~\\~",
+        MarkdownSafe.codeSpan("&#64;v|a@b __c__ ~~~"));
   }
 
   @Test
@@ -73,11 +84,13 @@ class MarkdownSafeTest {
     var mention = MarkdownSafe.codeSpan("x/@victim|y");
     var row = "| " + mention + " | " + MarkdownSafe.codeSpan("a|b.txt") + " |";
 
-    assertEquals("| x/@&#8203;victim\\|y | a\\|b.txt |", row);
+    assertEquals("| x\\/\\@&#8203;victim\\|y | a\\|b\\.txt |", row);
     // Two cells: the only bare pipes are the three the row itself writes.
     assertEquals(3, row.replace("\\|", "").chars().filter(c -> c == '|').count());
     assertEquals(row, MarkdownSafe.prose(row));
-    assertEquals("On x/@&#8203;victim\\|y.", MarkdownSafe.prose("On " + mention + "."));
+    assertEquals("On " + mention + ".", MarkdownSafe.prose("On " + mention + "."));
+    var crafted = MarkdownSafe.codeSpan("[x](https://evil.example/@v)|&#64;v ~~~ <b>");
+    assertEquals(crafted, MarkdownSafe.prose(crafted));
   }
 
   @Test

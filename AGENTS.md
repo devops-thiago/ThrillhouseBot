@@ -866,10 +866,13 @@ live `fence(...)` (#604).
   is code that differs from GitHub's reading posts a mention untouched, so fenced blocks are
   emitted at the top level under a fence longer than their content, code spans count only when
   they close on their own line and hold no `|` (GitHub ends a table cell at a pipe before it reads
-  a span; `proseCell` keeps such a span, since it escapes the pipes), a carriage return ends a line
+  a span; only the opening run of such a span is escaped, so the runs after it on the line pair
+  anew from its closing run on, as GitHub pairs them; `proseCell` keeps such a span, since it
+  escapes the pipes), a carriage return ends a line
   as a line feed does, and every other backtick becomes `&#96;`. A name the bot did not write, a
   changed file's path above all, is posted as a code span (`MarkdownSafe.codeSpan`, which writes a
-  name holding a `|` as escaped text with no span, so it reads the same in a table cell) or through
+  name holding a `|` as text with every punctuation character escaped and no span, so it reads the
+  same in a table cell) or through
   `inline`, never joined in raw. The bot's own text, the
   `@thrillhousebot` hints included, is never passed through these. Text read back from a posted
   comment and compared with a model's (`DescriptionGapCarryover.listedGaps`,
